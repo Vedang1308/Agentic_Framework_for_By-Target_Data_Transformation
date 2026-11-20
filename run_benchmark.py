@@ -20,6 +20,8 @@ import argparse
 import tempfile
 import subprocess
 import pickle
+import threading
+import concurrent.futures
 import pandas as pd
 from openai import OpenAI
 from tqdm import tqdm
@@ -87,6 +89,12 @@ def parse_args():
         "--include_demos",
         action="store_true",
         help="Include the 5 held-out demo cases in evaluation (default: False)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of concurrent workers (default: 1, recommendation: 2-3 for faster runs)",
     )
     parser.add_argument(
         "--force",
@@ -395,40 +403,83 @@ def run_benchmark_for_strategy(strategy: str, args, client: OpenAI):
                         pass
         print(f"Found {len(completed_cases)} existing results in {results_path} (resuming).")
 
-    pbar = tqdm(case_list, desc=f"Strategy: {strategy}")
-    for case_name in pbar:
-        if case_name in completed_cases and not args.force:
-            continue
+    cases_to_run = [c for c in case_list if args.force or c not in completed_cases]
+    file_lock = threading.Lock()
 
-        try:
-            record = run_single_case(
-                case_name=case_name,
-                strategy_name=strategy,
-                benchmark_dir=args.benchmark_dir,
-                client=client,
-                model=args.model,
-                timeout=args.timeout,
-                k=args.k,
-                reasoning_effort=args.reasoning_effort,
-                max_tokens=args.max_tokens,
-                force=args.force,
-            )
+    if args.workers > 1 and len(cases_to_run) > 1:
+        print(f"Executing with {args.workers} concurrent workers...")
+        pbar = tqdm(total=len(case_list), initial=len(completed_cases), desc=f"Strategy: {strategy}")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
+            futures = {
+                executor.submit(
+                    run_single_case,
+                    case_name=c,
+                    strategy_name=strategy,
+                    benchmark_dir=args.benchmark_dir,
+                    client=client,
+                    model=args.model,
+                    timeout=args.timeout,
+                    k=args.k,
+                    reasoning_effort=args.reasoning_effort,
+                    max_tokens=args.max_tokens,
+                    force=args.force,
+                ): c
+                for c in cases_to_run
+            }
+            for fut in concurrent.futures.as_completed(futures):
+                c_name = futures[fut]
+                try:
+                    record = fut.result()
+                    with file_lock:
+                        with open(results_path, "a", encoding="utf-8") as f:
+                            f.write(json.dumps(record) + "\n")
+                    status_str = "CORRECT" if record["autopipeline"]["is_correct"] else "INCORRECT"
+                    pbar.set_postfix({
+                        "case": c_name,
+                        "status": status_str,
+                        "ap_acc": f"{record['autopipeline']['accuracy']:.2f}",
+                        "hm_acc": f"{record['hard_match']['accuracy']:.2f}",
+                    })
+                except Exception as e:
+                    print(f"\n[ERROR] Case '{c_name}' failed: {e}")
+                finally:
+                    pbar.update(1)
+        pbar.close()
+    else:
+        pbar = tqdm(case_list, desc=f"Strategy: {strategy}")
+        for case_name in pbar:
+            if case_name in completed_cases and not args.force:
+                continue
 
-            # Append JSON line to results file
-            with open(results_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record) + "\n")
+            try:
+                record = run_single_case(
+                    case_name=case_name,
+                    strategy_name=strategy,
+                    benchmark_dir=args.benchmark_dir,
+                    client=client,
+                    model=args.model,
+                    timeout=args.timeout,
+                    k=args.k,
+                    reasoning_effort=args.reasoning_effort,
+                    max_tokens=args.max_tokens,
+                    force=args.force,
+                )
 
-            status_str = "CORRECT" if record["autopipeline"]["is_correct"] else "INCORRECT"
-            pbar.set_postfix({
-                "case": case_name,
-                "status": status_str,
-                "ap_acc": f"{record['autopipeline']['accuracy']:.2f}",
-                "hm_acc": f"{record['hard_match']['accuracy']:.2f}",
-            })
-        except Exception as e:
-            print(f"\n[ERROR] Case '{case_name}' failed with unexpected exception: {e}")
-            import traceback
-            traceback.print_exc()
+                # Append JSON line to results file
+                with open(results_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record) + "\n")
+
+                status_str = "CORRECT" if record["autopipeline"]["is_correct"] else "INCORRECT"
+                pbar.set_postfix({
+                    "case": case_name,
+                    "status": status_str,
+                    "ap_acc": f"{record['autopipeline']['accuracy']:.2f}",
+                    "hm_acc": f"{record['hard_match']['accuracy']:.2f}",
+                })
+            except Exception as e:
+                print(f"\n[ERROR] Case '{case_name}' failed with unexpected exception: {e}")
+                import traceback
+                traceback.print_exc()
 
     print(f"\n[DONE] Strategy '{strategy}' completed. Results saved to {results_path}")
 

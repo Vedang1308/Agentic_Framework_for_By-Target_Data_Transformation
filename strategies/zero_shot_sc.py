@@ -65,6 +65,17 @@ def execute_and_hash_candidate(code: str, train_csv_path: str, timeout: int = 15
     return False, "No response from candidate execution worker"
 
 
+def _extract_choice_text(choice) -> str:
+    content = choice.message.content or ""
+    reasoning = (
+        getattr(choice.message, "reasoning", None)
+        or getattr(choice.message, "reasoning_content", None)
+        or (choice.message.model_extra.get("reasoning") if hasattr(choice.message, "model_extra") and choice.message.model_extra else None)
+        or ""
+    )
+    return content.strip() if content.strip() else reasoning.strip()
+
+
 def generate(case_dir: str, client, model: str, log_dir: str = None, **kwargs) -> dict:
     """
     Synthesize transform.py using Zero-shot CoT + Self-Consistency.
@@ -72,6 +83,8 @@ def generate(case_dir: str, client, model: str, log_dir: str = None, **kwargs) -
     """
     k = kwargs.get("k", 5)
     temperature = kwargs.get("temperature", 0.7)
+    reasoning_effort = kwargs.get("reasoning_effort", "none")
+    max_tokens = kwargs.get("max_tokens", 4000)
     train_csv_path = os.path.join(case_dir, "training_0.csv")
     user_prompt = build_user_prompt(case_dir, include_few_shot=False)
     
@@ -80,39 +93,46 @@ def generate(case_dir: str, client, model: str, log_dir: str = None, **kwargs) -
     total_prompt_tokens = 0
     total_completion_tokens = 0
     
-    # Try batch sampling via n=k in a single request first (cheapest & fastest)
+    # Try batch sampling via n=k in a single request first
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
+        create_kwargs = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=temperature,
-            n=k,
-            max_tokens=kwargs.get("max_tokens", 4000),
-            extra_headers={"x-obleth-boons": "off"}
-        )
+            "temperature": temperature,
+            "n": k,
+            "max_tokens": max_tokens,
+            "extra_headers": {"x-obleth-boons": "off"}
+        }
+        if reasoning_effort is not None:
+            create_kwargs["reasoning_effort"] = reasoning_effort
+            
+        response = client.chat.completions.create(**create_kwargs)
         for choice in response.choices:
-            raw_completions.append(choice.message.content or "")
+            raw_completions.append(_extract_choice_text(choice))
         if response.usage:
             total_prompt_tokens = getattr(response.usage, "prompt_tokens", 0)
             total_completion_tokens = getattr(response.usage, "completion_tokens", 0)
     except Exception as e:
-        # Fallback to sequential sampling if n > 1 is not supported by gateway
+        # Fallback to sequential sampling if n > 1 is not supported
         raw_completions = []
         for _ in range(k):
-            single_resp = client.chat.completions.create(
-                model=model,
-                messages=[
+            single_kwargs = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=temperature,
-                max_tokens=kwargs.get("max_tokens", 4000),
-                extra_headers={"x-obleth-boons": "off"}
-            )
-            raw_completions.append(single_resp.choices[0].message.content or "")
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "extra_headers": {"x-obleth-boons": "off"}
+            }
+            if reasoning_effort is not None:
+                single_kwargs["reasoning_effort"] = reasoning_effort
+            single_resp = client.chat.completions.create(**single_kwargs)
+            raw_completions.append(_extract_choice_text(single_resp.choices[0]))
             if single_resp.usage:
                 total_prompt_tokens += getattr(single_resp.usage, "prompt_tokens", 0)
                 total_completion_tokens += getattr(single_resp.usage, "completion_tokens", 0)
@@ -145,7 +165,7 @@ def generate(case_dir: str, client, model: str, log_dir: str = None, **kwargs) -
         
     # Behavioral voting
     if clusters:
-        # Find largest cluster (tie-break rule: earliest candidate index in cluster)
+        # Largest cluster (tie-break rule: earliest candidate index in cluster)
         sorted_clusters = sorted(clusters.items(), key=lambda item: (-len(item[1]), item[1][0]))
         winning_hash, winning_indices = sorted_clusters[0]
         chosen_index = winning_indices[0]

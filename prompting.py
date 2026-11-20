@@ -209,8 +209,8 @@ def extract_python_code(completion_text: str) -> str:
     - Validates syntax using ast.parse.
     - Raises ValueError on missing block or syntax error.
     """
-    if not completion_text:
-        raise ValueError("Empty completion received.")
+    if not completion_text or not completion_text.strip():
+        raise ValueError("Empty completion received. The model returned no text. Ensure reasoning_effort='none' or check token budget.")
 
     # Match all ```python ... ``` blocks (or bare ``` blocks if python tag omitted)
     pattern = r"```(?:python)?\s*([\s\S]*?)```"

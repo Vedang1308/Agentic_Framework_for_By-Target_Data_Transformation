@@ -72,6 +72,18 @@ def parse_args():
         help=f"Execution timeout in seconds (default: {DEFAULT_TIMEOUT}s)",
     )
     parser.add_argument(
+        "--reasoning_effort",
+        type=str,
+        default="none",
+        help="Reasoning effort: none (default, avoids empty content), low, medium, high",
+    )
+    parser.add_argument(
+        "--max_tokens",
+        type=int,
+        default=4000,
+        help="Max output tokens (default: 4000)",
+    )
+    parser.add_argument(
         "--include_demos",
         action="store_true",
         help="Include the 5 held-out demo cases in evaluation (default: False)",
@@ -87,7 +99,6 @@ def parse_args():
 def get_all_case_folders(benchmark_dir: str, include_demos: bool = False) -> list[str]:
     """Retrieve benchmark case folders sorted naturally by pipeline length."""
     if not os.path.exists(benchmark_dir):
-        # Fallback check
         alt = "smartbuilding-pipelines-v2-split"
         if os.path.exists(alt):
             benchmark_dir = alt
@@ -102,7 +113,6 @@ def get_all_case_folders(benchmark_dir: str, include_demos: bool = False) -> lis
         if os.path.isdir(full_p) and d.startswith("length"):
             folders.append(d)
 
-    # Sort naturally: length1_1, length1_2, ..., length15_4
     def case_sort_key(name):
         parts = name.replace("length", "").split("_")
         try:
@@ -125,6 +135,9 @@ def execute_generated_code_subprocess(
     Executes generated code in a sandboxed subprocess.
     Returns (success, result_df, error_message, is_timeout).
     """
+    if not code or not code.strip():
+        return False, None, "No code to execute.", False
+
     with tempfile.TemporaryDirectory() as tmpdir:
         code_path = os.path.join(tmpdir, "transform.py")
         runner_path = os.path.join(tmpdir, "run_exec.py")
@@ -203,6 +216,8 @@ def run_single_case(
     model: str,
     timeout: int = 120,
     k: int = 5,
+    reasoning_effort: str = "none",
+    max_tokens: int = 4000,
     force: bool = False,
 ) -> dict:
     """Runs a single benchmark case for the chosen strategy."""
@@ -222,59 +237,86 @@ def run_single_case(
 
     gen_func = STRATEGIES[strategy_name]
 
-    # Check cache
-    if not force and os.path.exists(cache_file) and os.path.exists(code_file):
-        with open(cache_file, "r") as f:
-            gen_result = json.load(f)
-        with open(code_file, "r") as f:
-            code = f.read()
-        gen_result["code"] = code
-    else:
-        # Generate with LLM strategy
-        def _invoke():
-            return gen_func(case_dir, client, model, log_dir=log_dir, k=k)
+    # Attempt generation with cache check
+    gen_error = None
+    gen_result = {}
+    code = ""
 
-        gen_result = call_with_retry(_invoke)
-        code = gen_result.get("code", "")
+    try:
+        if not force and os.path.exists(cache_file) and os.path.exists(code_file):
+            with open(cache_file, "r") as f:
+                gen_result = json.load(f)
+            with open(code_file, "r") as f:
+                code = f.read()
+            gen_result["code"] = code
+        else:
+            def _invoke():
+                return gen_func(
+                    case_dir,
+                    client,
+                    model,
+                    log_dir=log_dir,
+                    k=k,
+                    reasoning_effort=reasoning_effort,
+                    max_tokens=max_tokens,
+                )
 
-        # Write prompt and raw completion logs
-        with open(prompt_file, "w", encoding="utf-8") as f:
-            f.write(gen_result.get("prompt", ""))
-        with open(completion_file, "w", encoding="utf-8") as f:
-            f.write(gen_result.get("raw_completion", ""))
-        with open(code_file, "w", encoding="utf-8") as f:
-            f.write(code)
+            gen_result = call_with_retry(_invoke)
+            code = gen_result.get("code", "")
 
-        # If candidates are present (self-consistency), save each to candidates/
-        if "candidates" in gen_result and gen_result["candidates"]:
-            cand_dir = os.path.join(gen_dir, "candidates")
-            os.makedirs(cand_dir, exist_ok=True)
-            for c_info in gen_result["candidates"]:
-                c_idx = c_info["index"]
-                c_code = c_info.get("code") or ""
-                with open(os.path.join(cand_dir, f"candidate_{c_idx}.py"), "w", encoding="utf-8") as f:
-                    f.write(c_code)
+            # Write prompt and raw completion logs
+            with open(prompt_file, "w", encoding="utf-8") as f:
+                f.write(gen_result.get("prompt", ""))
+            with open(completion_file, "w", encoding="utf-8") as f:
+                f.write(gen_result.get("raw_completion", ""))
+            with open(code_file, "w", encoding="utf-8") as f:
+                f.write(code)
 
-        # Write cache json
-        cache_data = {
-            "usage": gen_result.get("usage", {}),
-            "latency": gen_result.get("latency", 0),
-            "strategy": strategy_name,
-            "case": case_name,
-            "model": model,
+            # If candidates are present (self-consistency), save each to candidates/
+            if "candidates" in gen_result and gen_result["candidates"]:
+                cand_dir = os.path.join(gen_dir, "candidates")
+                os.makedirs(cand_dir, exist_ok=True)
+                for c_info in gen_result["candidates"]:
+                    c_idx = c_info["index"]
+                    c_code = c_info.get("code") or ""
+                    with open(os.path.join(cand_dir, f"candidate_{c_idx}.py"), "w", encoding="utf-8") as f:
+                        f.write(c_code)
+
+            # Write cache json
+            cache_data = {
+                "usage": gen_result.get("usage", {}),
+                "latency": gen_result.get("latency", 0),
+                "strategy": strategy_name,
+                "case": case_name,
+                "model": model,
+            }
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(cache_data, f, indent=2)
+
+    except Exception as e:
+        gen_error = str(e)
+        gen_result = {
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            "latency": 0.0,
+            "prompt": "",
+            "raw_completion": "",
         }
-        with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump(cache_data, f, indent=2)
+        code = ""
 
     # Execute generated code on test_0.csv in sandboxed subprocess
     target_df = pd.read_csv(target_csv)
-    exec_success, result_df, exec_err, is_timeout = execute_generated_code_subprocess(
-        code, test_csv, timeout_sec=timeout
-    )
+    if code and not gen_error:
+        exec_success, result_df, exec_err, is_timeout = execute_generated_code_subprocess(
+            code, test_csv, timeout_sec=timeout
+        )
+    else:
+        exec_success = False
+        result_df = None
+        exec_err = gen_error or "Generation failed"
+        is_timeout = False
 
     if exec_success and result_df is not None:
         try:
-            # Validate with both methods
             ap_acc, ap_corr, ap_scores, ap_matches = validate_autopipeline_style(
                 result_df, target_df, method="autopipeline"
             )
@@ -335,6 +377,7 @@ def run_benchmark_for_strategy(strategy: str, args, client: OpenAI):
 
     print(f"\n========================================================")
     print(f"Running Benchmark: Strategy='{strategy}' | Model='{args.model}'")
+    print(f"Reasoning Effort: '{args.reasoning_effort}' | Max Tokens: {args.max_tokens}")
     print(f"Total Cases to Evaluate: {len(case_list)}")
     print(f"Results File: {results_path}")
     print(f"========================================================")
@@ -366,6 +409,8 @@ def run_benchmark_for_strategy(strategy: str, args, client: OpenAI):
                 model=args.model,
                 timeout=args.timeout,
                 k=args.k,
+                reasoning_effort=args.reasoning_effort,
+                max_tokens=args.max_tokens,
                 force=args.force,
             )
 
@@ -391,7 +436,6 @@ def run_benchmark_for_strategy(strategy: str, args, client: OpenAI):
 def main():
     args = parse_args()
 
-    # Read environment variables
     api_key = os.environ.get("OPENAI_API_KEY")
     base_url = os.environ.get("OPENAI_BASE_URL", "https://openai.rc.asu.edu/v1")
 
@@ -403,7 +447,6 @@ def main():
 
     client = OpenAI(api_key=api_key, base_url=base_url)
 
-    # Determine strategies
     if args.strategy.lower() == "all":
         strategies_to_run = ["zero_shot_cot", "few_shot_cot", "zero_shot_sc", "few_shot_sc"]
     else:

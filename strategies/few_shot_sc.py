@@ -15,7 +15,7 @@ import multiprocessing
 import pandas as pd
 import numpy as np
 from prompting import SYSTEM_PROMPT, build_user_prompt, extract_python_code
-from strategies.zero_shot_sc import execute_and_hash_candidate
+from strategies.zero_shot_sc import execute_and_hash_candidate, _extract_choice_text
 
 
 def generate(case_dir: str, client, model: str, log_dir: str = None, **kwargs) -> dict:
@@ -26,6 +26,8 @@ def generate(case_dir: str, client, model: str, log_dir: str = None, **kwargs) -
     k = kwargs.get("k", 5)
     temperature = kwargs.get("temperature", 0.7)
     num_demos = kwargs.get("num_demos", 3)
+    reasoning_effort = kwargs.get("reasoning_effort", "none")
+    max_tokens = kwargs.get("max_tokens", 4000)
     train_csv_path = os.path.join(case_dir, "training_0.csv")
     user_prompt = build_user_prompt(case_dir, include_few_shot=True, num_demos=num_demos)
     
@@ -36,36 +38,43 @@ def generate(case_dir: str, client, model: str, log_dir: str = None, **kwargs) -
     
     # Try batch sampling via n=k first
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
+        create_kwargs = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=temperature,
-            n=k,
-            max_tokens=kwargs.get("max_tokens", 4000),
-            extra_headers={"x-obleth-boons": "off"}
-        )
+            "temperature": temperature,
+            "n": k,
+            "max_tokens": max_tokens,
+            "extra_headers": {"x-obleth-boons": "off"}
+        }
+        if reasoning_effort is not None:
+            create_kwargs["reasoning_effort"] = reasoning_effort
+            
+        response = client.chat.completions.create(**create_kwargs)
         for choice in response.choices:
-            raw_completions.append(choice.message.content or "")
+            raw_completions.append(_extract_choice_text(choice))
         if response.usage:
             total_prompt_tokens = getattr(response.usage, "prompt_tokens", 0)
             total_completion_tokens = getattr(response.usage, "completion_tokens", 0)
     except Exception as e:
         raw_completions = []
         for _ in range(k):
-            single_resp = client.chat.completions.create(
-                model=model,
-                messages=[
+            single_kwargs = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=temperature,
-                max_tokens=kwargs.get("max_tokens", 4000),
-                extra_headers={"x-obleth-boons": "off"}
-            )
-            raw_completions.append(single_resp.choices[0].message.content or "")
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "extra_headers": {"x-obleth-boons": "off"}
+            }
+            if reasoning_effort is not None:
+                single_kwargs["reasoning_effort"] = reasoning_effort
+            single_resp = client.chat.completions.create(**single_kwargs)
+            raw_completions.append(_extract_choice_text(single_resp.choices[0]))
             if single_resp.usage:
                 total_prompt_tokens += getattr(single_resp.usage, "prompt_tokens", 0)
                 total_completion_tokens += getattr(single_resp.usage, "completion_tokens", 0)

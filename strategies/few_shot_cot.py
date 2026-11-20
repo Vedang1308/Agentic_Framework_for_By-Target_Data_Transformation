@@ -18,24 +18,38 @@ def generate(case_dir: str, client, model: str, log_dir: str = None, **kwargs) -
     """
     num_demos = kwargs.get("num_demos", 3)
     user_prompt = build_user_prompt(case_dir, include_few_shot=True, num_demos=num_demos)
+    reasoning_effort = kwargs.get("reasoning_effort", "none")
+    max_tokens = kwargs.get("max_tokens", 4000)
     
     start_time = time.time()
     
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    create_kwargs = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt}
         ],
-        temperature=0.0,
-        max_tokens=kwargs.get("max_tokens", 4000),
-        extra_headers={"x-obleth-boons": "off"}
-    )
+        "temperature": 0.0,
+        "max_tokens": max_tokens,
+        "extra_headers": {"x-obleth-boons": "off"}
+    }
+    if reasoning_effort is not None:
+        create_kwargs["reasoning_effort"] = reasoning_effort
+        
+    response = client.chat.completions.create(**create_kwargs)
     
     latency = time.time() - start_time
     choice = response.choices[0]
-    raw_completion = choice.message.content or ""
     
+    content = choice.message.content or ""
+    reasoning = (
+        getattr(choice.message, "reasoning", None)
+        or getattr(choice.message, "reasoning_content", None)
+        or (choice.message.model_extra.get("reasoning") if hasattr(choice.message, "model_extra") and choice.message.model_extra else None)
+        or ""
+    )
+    
+    raw_completion = content.strip() if content.strip() else reasoning.strip()
     code = extract_python_code(raw_completion)
     
     usage_info = {

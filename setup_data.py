@@ -44,6 +44,11 @@ def setup_benchmark():
     with zipfile.ZipFile(ZIP_NAME, 'r') as zip_ref:
         zip_ref.extractall("benchmarks")
 
+    # Clean up the zip file to reclaim 1 GB of disk space
+    if os.path.exists(ZIP_NAME):
+        print(f"[*] Removing temporary archive '{ZIP_NAME}' to reclaim disk space...")
+        os.remove(ZIP_NAME)
+
     # In case the zip extracted directly to benchmarks/smartbuilding-pipelines-v2-split/
     if os.path.exists(TARGET_DIR):
         case_folders = [d for d in os.listdir(TARGET_DIR) if os.path.isdir(os.path.join(TARGET_DIR, d)) and d.startswith("length")]

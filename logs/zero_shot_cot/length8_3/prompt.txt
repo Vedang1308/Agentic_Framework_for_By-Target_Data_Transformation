@@ -1,0 +1,48 @@
+### Benchmark Case: length8_3
+- Source sample rows: 15117 rows (Note: test_0.csv may have different row count)
+- Target rows: 24 rows
+- Notice: Row count changes from 15117 to 24. Check if an aggregation, grouping, or pivoting operation is required.
+
+### Exact Target Columns (Must match verbatim):
+['Hour', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
+### Datetime Format Inferences:
+- Source column 'date' has date format '%m/%d/%Y %H:%M' (sample: '11/6/2018 21:45')
+
+### Source Schema and Types:
+date (object), zone_016_cooling_sp (float64)
+
+### Target Schema and Types:
+Hour (int64), January (float64), February (float64), March (float64), April (float64), May (float64), June (float64), July (float64), August (float64), September (float64), October (float64), November (float64), December (float64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- zone_016_cooling_sp: [np.float64(73.0), np.float64(84.0)]
+
+### Source Table Sample (training_0.csv):
+| date            |   zone_016_cooling_sp |
+|:----------------|----------------------:|
+| 11/6/2018 21:45 |                    73 |
+| 11/6/2018 21:50 |                    73 |
+| 11/6/2018 21:55 |                    73 |
+| 11/6/2018 22:00 |                    73 |
+| 1/18/2019 3:05  |                    73 |
+| 1/18/2019 3:10  |                    73 |
+| 1/18/2019 3:15  |                    73 |
+| 1/18/2019 3:20  |                    73 |
+
+### Desired Target Table Sample (target.csv):
+|   Hour |   January |   February |   March |   April |   May |   June |   July |   August |   September |   October |   November |   December |
+|-------:|----------:|-----------:|--------:|--------:|------:|-------:|-------:|---------:|------------:|----------:|-----------:|-----------:|
+|      0 |       nan |        nan |     nan |     nan |   nan |    nan |    nan |      nan |          73 |        73 |         73 |        nan |
+|      1 |       nan |        nan |     nan |     nan |   nan |    nan |    nan |      nan |          73 |        73 |         73 |        nan |
+|      2 |       nan |        nan |     nan |     nan |   nan |    nan |    nan |      nan |          73 |        73 |         73 |        nan |
+|      3 |       nan |        nan |     nan |     nan |   nan |    nan |    nan |      nan |          73 |        73 |         73 |        nan |
+|     20 |       nan |        nan |     nan |     nan |   nan |    nan |    nan |      nan |          73 |        73 |         73 |        nan |
+|     21 |       nan |        nan |     nan |     nan |   nan |    nan |    nan |      nan |          73 |        73 |         73 |        nan |
+|     22 |       nan |        nan |     nan |     nan |   nan |    nan |    nan |      nan |          73 |        73 |         73 |        nan |
+|     23 |       nan |        nan |     nan |     nan |   nan |    nan |    nan |      nan |          73 |        73 |         73 |        nan |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

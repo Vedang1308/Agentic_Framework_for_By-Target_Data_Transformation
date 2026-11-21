@@ -1,0 +1,147 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a `date` column (format `%m/%d/%Y`) and 24 hourly columns labeled with AM/PM times (e.g., `1:00 AM`, `12:00 PM`, etc.), plus a `DSL` column. The hourly columns are not in chronological order (e.g., `12:00 AM` appears after `11:00 AM` in the schema list provided, but logically it's the start of the day).
+    *   **Target**: Contains a `Date` column (format `%Y-%m-%d %H:%M:%S`) and 24 columns named `Hr 1` through `Hr 24`.
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target might include a row that isn't directly present in the source sample, or more likely, the source sample provided is just a subset, and the transformation is a 1-to-1 mapping per row. However, looking at the dates:
+        *   Source sample starts at `7/3/2014`.
+        *   Target sample starts at `2014-01-01`.
+        *   This implies the source table contains data for the whole year (or a large range), and the sample just shows a slice. The row count difference (182 vs 183) in the benchmark description might be due to a specific test case having an extra row or a slight mismatch in the sample description vs reality. Given the 1-to-1 nature of hourly data, it is highly probable that each source row maps to exactly one target row. The "183" might be a typo in the prompt or refer to a specific test file with an extra day. I will assume a direct row-wise transformation.
+
+2.  **Map Hourly Columns**:
+    *   The source columns are named like `1:00 AM`, `2:00 AM`, ..., `12:00 PM`, `1:00 PM`, ..., `11:00 PM`.
+    *   The target columns are `Hr 1` to `Hr 24`.
+    *   I need to establish a mapping from the source column names to the target column indices (1-24).
+    *   Standard 24-hour clock mapping:
+        *   `12:00 AM` -> Hour 1 (00:00)
+        *   `1:00 AM` -> Hour 2 (01:00)
+        *   ...
+        *   `11:00 AM` -> Hour 12 (11:00)
+        *   `12:00 PM` -> Hour 13 (12:00)
+        *   `1:00 PM` -> Hour 14 (13:00)
+        *   ...
+        *   `11:00 PM` -> Hour 24 (23:00)
+    *   Let's verify this mapping with the data.
+        *   Source `12:00 AM` is the first hour of the day. Target `Hr 1` should correspond to this.
+        *   Source `1:00 AM` is the second hour. Target `Hr 2` should correspond to this.
+        *   ...
+        *   Source `12:00 PM` is the 13th hour. Target `Hr 13` should correspond to this.
+    *   I will create a dictionary mapping source column names to target column names.
+
+3.  **Process the Date Column**:
+    *   Parse the `date` column from `%m/%d/%Y` to a datetime object.
+    *   Format it as `%Y-%m-%d %H:%M:%S`. Since the source only has dates, the time part will be `00:00:00`.
+
+4.  **Construct the Target DataFrame**:
+    *   Create a new DataFrame.
+    *   Set the `Date` column using the parsed and formatted dates.
+    *   Rename the hourly columns from source to target names.
+    *   Ensure the column order matches the target schema: `Date`, `Hr 1`, ..., `Hr 24`.
+
+5.  **Handle Potential Issues**:
+    *   The source schema lists `12:00 AM` after `11:00 AM`. This is just the order in the schema description, not necessarily the order in the DataFrame. I should rely on column names, not position.
+    *   The `DSL` column is not in the target, so it should be dropped.
+
+6.  **Refine the Mapping**:
+    *   Source: `12:00 AM` -> Target: `Hr 1`
+    *   Source: `1:00 AM` -> Target: `Hr 2`
+    *   Source: `2:00 AM` -> Target: `Hr 3`
+    *   Source: `3:00 AM` -> Target: `Hr 4`
+    *   Source: `4:00 AM` -> Target: `Hr 5`
+    *   Source: `5:00 AM` -> Target: `Hr 6`
+    *   Source: `6:00 AM` -> Target: `Hr 7`
+    *   Source: `7:00 AM` -> Target: `Hr 8`
+    *   Source: `8:00 AM` -> Target: `Hr 9`
+    *   Source: `9:00 AM` -> Target: `Hr 10`
+    *   Source: `10:00 AM` -> Target: `Hr 11`
+    *   Source: `11:00 AM` -> Target: `Hr 12`
+    *   Source: `12:00 PM` -> Target: `Hr 13`
+    *   Source: `1:00 PM` -> Target: `Hr 14`
+    *   Source: `2:00 PM` -> Target: `Hr 15`
+    *   Source: `3:00 PM` -> Target: `Hr 16`
+    *   Source: `4:00 PM` -> Target: `Hr 17`
+    *   Source: `5:00 PM` -> Target: `Hr 18`
+    *   Source: `6:00 PM` -> Target: `Hr 19`
+    *   Source: `7:00 PM` -> Target: `Hr 20`
+    *   Source: `8:00 PM` -> Target: `Hr 21`
+    *   Source: `9:00 PM` -> Target: `Hr 22`
+    *   Source: `10:00 PM` -> Target: `Hr 23`
+    *   Source: `11:00 PM` -> Target: `Hr 24`
+
+7.  **Implementation Steps**:
+    *   Define the mapping dictionary.
+    *   Select only the relevant columns from the source (date and hourly columns).
+    *   Rename the columns using the mapping.
+    *   Parse the date column.
+    *   Format the date column.
+    *   Reorder columns to match the target schema.
+    *   Return the result.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # Define the mapping from source column names to target column names
+    # Source columns are in 12-hour format, target are Hr 1 to Hr 24
+    col_mapping = {
+        '12:00 AM': 'Hr 1',
+        '1:00 AM': 'Hr 2',
+        '2:00 AM': 'Hr 3',
+        '3:00 AM': 'Hr 4',
+        '4:00 AM': 'Hr 5',
+        '5:00 AM': 'Hr 6',
+        '6:00 AM': 'Hr 7',
+        '7:00 AM': 'Hr 8',
+        '8:00 AM': 'Hr 9',
+        '9:00 AM': 'Hr 10',
+        '10:00 AM': 'Hr 11',
+        '11:00 AM': 'Hr 12',
+        '12:00 PM': 'Hr 13',
+        '1:00 PM': 'Hr 14',
+        '2:00 PM': 'Hr 15',
+        '3:00 PM': 'Hr 16',
+        '4:00 PM': 'Hr 17',
+        '5:00 PM': 'Hr 18',
+        '6:00 PM': 'Hr 19',
+        '7:00 PM': 'Hr 20',
+        '8:00 PM': 'Hr 21',
+        '9:00 PM': 'Hr 22',
+        '10:00 PM': 'Hr 23',
+        '11:00 PM': 'Hr 24'
+    }
+    
+    # Create a copy of the source dataframe to avoid modifying the original
+    df = source.copy()
+    
+    # Select only the date and the hourly columns
+    # The hourly columns are the keys in our mapping
+    hourly_cols = list(col_mapping.keys())
+    cols_to_keep = ['date'] + hourly_cols
+    
+    # Ensure all required columns exist in the source
+    # In case of any missing columns, we should handle it, but assuming valid input
+    df = df[cols_to_keep]
+    
+    # Rename the hourly columns
+    df = df.rename(columns=col_mapping)
+    
+    # Parse the date column
+    # Source format is '%m/%d/%Y'
+    df['Date'] = pd.to_datetime(df['date'], format='%m/%d/%Y')
+    
+    # Format the date column to '%Y-%m-%d %H:%M:%S'
+    df['Date'] = df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Drop the original 'date' column
+    df = df.drop(columns=['date'])
+    
+    # Define the target column order
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # Ensure the columns are in the correct order
+    df = df[target_columns]
+    
+    return df[target_columns]
+```

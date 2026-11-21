@@ -1,0 +1,174 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source has high-frequency time-series data (hourly) with many sensor columns.
+    *   Target has aggregated data grouped by `month` and `hour`.
+    *   Target columns: `month`, `hour`, `HVAC`, `domestic_water_heating`, `major_appliances`, `lighting`, `miscellaneous_plug_loads`, `Total`.
+    *   The row count drops significantly (1.3M -> 288), implying a `groupby` aggregation. Since there are 12 months and 24 hours, $12 \times 24 = 288$ rows, which matches the target row count exactly. This confirms we need to group by month and hour and aggregate the values.
+
+2.  **Handle Missing/Invalid Data**:
+    *   The source data contains `32767.0` in many columns (e.g., `TOTAL BLDG WHS`, `AC COMPRESSOR WHS`, etc.). This is a common sentinel value for missing or invalid data in sensor logs (often representing an overflow or error code in 16-bit signed integers).
+    *   We must replace `32767.0` with `NaN` before aggregation to avoid skewing sums/means.
+
+3.  **Map Source Columns to Target Categories**:
+    *   We need to determine which source columns contribute to which target category. Based on standard building energy monitoring schemas (like the one implied by column names like "emon ch1,2"):
+        *   **HVAC**: Typically includes AC Compressor, Air Handler, Minisplit.
+            *   `AC COMPRESSOR WHS [emon ch3,4]`
+            *   `AIR HANDLER WHS [emon ch5,6]`
+            *   `Minisplit WHS (2-CTs) [xpod chA-7,8]`
+        *   **domestic_water_heating**:
+            *   `WATER HEATER WHS [emon ch7,8]`
+        *   **major_appliances**: Typically includes Dryer, Range, Dishwasher, Fridges.
+            *   `DRYER WHS (1-CT) [emon ch9]`
+            *   `RANGE WHS (1-CT) [emon ch10]`
+            *   `DISH WASHER WHS [emon ch11]`
+            *   `Primary Fridge WHS [emon ch12]`
+            *   `2nd Fridge WHS [emon ch13]`
+            *   `Dryer WHS (2-CTs) [xpod chA-9,10]` (Note: There are two dryer columns, likely different sensors or phases. We should sum them if both are valid, or treat them as part of the same category).
+        *   **lighting**:
+            *   Looking at the source, there isn't an explicit "Lighting" column. However, `SPARE1`, `SPARE2`, etc., are often unused. Let's look at `Total`.
+            *   `Total` in target is likely the sum of all loads or specifically `TOTAL BLDG WHS [emon ch1,2]`. Let's check the magnitude.
+            *   In the sample, `TOTAL BLDG WHS` is ~386-544. The target `Total` is ~2.3e7. This suggests aggregation over many rows.
+            *   Let's look at `miscellaneous_plug_loads`. This often includes pool pumps, spare channels used for plugs, etc.
+            *   `POOL PUMP WHS (2-CTs) [xpod chA-3,4]`
+            *   `SPARE1 WHS (1-CT) [emon ch14]`
+            *   `SPARE2 WHS (1-CT) [xpod chA-1]`
+            *   `SPARE3 WHS (1-CT) [xpod chA-2]`
+            *   `SPARE4 WHS (2-CTs) [xpod chA-5,6]`
+            *   `Future use- WHS (2-CTs)[xpod chB-3,4]`
+            *   `Future use- WHS (2-CTs)[xpod chB-5,6]`
+            *   `Wattsup Cumulative Ent.Ctr (WHS)` / `Wattsup Energy Ent.Ctr (WHS)` etc. seem like cumulative counters, not instantaneous power. We should probably ignore cumulative counters for hourly aggregation unless we differencing them, but the target schema implies simple aggregation of instantaneous values. The columns ending in `(Whr)` or `Cumulative` are likely not instantaneous power. The columns ending in `WHS` (Watts) are instantaneous.
+            *   Let's refine the mapping based on typical "OpenEI" or similar building datasets.
+                *   `HVAC`: `AC COMPRESSOR WHS [emon ch3,4]`, `AIR HANDLER WHS [emon ch5,6]`, `Minisplit WHS (2-CTs) [xpod chA-7,8]`
+                *   `domestic_water_heating`: `WATER HEATER WHS [emon ch7,8]`
+                *   `major_appliances`: `DRYER WHS (1-CT) [emon ch9]`, `RANGE WHS (1-CT) [emon ch10]`, `DISH WASHER WHS [emon ch11]`, `Primary Fridge WHS [emon ch12]`, `2nd Fridge WHS [emon ch13]`, `Dryer WHS (2-CTs) [xpod chA-9,10]`
+                *   `lighting`: There is no explicit lighting column. In many such datasets, if lighting isn't measured separately, it might be 0 or included in "miscellaneous". The target sample shows `lighting` as 0 for all rows. This suggests either there is no lighting data or it's not mapped. Given the explicit 0s, we can initialize it to 0.
+                *   `miscellaneous_plug_loads`: `POOL PUMP WHS (2-CTs) [xpod chA-3,4]`, `SPARE1 WHS (1-CT) [emon ch14]`, `SPARE2 WHS (1-CT) [xpod chA-1]`, `SPARE3 WHS (1-CT) [xpod chA-2]`, `SPARE4 WHS (2-CTs) [xpod chA-5,6]`, `Future use- WHS (2-CTs)[xpod chB-3,4]`, `Future use- WHS (2-CTs)[xpod chB-5,6]`.
+                *   `Total`: `TOTAL BLDG WHS [emon ch1,2]`.
+
+4.  **Aggregation Strategy**:
+    *   Parse `timestamp` to datetime.
+    *   Extract `month` and `hour`.
+    *   Replace `32767.0` with `NaN`.
+    *   Sum the relevant columns for each category.
+    *   Group by `month` and `hour`.
+    *   Aggregate using `sum()`. Since the data is hourly, summing the hourly values gives the total energy (Wh) for that hour-of-day across all days/months in the dataset. Wait, the target values are very large (1e8). If we sum 1.3M rows of ~100-1000 Watts, we get ~1e8-1e9. This matches.
+    *   The target `Total` column seems to correspond to the sum of `TOTAL BLDG WHS [emon ch1,2]`.
+
+5.  **Refining Column Mappings**:
+    *   Let's verify the `Total` column. In the target, `Total` is ~2.3e7 for month 1, hour 19.
+    *   Let's check the sum of components vs Total.
+    *   If `Total` is just `TOTAL BLDG WHS`, we can compute it directly.
+    *   The other columns are sub-components.
+
+6.  **Implementation Details**:
+    *   Create a copy of the source.
+    *   Clean data: `df.replace(32767.0, np.nan)`.
+    *   Parse timestamp: `pd.to_datetime(df['timestamp'])`.
+    *   Create `month` and `hour` columns.
+    *   Define lists of columns for each category.
+    *   Sum columns for each category into new columns.
+    *   Group by `month` and `hour` and sum.
+    *   Reset index.
+    *   Select and rename columns to match target verbatim.
+    *   Ensure `lighting` is 0 if no columns map to it.
+
+7.  **Final Check on Column Names**:
+    *   Target: `['month', 'hour', 'HVAC', 'domestic_water_heating', 'major_appliances', 'lighting', 'miscellaneous_plug_loads', 'Total']`
+    *   Source columns to use:
+        *   HVAC: `['AC COMPRESSOR WHS [emon ch3,4]', 'AIR HANDLER WHS [emon ch5,6]', 'Minisplit WHS (2-CTs) [xpod chA-7,8]']`
+        *   domestic_water_heating: `['WATER HEATER WHS [emon ch7,8]']`
+        *   major_appliances: `['DRYER WHS (1-CT) [emon ch9]', 'RANGE WHS (1-CT) [emon ch10]', 'DISH WASHER WHS [emon ch11]', 'Primary Fridge WHS [emon ch12]', '2nd Fridge WHS [emon ch13]', 'Dryer WHS (2-CTs) [xpod chA-9,10]']`
+        *   lighting: `[]` (Initialize to 0)
+        *   miscellaneous_plug_loads: `['POOL PUMP WHS (2-CTs) [xpod chA-3,4]', 'SPARE1 WHS (1-CT) [emon ch14]', 'SPARE2 WHS (1-CT) [xpod chA-1]', 'SPARE3 WHS (1-CT) [xpod chA-2]', 'SPARE4 WHS (2-CTs) [xpod chA-5,6]', 'Future use- WHS (2-CTs)[xpod chB-3,4]', 'Future use- WHS (2-CTs)[xpod chB-5,6]']`
+        *   Total: `['TOTAL BLDG WHS [emon ch1,2]']`
+
+    *   Note: `Calculated Unmeasured loads (Whr)` and `Calculated Energy Use (Whr)` are likely derived values and not raw sensor data to be summed again, or they might be the "Total" if `TOTAL BLDG WHS` is missing. However, `TOTAL BLDG WHS` is present. We will use `TOTAL BLDG WHS` for `Total`.
+
+    *   One detail: `2nd Fridge WHS [emon ch13]` has `32767` in the sample. This will be treated as NaN.
+
+    *   Aggregation: `groupby(['month', 'hour']).sum()`.
+
+    *   Final column selection and type casting if necessary (though pandas usually handles float/int conversion reasonably, the target shows `int64` for some and `float64` for `miscellaneous_plug_loads`. We can let pandas infer or cast explicitly if needed, but usually `sum()` on floats results in floats. The target schema says `HVAC` is `int64` but sample shows scientific notation which is float representation. We will return the dataframe as is, ensuring column names match. The prompt says "Target Schema and Types" but the sample values are floats. We will stick to the computed values.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # 1. Handle sentinel value 32767.0 as NaN
+    df = df.replace(32767.0, np.nan)
+    
+    # 2. Parse timestamp and extract month and hour
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df['month'] = df['timestamp'].dt.month
+    df['hour'] = df['timestamp'].dt.hour
+    
+    # 3. Define column mappings for each target category
+    # HVAC: AC Compressor, Air Handler, Minisplit
+    hvac_cols = [
+        'AC COMPRESSOR WHS [emon ch3,4]',
+        'AIR HANDLER WHS [emon ch5,6]',
+        'Minisplit WHS (2-CTs) [xpod chA-7,8]'
+    ]
+    
+    # Domestic Water Heating
+    dwh_cols = [
+        'WATER HEATER WHS [emon ch7,8]'
+    ]
+    
+    # Major Appliances: Dryer (1-CT), Range, Dishwasher, Primary Fridge, 2nd Fridge, Dryer (2-CTs)
+    major_appl_cols = [
+        'DRYER WHS (1-CT) [emon ch9]',
+        'RANGE WHS (1-CT) [emon ch10]',
+        'DISH WASHER WHS [emon ch11]',
+        'Primary Fridge WHS [emon ch12]',
+        '2nd Fridge WHS [emon ch13]',
+        'Dryer WHS (2-CTs) [xpod chA-9,10]'
+    ]
+    
+    # Lighting: No explicit columns found, initialize to 0
+    lighting_cols = []
+    
+    # Miscellaneous Plug Loads: Pool Pump, Spares, Future Use
+    misc_plug_cols = [
+        'POOL PUMP WHS (2-CTs) [xpod chA-3,4]',
+        'SPARE1 WHS (1-CT) [emon ch14]',
+        'SPARE2 WHS (1-CT) [xpod chA-1]',
+        'SPARE3 WHS (1-CT) [xpod chA-2]',
+        'SPARE4 WHS (2-CTs) [xpod chA-5,6]',
+        'Future use- WHS (2-CTs)[xpod chB-3,4]',
+        'Future use- WHS (2-CTs)[xpod chB-5,6]'
+    ]
+    
+    # Total: Total Building WHS
+    total_cols = [
+        'TOTAL BLDG WHS [emon ch1,2]'
+    ]
+    
+    # 4. Calculate sums for each category
+    # Using sum(axis=1) to sum across columns for each row
+    df['HVAC'] = df[hvac_cols].sum(axis=1)
+    df['domestic_water_heating'] = df[dwh_cols].sum(axis=1)
+    df['major_appliances'] = df[major_appl_cols].sum(axis=1)
+    df['lighting'] = 0.0 # No columns mapped
+    df['miscellaneous_plug_loads'] = df[misc_plug_cols].sum(axis=1)
+    df['Total'] = df[total_cols].sum(axis=1)
+    
+    # 5. Group by month and hour and aggregate (sum)
+    # The target has 288 rows (12 months * 24 hours), implying we sum all occurrences of each month/hour pair
+    agg_df = df.groupby(['month', 'hour']).agg({
+        'HVAC': 'sum',
+        'domestic_water_heating': 'sum',
+        'major_appliances': 'sum',
+        'lighting': 'sum',
+        'miscellaneous_plug_loads': 'sum',
+        'Total': 'sum'
+    }).reset_index()
+    
+    # 6. Select and order columns to match target verbatim
+    target_columns = ['month', 'hour', 'HVAC', 'domestic_water_heating', 'major_appliances', 'lighting', 'miscellaneous_plug_loads', 'Total']
+    
+    return agg_df[target_columns]
+```

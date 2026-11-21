@@ -1,0 +1,129 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Datetime**: The source column `date` is a string in the format `%m/%d/%Y %H:%M`. We need to convert this to a pandas `datetime` object to extract date and hour components.
+2.  **Extract Date and Hour**:
+    *   Extract the date part (year, month, day) to group by day.
+    *   Extract the hour part (0-23) to determine which column the value belongs to in the target table.
+3.  **Map Hours to Target Columns**:
+    *   The target columns are labeled `'1:00'` through `'24:00'`.
+    *   Standard 24-hour clock hours are 0-23.
+    *   Observation: `'1:00'` likely corresponds to hour 0 (midnight to 1 AM), `'2:00'` to hour 1, ..., `'24:00'` to hour 23.
+    *   Let's verify with the sample data.
+        *   Source: `1/1/2021 0:00` -> Hour 0.
+        *   Target: Column `'1:00'`.
+        *   Source: `7/28/2019 4:50` -> Hour 4.
+        *   Target: Column `'5:00'` (since 4+1=5).
+    *   Therefore, the mapping is: `Target Column Label = str(Hour + 1) + ':00'`.
+4.  **Aggregate Data**:
+    *   The source has multiple rows per hour (e.g., 4:50, 5:00, 5:10, 5:20).
+    *   The target has one value per hour per day.
+    *   We need to aggregate the `cerc_logger_1` values for each (Date, Hour) group.
+    *   Looking at the target values (e.g., `132.249`), they look like averages or sums. Given the source values are around 24-25, and there are ~6 rows per hour (10-min intervals), a sum would be ~150. An average would be ~24. The target values are ~130-140.
+    *   Let's check the sample row `Sat 07/20/2019`.
+        *   If we sum 6 values of ~24, we get ~144.
+        *   If we average, we get ~24.
+        *   The target value is `132.249`. This is closer to a sum.
+        *   Let's look at `Sat 02/16/2019` where all values are 0. This doesn't help distinguish.
+        *   Let's look at the magnitude. Source `cerc_logger_1` is ~24. Target is ~130. 24 * 6 = 144. 24 * 5.5 = 132. It seems like a **sum** of the values within that hour.
+    *   Wait, let's look closer. `7/28/2019 4:50` is 24.562. `5:00` is 24.625.
+    *   If the aggregation is `sum`, then for hour 4 (which maps to `5:00`), we sum all values where hour==4.
+    *   Let's assume **sum** aggregation.
+5.  **Pivot/Reshape**:
+    *   Group by the extracted Date and the mapped Hour Label.
+    *   Aggregate using `sum`.
+    *   Pivot the table so that Dates are rows and Hour Labels are columns.
+6.  **Format Date Column**:
+    *   The target column `cst` requires format `%a %m/%d/%Y` (e.g., `Sat 07/20/2019`).
+    *   Convert the date index/column to this string format.
+7.  **Handle Missing Values**:
+    *   If a specific hour has no data for a day, the pivot will result in NaN.
+    *   The target sample shows `0` for missing data (e.g., `Sat 02/16/2019` has all 0s).
+    *   Fill NaNs with `0`.
+8.  **Ensure Column Order and Names**:
+    *   The target columns are strictly ordered from `'1:00'` to `'24:00'`.
+    *   Ensure the final DataFrame has these exact columns in this order.
+    *   Rename the date column to `cst`.
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame.
+    
+    Steps:
+    1. Parse the 'date' column into datetime objects.
+    2. Extract the date part and the hour part.
+    3. Map the hour (0-23) to the target column labels ('1:00'-'24:00').
+       Mapping: Hour H -> Label str(H+1) + ':00'
+    4. Group by Date and Hour Label, and sum the 'cerc_logger_1' values.
+    5. Pivot the data to have Dates as rows and Hour Labels as columns.
+    6. Format the Date index as '%a %m/%d/%Y' and rename to 'cst'.
+    7. Fill missing values with 0.
+    8. Ensure all target columns exist and are in the correct order.
+    """
+    
+    # 1. Parse date
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract date and hour
+    df['date_only'] = df['datetime'].dt.date
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 3. Map hour to target column label
+    # Hour 0 -> '1:00', Hour 1 -> '2:00', ..., Hour 23 -> '24:00'
+    df['hour_label'] = df['hour'].apply(lambda h: f"{h+1}:00")
+    
+    # 4. Aggregate by Date and Hour Label
+    # We sum the values. Based on sample analysis, sum fits the magnitude.
+    agg_df = df.groupby(['date_only', 'hour_label'])['cerc_logger_1'].sum().reset_index()
+    
+    # 5. Pivot
+    # Rows: date_only, Columns: hour_label, Values: cerc_logger_1
+    pivot_df = agg_df.pivot(index='date_only', columns='hour_label', values='cerc_logger_1')
+    
+    # 6. Format date column
+    # Convert index to datetime to format, then to string
+    pivot_df.index = pd.to_datetime(pivot_df.index)
+    pivot_df.index = pivot_df.index.strftime('%a %m/%d/%Y')
+    pivot_df = pivot_df.reset_index()
+    pivot_df.rename(columns={'index': 'cst'}, inplace=True)
+    
+    # 7. Fill missing values with 0
+    pivot_df = pivot_df.fillna(0)
+    
+    # 8. Define target columns and ensure order
+    target_columns = ['cst', '1:00', '2:00', '3:00', '4:00', '5:00', '6:00', '7:00', '8:00', '9:00', 
+                      '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', 
+                      '19:00', '20:00', '21:00', '22:00', '23:00', '24:00']
+    
+    # Ensure all target columns exist, filling with 0 if a column is missing for some rows
+    for col in target_columns[1:]: # Skip 'cst'
+        if col not in pivot_df.columns:
+            pivot_df[col] = 0
+            
+    # Select and order columns
+    result_df = pivot_df[target_columns]
+    
+    # Sort by date? The target sample seems sorted by date descending or ascending?
+    # Sample: Sat 07/20/2019, Sun 05/13/2018... It looks like it might be sorted by date.
+    # Let's convert cst back to datetime for sorting to be safe, then format again?
+    # Or just sort by the string if the format allows lexicographical sort? 
+    # '%a %m/%d/%Y' does not sort correctly lexicographically (e.g., Mon vs Tue).
+    # However, the problem doesn't explicitly state sort order, but usually, it's good practice.
+    # Let's look at the sample: 
+    # Sat 07/20/2019
+    # Sun 05/13/2018
+    # Sat 11/24/2018
+    # Thu 05/10/2018
+    # This is NOT sorted by date. It might be sorted by the original appearance or random.
+    # Given the instruction "generalize to any unseen test table", and no explicit sort instruction,
+    # we will leave the order as determined by the groupby/pivot (which is usually sorted by index).
+    # Pandas groupby sorts by default. So dates will be sorted ascending.
+    
+    return result_df
+```

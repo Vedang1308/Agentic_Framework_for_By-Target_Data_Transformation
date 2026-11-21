@@ -1,0 +1,149 @@
+### Reasoning Plan
+
+1.  **Parse Datetime**: The source column `date` is a string in format `%m/%d/%Y %H:%M`. We need to convert this to a pandas `datetime` object to extract time-based features.
+
+2.  **Extract Features**:
+    *   **`dt_strata`**: The target shows dates like `01/14/19`. This corresponds to the Month/Day/Year (2-digit) format. We will format the parsed datetime as `%m/%d/%y`.
+    *   **`dow`**: The target column `dow` contains integers (1, 2, 4, 5...). Looking at the sample:
+        *   `01/14/19` is a Monday. In pandas `dt.dayofweek`, Monday is 0. But the target is 1.
+        *   `07/09/18` is a Monday. Target is 1.
+        *   `01/18/19` is a Friday. Pandas `dt.dayofweek` is 4. Target is 5.
+        *   `04/26/18` is a Thursday. Pandas `dt.dayofweek` is 3. Target is 4.
+        *   It appears `dow` is 1-indexed (Monday=1, ..., Sunday=7). So, `dow = dt.dayofweek + 1`.
+    *   **Hour**: We need to group by hour. The target columns are `pct_hourly_0100` to `pct_hourly_2500`. Note that standard hours are 00-23. The presence of `2400` and `2500` suggests a specific binning or mapping.
+        *   Let's look at the values. `pct_hourly_2500` is always 0 in the sample. `pct_hourly_2400` has values.
+        *   Standard 24-hour clock goes 00:00 to 23:59.
+        *   Often, "2400" represents the end of the day or the 00:00 hour of the *next* day, or it might be a specific bucket for 23:00-24:00.
+        *   However, looking at the column names: `0100`, `0200`, ... `2300`, `2400`, `2500`.
+        *   If we map hour 0 to `0100`, hour 1 to `0200`, ..., hour 23 to `2400`, then what is `2500`?
+        *   Let's check the source data. The source has minutes (e.g., 4:50). We likely need to aggregate by hour.
+        *   Let's assume a mapping where Hour `h` maps to column `pct_hourly_{h+1:04d}00`.
+            *   Hour 0 -> `pct_hourly_0100`
+            *   Hour 1 -> `pct_hourly_0200`
+            *   ...
+            *   Hour 23 -> `pct_hourly_2400`
+            *   This leaves `pct_hourly_2500`. Since there is no hour 24 in standard datetime, this column likely remains 0 or represents a specific edge case not present in standard hourly bins. Given the sample shows 0, we can initialize it to 0.
+
+3.  **Aggregation**:
+    *   Group by `dt_strata` and `dow` (and potentially the derived hour bucket).
+    *   For each group, calculate the mean (or sum?) of `cerc_logger_1`.
+    *   Looking at the magnitude: Source values are ~24.5. Target values are ~135-140.
+    *   There are 3 data points per hour in the source sample (10 min intervals: 4:50, 5:00, 5:10, 5:20... wait, 10 min intervals means 6 per hour).
+    *   If we sum 6 values of ~24.5, we get ~147. The target values are ~135-140. This suggests **Sum** might be the operation, but perhaps some missing data or specific weighting? Or maybe it's just the sum of the available readings in that hour.
+    *   Let's check the first row of target: `01/14/19`, `dow` 1. `pct_hourly_0100` is 136.872.
+    *   If we sum the `cerc_logger_1` values for that hour, do we get this number?
+    *   Let's assume the operation is **Sum** of `cerc_logger_1` grouped by date and hour.
+
+4.  **Pivoting**:
+    *   After grouping by `dt_strata`, `dow`, and `hour_bucket`, we have a long format.
+    *   We need to pivot/wide format where columns are the hour buckets.
+    *   Map the hour integer to the column name string (e.g., 0 -> 'pct_hourly_0100').
+
+5.  **Handling Missing Hours**:
+    *   Not every hour might have data for every day. We need to ensure all columns `0100` to `2500` exist.
+    *   Fill missing values with 0 (as seen in `pct_hourly_2500` and potentially other sparse hours).
+
+6.  **Final Formatting**:
+    *   Ensure column order matches the target list.
+    *   Ensure `dow` is int64.
+    *   Ensure `pct_hourly_2500` is int64 (as per target schema, though others are float).
+
+### Step-by-Step Implementation Plan
+
+1.  Load source.
+2.  Parse `date` to datetime.
+3.  Create `dt_strata` using `.dt.strftime('%m/%d/%y')`.
+4.  Create `dow` using `.dt.dayofweek + 1`.
+5.  Extract `hour` using `.dt.hour`.
+6.  Map `hour` to column names: `hour + 1` formatted as 4 digits followed by `00`? No, just `f"{hour+1:02d}00"`.
+    *   Hour 0 -> "0100"
+    *   Hour 23 -> "2400"
+7.  Group by `['dt_strata', 'dow']` and the mapped hour column name? Or group by hour then pivot.
+    *   Better: Group by `['dt_strata', 'dow', 'hour']`, sum `cerc_logger_1`.
+    *   Reset index.
+    *   Create column `hour_col` = `f"pct_hourly_{hour+1:02d}00"`.
+    *   Pivot: index=`['dt_strata', 'dow']`, columns=`hour_col`, values=`cerc_logger_1`.
+8.  Fill NaNs with 0.
+9.  Ensure all target columns exist. Add `pct_hourly_2500` if missing (fill with 0).
+10. Select and order columns.
+11. Cast types.
+
+Let's refine the mapping.
+Target columns: `pct_hourly_0100` ... `pct_hourly_2400`, `pct_hourly_2500`.
+Source hours: 0-23.
+Mapping: Source Hour `h` -> Target Column `pct_hourly_{h+1:02d}00`.
+Hour 0 -> `pct_hourly_0100`
+Hour 23 -> `pct_hourly_2400`
+`pct_hourly_2500` is not generated by any source hour, so it will be missing or NaN. We fill with 0.
+
+One detail: `dow` in target is int64. `dt_strata` is object.
+
+Let's write the code.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # 1. Parse date
+    df = source.copy()
+    df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract dt_strata (MM/DD/YY)
+    df['dt_strata'] = df['date'].dt.strftime('%m/%d/%y')
+    
+    # 3. Extract dow (1=Monday, ..., 7=Sunday)
+    # pandas dayofweek: Monday=0, Sunday=6
+    df['dow'] = df['date'].dt.dayofweek + 1
+    
+    # 4. Extract hour and map to target column names
+    # Hour 0 -> pct_hourly_0100
+    # Hour 23 -> pct_hourly_2400
+    df['hour'] = df['date'].dt.hour
+    df['hour_col'] = 'pct_hourly_' + df['hour'].apply(lambda h: f"{h+1:02d}00")
+    
+    # 5. Aggregate by dt_strata, dow, and hour_col
+    # The values in target are sums of the source values (approx 6 values per hour * 24.5 ~ 147)
+    agg_df = df.groupby(['dt_strata', 'dow', 'hour_col'])['cerc_logger_1'].sum().reset_index()
+    
+    # 6. Pivot to wide format
+    pivot_df = agg_df.pivot_table(
+        index=['dt_strata', 'dow'], 
+        columns='hour_col', 
+        values='cerc_logger_1', 
+        fill_value=0
+    ).reset_index()
+    
+    # 7. Define all target columns
+    target_columns = [
+        'dt_strata', 'dow', 
+        'pct_hourly_0100', 'pct_hourly_0200', 'pct_hourly_0300', 'pct_hourly_0400', 
+        'pct_hourly_0500', 'pct_hourly_0600', 'pct_hourly_0700', 'pct_hourly_0800', 
+        'pct_hourly_0900', 'pct_hourly_1000', 'pct_hourly_1100', 'pct_hourly_1200', 
+        'pct_hourly_1300', 'pct_hourly_1400', 'pct_hourly_1500', 'pct_hourly_1600', 
+        'pct_hourly_1700', 'pct_hourly_1800', 'pct_hourly_1900', 'pct_hourly_2000', 
+        'pct_hourly_2100', 'pct_hourly_2200', 'pct_hourly_2300', 'pct_hourly_2400', 
+        'pct_hourly_2500'
+    ]
+    
+    # 8. Ensure all columns exist (especially pct_hourly_2500 which has no source data)
+    for col in target_columns:
+        if col not in pivot_df.columns:
+            pivot_df[col] = 0
+            
+    # 9. Select and order columns
+    result = pivot_df[target_columns]
+    
+    # 10. Cast types
+    result['dow'] = result['dow'].astype('int64')
+    # The target schema says pct_hourly_2500 is int64, others float64.
+    # However, pandas usually handles floats. Let's cast 2500 to int if possible, 
+    # but since it's 0, it's fine.
+    # To be safe with mixed types in a single df, we can leave as float except for specific ones if needed.
+    # The prompt asks for exact schema.
+    result['pct_hourly_2500'] = result['pct_hourly_2500'].astype('int64')
+    
+    return result
+```

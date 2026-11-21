@@ -1,0 +1,150 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Date Column**: The source has a `date` column in format 'M/D/YYYY' (e.g., '7/3/2014'). The target requires `dt_strata` in the same format. We need to parse the date to datetime to compute the day of the week.
+2. **Compute Day of Week (`dow`)**: The target has a `dow` column. Looking at the sample:
+   - Target row '1/1/2014' (Wednesday) has `dow` 3.
+   - Target row '1/2/2014' (Thursday) has `dow` 4.
+   - Target row '6/29/2014' (Sunday) has `dow` 0.
+   - Target row '6/30/2014' (Monday) has `dow` 1.
+   - This mapping corresponds to `datetime.weekday()` where Monday=0, ..., Sunday=6? No, Sunday is 0. Let's check standard Python `datetime.weekday()`: Mon=0, Tue=1, ..., Sun=6.
+   - Let's check `isoweekday()`: Mon=1, ..., Sun=7.
+   - Let's check pandas `dt.dayofweek`: Mon=0, ..., Sun=6.
+   - Sample: 6/29/2014 is a Sunday. `dow` is 0.
+   - Sample: 6/30/2014 is a Monday. `dow` is 1.
+   - Sample: 1/1/2014 is a Wednesday. `dow` is 3.
+   - This matches `dt.dayofweek` if we map Sunday to 0? No, `dt.dayofweek` gives Sunday=6.
+   - Let's look closer. 1/1/2014 (Wed) -> 3. 1/2/2014 (Thu) -> 4. 1/3/2014 (Fri) -> 5. 1/4/2014 (Sat) -> 6. 6/29/2014 (Sun) -> 0. 6/30/2014 (Mon) -> 1.
+   - This is a specific mapping: Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6, Sun=0.
+   - This can be calculated as `(dt.dayofweek % 7) + 1`? No.
+   - Standard `dayofweek`: Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6.
+   - Target: Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6, Sun=0.
+   - Formula: If `dayofweek` == 6 (Sun), then 0, else `dayofweek` + 1.
+   - Alternatively: `(dt.dayofweek + 1) % 7`?
+     - Mon (0) -> 1 % 7 = 1. Correct.
+     - Wed (2) -> 3 % 7 = 3. Correct.
+     - Sun (6) -> 7 % 7 = 0. Correct.
+   - So `dow = (dt.dt.dayofweek + 1) % 7`.
+
+3. **Map Hour Columns**:
+   - Source columns: '1:00 AM', '2:00 AM', ..., '12:00 AM', '1:00 PM', ..., '12:00 PM'.
+   - Target columns: 'pct_hourly_0100', ..., 'pct_hourly_2400'.
+   - Mapping logic:
+     - '1:00 AM' -> Hour 1 -> 'pct_hourly_0100'
+     - '2:00 AM' -> Hour 2 -> 'pct_hourly_0200'
+     - ...
+     - '11:00 AM' -> Hour 11 -> 'pct_hourly_1100'
+     - '12:00 PM' -> Hour 12 -> 'pct_hourly_1200' (Note: Source has '12:00 PM' and '12:00 AM')
+     - '1:00 PM' -> Hour 13 -> 'pct_hourly_1300'
+     - ...
+     - '11:00 PM' -> Hour 23 -> 'pct_hourly_2300'
+     - '12:00 AM' -> Hour 24 (Midnight ending the day) -> 'pct_hourly_2400'
+   - We need to construct a rename dictionary mapping these source strings to target strings.
+
+4. **Handle `pct_hourly_2500`**:
+   - The target schema includes `pct_hourly_2500` with type `int64`.
+   - The sample target values for this column are all 0.
+   - The source does not have a corresponding column.
+   - We should create this column and fill it with 0.
+
+5. **Row Count Discrepancy**:
+   - Source: 182 rows. Target: 183 rows.
+   - The samples provided show specific dates. The target sample starts with 1/1/2014, 1/2/2014... while source sample starts with 7/3/2014.
+   - The problem statement says "Row count changes from 182 to 183".
+   - Usually, in these TbT problems, if the row count changes slightly, it might imply adding a header/summary row or handling a missing date. However, looking at the data, the transformation seems to be row-wise (1-to-1 mapping of hours).
+   - Let's look at the dates in the target sample: 1/1/2014 to 1/4/2014, then 6/29/2014 to 7/2/2014.
+   - The source sample has 7/3/2014 to 7/6/2014 and 12/28/2014 to 12/31/2014.
+   - The target sample seems to contain data from a different time period or the source sample provided is just a subset.
+   - Wait, the prompt says "Source sample rows: 182 rows... Target rows: 183 rows".
+   - Is there a row being added? Or is the source missing a row that is in the target?
+   - In many of these datasets, the "25th hour" or a summary row is added. But here the columns are the same structure.
+   - Let's re-read carefully. "Notice: Row count changes from 182 to 183. Check if an aggregation, grouping, or pivoting operation is required."
+   - However, the columns are identical in structure (hourly data).
+   - Let's look at the `DSL` column in source. It has values 0 and 0.119509.
+   - Maybe the row count change is due to a specific date being added or removed?
+   - Or perhaps the source has a duplicate date that gets aggregated? No, dates look unique in samples.
+   - Let's look at the target sample again. It has `pct_hourly_2500` = 0.
+   - If the transformation is strictly row-wise, why does the row count change?
+   - Hypothesis: The source might be missing a specific date (e.g., Jan 1st) which is present in the target? But the function must work on the *source* provided. If the source has 182 rows, the output should logically have 182 rows unless we are generating a row.
+   - Another possibility: The "2500" column is not just a zero fill, but represents something else? No, it's 0 in all samples.
+   - Let's look at the dates again.
+   - Source sample: 7/3/2014 ... 12/31/2014.
+   - Target sample: 1/1/2014 ... 7/2/2014.
+   - The samples are disjoint in time. This suggests the samples are just illustrative of format, not the actual content of the full 182/183 rows.
+   - If the source has 182 rows and target has 183, and the mapping is 1-to-1, where does the extra row come from?
+   - Could it be that the source contains a "total" or "average" row that needs to be split? Unlikely given the hourly structure.
+   - Could it be that the target includes a row for a date not in the source? The function cannot invent data.
+   - Is it possible the source has 183 rows and the prompt has a typo? Or the target has 182?
+   - Let's assume the standard 1-to-1 transformation first. If there's a mismatch in row counts in the actual test case, it might be due to how the data was split.
+   - However, there is a common pattern in these datasets where a "25th hour" (midnight to 1 AM or similar) is handled. Here we have 24 hours + a 2500 column.
+   - Let's look at the `DSL` column again. `DSL` might stand for "Daylight Saving Light" or similar?
+   - If `DSL` is 0, maybe it's standard.
+   - Let's stick to the 1-to-1 mapping. The row count difference might be an artifact of the specific training/test split description or a header row in CSV parsing differences. The code should process all rows in the source DataFrame.
+
+6. **Constructing the Rename Dictionary**:
+   - AM Hours: 1-11. '1:00 AM' -> 1, ..., '11:00 AM' -> 11.
+   - PM Hours: 12 (Noon), 1-11. '12:00 PM' -> 12, '1:00 PM' -> 13, ..., '11:00 PM' -> 23.
+   - Midnight: '12:00 AM' -> 24.
+
+7. **Final Steps**:
+   - Parse dates.
+   - Calculate `dow`.
+   - Rename columns.
+   - Add `pct_hourly_2500` = 0.
+   - Select target columns in order.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # 1. Parse the date column
+    # Source format is M/D/YYYY, e.g., '7/3/2014'
+    dt = pd.to_datetime(df['date'])
+    
+    # 2. Create dt_strata in format M/D/YYYY
+    df['dt_strata'] = dt.dt.strftime('%m/%d/%Y')
+    
+    # 3. Calculate dow
+    # Mapping observed: Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6, Sun=0
+    # pandas dayofweek: Mon=0, ..., Sun=6
+    # Formula: (dayofweek + 1) % 7
+    df['dow'] = (dt.dt.dayofweek + 1) % 7
+    
+    # 4. Map hour columns
+    # Source: '1:00 AM'...'11:00 AM', '12:00 PM', '1:00 PM'...'11:00 PM', '12:00 AM'
+    # Target: pct_hourly_0100 ... pct_hourly_2400
+    
+    rename_dict = {}
+    
+    # 1:00 AM to 11:00 AM -> Hours 1 to 11
+    for h in range(1, 12):
+        rename_dict[f'{h}:00 AM'] = f'pct_hourly_{h:02d}00'
+        
+    # 12:00 PM -> Hour 12
+    rename_dict['12:00 PM'] = 'pct_hourly_1200'
+    
+    # 1:00 PM to 11:00 PM -> Hours 13 to 23
+    for h in range(1, 12):
+        rename_dict[f'{h}:00 PM'] = f'pct_hourly_{h+12:02d}00'
+        
+    # 12:00 AM (Midnight) -> Hour 24
+    rename_dict['12:00 AM'] = 'pct_hourly_2400'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 5. Add pct_hourly_2500 column with 0
+    df['pct_hourly_2500'] = 0
+    
+    # 6. Define target columns
+    target_columns = ['dt_strata', 'dow']
+    target_columns += [f'pct_hourly_{i:02d}00' for i in range(1, 25)]
+    target_columns.append('pct_hourly_2500')
+    
+    # Ensure correct column order and types if necessary (types usually inferred)
+    # The problem asks for int64 for dow and pct_hourly_2500, float64 for others.
+    # Pandas will handle float64 automatically.
+    df['dow'] = df['dow'].astype('int64')
+    df['pct_hourly_2500'] = df['pct_hourly_2500'].astype('int64')
+    
+    return df[target_columns]
+```

@@ -1,0 +1,130 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source Schema**:
+    *   The source table has a `date` column in `'%m/%d/%Y'` format.
+    *   It has 24 hourly columns named like `'1:00 AM'`, `'2:00 AM'`, ..., `'12:00 PM'`, ..., `'11:00 PM'`. Note that `12:00 AM` is midnight (start of the day, hour 1) and `12:00 PM` is noon (hour 12). The order in the source schema provided is slightly mixed (`12:00 AM` appears after `11:00 AM` in the list, but logically it's hour 1). We need to map these specific string labels to hours 1 through 24 correctly.
+    *   It has a `DSL` column which seems to be metadata or a flag, but looking at the target, there is no `DSL` column. The target has `month`, `daytype`, and `hr1`-`hr24`.
+    *   The source has 182 rows, target has 183 rows. This suggests no aggregation is collapsing rows, but rather we are just reshaping and adding derived columns. Wait, 182 to 183 is an increase. Let's look closer. Actually, usually in these benchmarks, if row counts are close, it might just be a direct mapping. If there were grouping, rows would decrease. If there were exploding, rows would increase significantly. The difference of 1 row might be due to a specific date handling or just sample variance in the description. However, looking at the target columns, each source row maps to exactly one target row (one day = one row with 24 hours). So the transformation is row-preserving (1-to-1). The slight count difference in the prompt description (182 vs 183) might be a typo in the prompt's "Notice" or due to a header/footer issue in the sample files, but logically, every date in source becomes one row in target.
+
+2.  **Map Hour Columns**:
+    *   We need to rename the 24 time-based columns to `hr1` through `hr24`.
+    *   Standard 12-hour clock mapping:
+        *   `12:00 AM` -> Hour 1 (Midnight)
+        *   `1:00 AM` -> Hour 2
+        *   ...
+        *   `11:00 AM` -> Hour 12
+        *   `12:00 PM` -> Hour 13 (Noon)
+        *   `1:00 PM` -> Hour 14
+        *   ...
+        *   `11:00 PM` -> Hour 24
+    *   I will create a mapping dictionary from the source column names to the target `hr` column names.
+
+3.  **Extract `month`**:
+    *   Parse the `date` column into datetime objects.
+    *   Extract the month name (e.g., "January", "February") using `.dt.month_name()`.
+
+4.  **Derive `daytype`**:
+    *   Determine if the day is a "weekday" or "weekend".
+    *   Use `.dt.dayofweek` or `.dt.day_name()`.
+    *   Typically, Mon-Fri are weekdays, Sat-Sun are weekends.
+    *   Map: 0-4 -> "weekday", 5-6 -> "weekend".
+
+5.  **Construct Target DataFrame**:
+    *   Select the `month` and `daytype` columns.
+    *   Select the renamed hour columns (`hr1`...`hr24`).
+    *   Ensure the column order matches the target schema exactly.
+
+6.  **Handle Edge Cases**:
+    *   Ensure numeric types are preserved.
+    *   Ensure column names are exact.
+
+7.  **Implementation Details**:
+    *   Use `pd.to_datetime` for date parsing.
+    *   Use `df.rename` for hour columns.
+    *   Use `np.where` or `apply` for daytype logic.
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame.
+    
+    Steps:
+    1. Parse the 'date' column to extract month and day of week.
+    2. Map the 24 hourly time columns to hr1...hr24.
+    3. Create 'month' column with full month names.
+    4. Create 'daytype' column ('weekday' or 'weekend').
+    5. Assemble the final DataFrame with the correct column order.
+    """
+    
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Parse Date
+    # Format is '%m/%d/%Y'
+    df['parsed_date'] = pd.to_datetime(df['date'], format='%m/%d/%Y')
+    
+    # 2. Extract Month Name
+    df['month'] = df['parsed_date'].dt.month_name()
+    
+    # 3. Determine Day Type
+    # dayofweek: Monday=0, ..., Sunday=6
+    # Weekdays are 0-4, Weekends are 5-6
+    df['daytype'] = np.where(df['parsed_date'].dt.dayofweek < 5, 'weekday', 'weekend')
+    
+    # 4. Map Hour Columns
+    # Source columns are like '1:00 AM', '12:00 PM', etc.
+    # We need to map them to hr1 (midnight/12 AM) through hr24 (11 PM)
+    
+    hour_mapping = {
+        '12:00 AM': 'hr1',
+        '1:00 AM': 'hr2',
+        '2:00 AM': 'hr3',
+        '3:00 AM': 'hr4',
+        '4:00 AM': 'hr5',
+        '5:00 AM': 'hr6',
+        '6:00 AM': 'hr7',
+        '7:00 AM': 'hr8',
+        '8:00 AM': 'hr9',
+        '9:00 AM': 'hr10',
+        '10:00 AM': 'hr11',
+        '11:00 AM': 'hr12',
+        '12:00 PM': 'hr13',
+        '1:00 PM': 'hr14',
+        '2:00 PM': 'hr15',
+        '3:00 PM': 'hr16',
+        '4:00 PM': 'hr17',
+        '5:00 PM': 'hr18',
+        '6:00 PM': 'hr19',
+        '7:00 PM': 'hr20',
+        '8:00 PM': 'hr21',
+        '9:00 PM': 'hr22',
+        '10:00 PM': 'hr23',
+        '11:00 PM': 'hr24'
+    }
+    
+    # Rename the hour columns
+    df = df.rename(columns=hour_mapping)
+    
+    # 5. Define Target Columns
+    target_columns = [
+        'month', 'daytype', 
+        'hr1', 'hr2', 'hr3', 'hr4', 'hr5', 'hr6', 'hr7', 'hr8', 'hr9', 'hr10', 
+        'hr11', 'hr12', 'hr13', 'hr14', 'hr15', 'hr16', 'hr17', 'hr18', 'hr19', 
+        'hr20', 'hr21', 'hr22', 'hr23', 'hr24'
+    ]
+    
+    # 6. Select and Return
+    # Drop helper columns if any (parsed_date) and select target columns
+    result_df = df[target_columns]
+    
+    # Ensure numeric types for hr columns are float
+    for col in target_columns[2:]:
+        result_df[col] = pd.to_numeric(result_df[col], errors='coerce')
+        
+    return result_df
+```

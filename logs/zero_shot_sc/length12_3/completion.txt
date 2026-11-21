@@ -1,0 +1,94 @@
+To transform the source DataFrame into the target DataFrame, we need to perform several steps:
+
+1. **Parse the timestamp**: Convert the 'timestamp' column to datetime format to extract the 'hour' and determine the 'season'.
+2. **Extract hour**: Get the hour from the timestamp.
+3. **Determine season**: Based on the month, categorize the data into seasons (Summer, Fall, Winter, Spring).
+4. **Map and aggregate columns**: Map the source columns to the target columns. Some target columns are direct mappings, while others might require aggregation or transformation.
+5. **Handle missing values and special values**: Ensure that special values like 32767 are handled appropriately.
+6. **Construct the target DataFrame**: Create the final DataFrame with the correct column names and order.
+
+### Step-by-Step Reasoning Plan
+
+1. **Parse the timestamp**:
+   - Convert the 'timestamp' column to datetime using `pd.to_datetime`.
+
+2. **Extract hour**:
+   - Use the `.dt.hour` accessor to extract the hour from the datetime.
+
+3. **Determine season**:
+   - Use the `.dt.month` accessor to get the month.
+   - Map months to seasons:
+     - Summer: June, July, August
+     - Fall: September, October, November
+     - Winter: December, January, February
+     - Spring: March, April, May
+
+4. **Map source columns to target columns**:
+   - `hvac`: Sum of `AC COMPRESSOR WHS [emon ch3,4]` and `AIR HANDLER WHS [emon ch5,6]`
+   - `water_heating`: `WATER HEATER WHS [emon ch7,8]`
+   - `refrigerator`: Sum of `Primary Fridge WHS [emon ch12]` and `2nd Fridge WHS [emon ch13]`
+   - `clothes_washer`: `Wattsup Energy Washer (WHS)`
+   - `clothes_dryer`: Sum of `DRYER WHS (1-CT) [emon ch9]` and `Dryer WHS (2-CTs) [xpod chA-9,10]`
+   - `dishwasher`: `DISH WASHER WHS [emon ch11]`
+   - `cooking_range`: `RANGE WHS (1-CT) [emon ch10]`
+   - `pool_spa_pumps`: `POOL PUMP WHS (2-CTs) [xpod chA-3,4]`
+   - `interior_lighting`: Assume 0 for now (no direct mapping)
+   - `exterior_lighting`: Assume 0 for now (no direct mapping)
+   - `lighting`: Sum of `interior_lighting` and `exterior_lighting` (both 0)
+   - `plug`: Assume 0 for now (no direct mapping)
+   - `pool_spa_heater`: Assume 0 for now (no direct mapping)
+
+5. **Handle special values**:
+   - Replace 32767 with NaN or handle it appropriately if it represents missing data.
+
+6. **Construct the target DataFrame**:
+   - Create the DataFrame with the mapped columns and the correct order.
+
+### Python Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    # Parse the timestamp column
+    source['timestamp'] = pd.to_datetime(source['timestamp'], format='%Y-%m-%d %H:%M:%S')
+    
+    # Extract the hour
+    source['hour'] = source['timestamp'].dt.hour
+    
+    # Determine the season based on the month
+    def get_season(month):
+        if month in [6, 7, 8]:
+            return 'Summer'
+        elif month in [9, 10, 11]:
+            return 'Fall'
+        elif month in [12, 1, 2]:
+            return 'Winter'
+        else:
+            return 'Spring'
+    
+    source['season'] = source['timestamp'].dt.month.apply(get_season)
+    
+    # Map source columns to target columns
+    source['hvac'] = source['AC COMPRESSOR WHS [emon ch3,4]'] + source['AIR HANDLER WHS [emon ch5,6]']
+    source['water_heating'] = source['WATER HEATER WHS [emon ch7,8]']
+    source['refrigerator'] = source['Primary Fridge WHS [emon ch12]'] + source['2nd Fridge WHS [emon ch13]']
+    source['clothes_washer'] = source['Wattsup Energy Washer (WHS)']
+    source['clothes_dryer'] = source['DRYER WHS (1-CT) [emon ch9]'] + source['Dryer WHS (2-CTs) [xpod chA-9,10]']
+    source['dishwasher'] = source['DISH WASHER WHS [emon ch11]']
+    source['cooking_range'] = source['RANGE WHS (1-CT) [emon ch10]']
+    source['pool_spa_pumps'] = source['POOL PUMP WHS (2-CTs) [xpod chA-3,4]']
+    source['interior_lighting'] = 0
+    source['exterior_lighting'] = 0
+    source['lighting'] = source['interior_lighting'] + source['exterior_lighting']
+    source['plug'] = 0
+    source['pool_spa_heater'] = 0
+    
+    # Define the target columns
+    target_columns = ['season', 'hour', 'hvac', 'water_heating', 'refrigerator', 'clothes_washer', 'clothes_dryer', 'dishwasher', 'cooking_range', 'pool_spa_pumps', 'interior_lighting', 'exterior_lighting', 'lighting', 'plug', 'pool_spa_heater']
+    
+    # Select the target columns
+    df = source[target_columns]
+    
+    return df
+```

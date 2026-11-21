@@ -1,0 +1,145 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `date` (datetime string) and `zone_016_cooling_sp` (float). The data appears to be time-series data with 5-minute intervals (based on samples like 21:45, 21:50).
+    *   **Target**: Contains `cst` (formatted date string) and 24 columns representing hours (`1:00` to `24:00`). The values in the target sample are all `876`, which seems suspiciously uniform compared to the source values (`73`, `84`). However, looking closely at the problem type, this is a "Table-to-Table" transformation. The key structural change is from long format (one row per timestamp) to wide format (one row per day, one column per hour).
+    *   **Row Count Change**: Source has ~15k rows, Target has 53 rows. This implies an aggregation or pivot operation where multiple source rows map to a single target row. Given the target columns are hours, it's likely grouping by Day and Hour.
+
+2.  **Determine Grouping and Aggregation Logic**:
+    *   The target columns `1:00` through `24:00` suggest that for each day, we need to aggregate the values for each hour.
+    *   The source data has timestamps. We need to extract the **Date** (for the `cst` column) and the **Hour** (for the pivot columns).
+    *   *Correction/Refinement*: The target values in the sample are all `876`. The source values are `73` and `84`. `876` is not a simple sum or average of `73`/`84` over 5-minute intervals (288 intervals/day * 73 ≈ 21,000).
+    *   Let's re-read the target sample carefully. `876` might be a placeholder or a specific constant if the data is missing? Or perhaps the "cooling_sp" (setpoint) is constant, and the target is actually counting something else?
+    *   Wait, look at the distinct values in source: `73.0` and `84.0`. Look at target: `876`.
+    *   Is it possible the target represents *count* of records? 288 records per day. No, 876 is not 288.
+    *   Is it possible the target represents a specific metric derived from the data?
+    *   Let's look at the column names again. `1:00` to `24:00`.
+    *   Let's look at the `cst` format: `Sun 09/30/2018`. This is `%a %m/%d/%Y`.
+    *   Let's reconsider the aggregation. If we group by Day and Hour, how do we get a single value? Mean? Sum? Max?
+    *   Actually, in many TbT benchmarks, if the values in the target look like "876" and the source is "73", there might be a misunderstanding of the sample data provided in the prompt vs the actual logic. However, I must follow the structural transformation.
+    *   *Hypothesis*: The transformation is a **Pivot**.
+        *   Group by Date.
+        *   Extract Hour from timestamp.
+        *   Aggregate the `zone_016_cooling_sp` for each hour.
+        *   What aggregation? If the setpoint is constant (e.g., 73), the mean is 73. If it changes, the mean/avg is typical.
+        *   Why `876`? `876` is `365 * 2.4`? No. `8760` is hours in a year.
+        *   Let's look at the source sample again. `11/6/2018 21:45`.
+        *   Let's look at the target sample again. `Sun 09/30/2018`.
+        *   There is a possibility that the "876" in the target sample is actually a result of a specific aggregation like `sum` of some other variable not shown, OR the prompt's target sample values are illustrative/placeholder and the *structure* is what matters.
+        *   HOWEVER, there is a more likely explanation in these benchmarks: **The values in the target are counts of non-null entries or similar?** No.
+        *   Let's look at the math: `73 * 12 = 876`. Ah! There are 12 five-minute intervals in an hour. If the value is 73, and we sum it over the 12 intervals in an hour, we get `73 * 12 = 876`.
+        *   If the value is 84, `84 * 12 = 1008`.
+        *   The target sample shows `876` for all hours. This implies that for the days shown (e.g., Sep 30, Oct 12), the cooling setpoint was constant at `73` for the entire day, and the aggregation function is **SUM**.
+        *   Therefore, the logic is:
+            1. Parse `date`.
+            2. Extract `Hour` (1-24, where 0 becomes 24 or handled appropriately? The columns are 1:00 to 24:00). Standard pandas `dt.hour` gives 0-23. We need to map 0 to 24.
+            3. Group by `Date` and `Hour`.
+            4. Sum the `zone_016_cooling_sp`.
+            5. Pivot so Hours become columns.
+            6. Format the Date index into the `cst` column string.
+
+3.  **Step-by-Step Implementation Plan**:
+    *   **Parse Dates**: Convert `source['date']` to datetime.
+    *   **Extract Components**:
+        *   `date_obj`: The full datetime.
+        *   `day_str`: Format as `%a %m/%d/%Y` for the `cst` column.
+        *   `hour_num`: Extract hour. If hour is 0, change to 24. Otherwise keep as is (1-23).
+    *   **Aggregate**:
+        *   Group by `day_str` and `hour_num`.
+        *   Sum the `zone_016_cooling_sp`.
+    *   **Reshape**:
+        *   Pivot the dataframe so that `hour_num` becomes columns and `day_str` becomes the index.
+        *   The values will be the sums.
+    *   **Clean Up**:
+        *   Reset index to make `day_str` a column named `cst`.
+        *   Rename columns to match target: `1:00`, `2:00`, ..., `24:00`.
+        *   Ensure all 24 hour columns exist (fill NaN with 0 if a specific hour has no data, though sum aggregation on existing data usually implies 0 if missing, but pivot might leave NaN).
+        *   Sort columns to match target order.
+        *   Return with explicit target columns.
+
+4.  **Refining the Hour Mapping**:
+    *   Target columns: `1:00` ... `24:00`.
+    *   Pandas `dt.hour`: 0, 1, ..., 23.
+    *   Mapping: `0 -> 24`, `1 -> 1`, ..., `23 -> 23`.
+    *   Column names in target are strings like `"1:00"`.
+
+5.  **Code Construction**:
+    *   Use `pd.to_datetime`.
+    *   Create a helper column for the formatted date string.
+    *   Create a helper column for the hour label.
+    *   `groupby(['cst', 'hour_label']).sum()`.
+    *   `unstack('hour_label')`.
+    *   Fill NaNs with 0 (since sum of empty set is 0).
+    *   Rename columns to `"H:00"` format.
+    *   Select and order columns.
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame.
+    
+    Steps:
+    1. Parse the 'date' column.
+    2. Extract the formatted date string for 'cst'.
+    3. Extract the hour from the timestamp, mapping 0 to 24.
+    4. Group by 'cst' and 'hour', summing the 'zone_016_cooling_sp'.
+    5. Pivot to wide format with hours as columns.
+    6. Format columns as 'H:00'.
+    7. Ensure all 24 hour columns exist and are ordered correctly.
+    """
+    
+    # 1. Parse date
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'])
+    
+    # 2. Create 'cst' column with format '%a %m/%d/%Y'
+    # %a is abbreviated weekday name (e.g., Sun, Mon)
+    df['cst'] = df['datetime'].dt.strftime('%a %m/%d/%Y')
+    
+    # 3. Extract hour and map 0 to 24
+    # Pandas hour is 0-23. Target is 1-24.
+    # 0 -> 24, 1 -> 1, ..., 23 -> 23
+    df['hour_num'] = df['datetime'].dt.hour
+    df['hour_num'] = df['hour_num'].replace(0, 24)
+    
+    # 4. Aggregate: Sum the values for each day and hour
+    # We group by 'cst' and 'hour_num' and sum 'zone_016_cooling_sp'
+    agg_df = df.groupby(['cst', 'hour_num'])['zone_016_cooling_sp'].sum().reset_index()
+    
+    # 5. Pivot to wide format
+    # Index: 'cst', Columns: 'hour_num', Values: 'zone_016_cooling_sp'
+    pivot_df = agg_df.pivot(index='cst', columns='hour_num', values='zone_016_cooling_sp')
+    
+    # 6. Fill missing hours with 0 (if a specific hour had no records, sum is 0)
+    pivot_df = pivot_df.fillna(0)
+    
+    # 7. Reset index to make 'cst' a column
+    pivot_df = pivot_df.reset_index()
+    
+    # 8. Rename columns to match target format 'H:00'
+    # The columns are currently integers (1-24) or 'cst'
+    # We need to map integer columns to strings like '1:00', '2:00', ... '24:00'
+    col_mapping = {h: f"{h}:00" for h in range(1, 25)}
+    pivot_df.rename(columns=col_mapping, inplace=True)
+    
+    # 9. Ensure all target columns exist, even if empty in this specific dataset slice
+    target_columns = ['cst', '1:00', '2:00', '3:00', '4:00', '5:00', '6:00', '7:00', '8:00', '9:00', 
+                      '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', 
+                      '19:00', '20:00', '21:00', '22:00', '23:00', '24:00']
+    
+    # Reindex columns to ensure order and presence
+    # If any hour column is missing (e.g., no data for that hour), add it with 0
+    for col in target_columns[1:]: # Skip 'cst'
+        if col not in pivot_df.columns:
+            pivot_df[col] = 0
+            
+    # Select and order columns
+    result_df = pivot_df[target_columns]
+    
+    return result_df
+```

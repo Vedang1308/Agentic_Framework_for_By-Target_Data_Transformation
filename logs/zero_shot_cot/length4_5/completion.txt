@@ -1,0 +1,123 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a `date` column (format `m/d/Y`) and 24 columns named `Hour 1` through `Hour 24`. These represent hourly data for each day.
+    *   **Target**: Contains a `date` column (format `YYYY-MM-DD HH:MM:SS`) and 24 columns representing specific times of day (e.g., `1:00 AM`, `12:00 PM`, etc.).
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target might include a date that wasn't in the source sample, or more likely, the transformation involves parsing dates and potentially handling a full date range or simply reformatting. However, looking at the sample data, the source rows map 1-to-1 to target rows based on the date. The extra row in the target sample (183 vs 182) might be due to the target including a specific date range (e.g., Jan 1 to Dec 31) while the source sample is just a subset. But the instruction says "generalize to any unseen test table". The key is that the transformation is row-wise: each source row becomes one target row. The row count difference in the *sample* description might be a red herring or due to the specific test set having an extra day. The core task is column renaming and date formatting.
+
+2.  **Date Formatting**:
+    *   Parse the source `date` column from string format `'%m/%d/%Y'` to a datetime object.
+    *   Format it to the target string format `'%Y-%m-%d %H:%M:%S'`. Since the time component is not present in the source, it will default to `00:00:00`.
+
+3.  **Column Mapping (Renaming)**:
+    *   The source columns `Hour 1` to `Hour 24` need to be mapped to the target time labels.
+    *   Standard 12-hour clock mapping:
+        *   Hour 1 -> 1:00 AM
+        *   Hour 2 -> 2:00 AM
+        *   ...
+        *   Hour 11 -> 11:00 AM
+        *   Hour 12 -> 12:00 PM (Noon)
+        *   Hour 13 -> 1:00 PM
+        *   ...
+        *   Hour 23 -> 11:00 PM
+        *   Hour 24 -> 12:00 AM (Midnight)
+    *   *Correction/Verification*: Let's look at the target column list provided: `['date', '1:00 AM', '2:00 AM', ..., '12:00 AM', '1:00 PM', ..., '12:00 PM']`.
+    *   Wait, the target column list order is: `1:00 AM` ... `11:00 AM`, then `12:00 AM`, then `1:00 PM` ... `11:00 PM`, then `12:00 PM`. This order is unusual. Let's look at the sample target table headers again.
+    *   Target Headers: `1:00 AM`, `2:00 AM`, `3:00 AM`, `4:00 AM`, `5:00 AM`, `6:00 AM`, `7:00 AM`, `8:00 AM`, `9:00 AM`, `10:00 AM`, `11:00 AM`, `12:00 AM`, `1:00 PM`, `2:00 PM`, `3:00 PM`, `4:00 PM`, `5:00 PM`, `6:00 PM`, `7:00 PM`, `8:00 PM`, `9:00 PM`, `10:00 PM`, `11:00 PM`, `12:00 PM`.
+    *   This specific order must be preserved in the final output.
+    *   Mapping Logic:
+        *   `Hour 1` -> `1:00 AM`
+        *   `Hour 2` -> `2:00 AM`
+        *   ...
+        *   `Hour 11` -> `11:00 AM`
+        *   `Hour 12` -> `12:00 PM` (Noon)
+        *   `Hour 13` -> `1:00 PM`
+        *   ...
+        *   `Hour 23` -> `11:00 PM`
+        *   `Hour 24` -> `12:00 AM` (Midnight)
+    *   Let's check the target sample values to confirm the mapping.
+        *   Source `Hour 12` is 0. Target `12:00 PM` is 0.
+        *   Source `Hour 24` is 0.000239866. Target `12:00 AM` is 0.000239866.
+        *   Source `Hour 1` is 0.000239866. Target `1:00 AM` is 0.000239866.
+    *   So the mapping is:
+        *   Hour 1-11: 1:00 AM - 11:00 AM
+        *   Hour 12: 12:00 PM
+        *   Hour 13-23: 1:00 PM - 11:00 PM
+        *   Hour 24: 12:00 AM
+
+4.  **Constructing the Rename Dictionary**:
+    *   Create a dictionary mapping source column names to target column names.
+    *   `{'Hour 1': '1:00 AM', ..., 'Hour 11': '11:00 AM', 'Hour 12': '12:00 PM', 'Hour 13': '1:00 PM', ..., 'Hour 23': '11:00 PM', 'Hour 24': '12:00 AM'}`
+
+5.  **Reordering Columns**:
+    *   After renaming, the columns will be in the order of the source (Hour 1, Hour 2, ...).
+    *   The target requires a specific order: `1:00 AM` ... `11:00 AM`, `12:00 AM`, `1:00 PM` ... `11:00 PM`, `12:00 PM`.
+    *   Note: `12:00 AM` (Hour 24) is placed after `11:00 AM` in the target list. `12:00 PM` (Hour 12) is placed at the very end.
+    *   I need to explicitly select the columns in the target order.
+
+6.  **Data Types**:
+    *   The target schema specifies specific dtypes (float64, int64).
+    *   Source `Hour 9` to `Hour 16` are int64. Target `9:00 AM` to `4:00 PM` (which corresponds to Hour 9-16) are int64.
+    *   Other hours are float64.
+    *   Pandas usually preserves types during rename. If necessary, I can cast, but usually, simple renaming is enough if the source types match the target types. The source has `Hour 9` as int64, target `9:00 AM` is int64. This matches.
+
+7.  **Implementation Steps**:
+    *   Parse `date` column.
+    *   Rename columns using the mapping.
+    *   Reorder columns to match the target list exactly.
+    *   Return the DataFrame.
+
+### Python Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse and format the date column
+    # Source format: '%m/%d/%Y'
+    # Target format: '%Y-%m-%d %H:%M:%S'
+    df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y').dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Define the mapping from source hour columns to target time labels
+    # Hour 1-11: 1:00 AM - 11:00 AM
+    # Hour 12: 12:00 PM
+    # Hour 13-23: 1:00 PM - 11:00 PM
+    # Hour 24: 12:00 AM
+    
+    rename_map = {}
+    for h in range(1, 12):
+        rename_map[f'Hour {h}'] = f'{h}:00 AM'
+    
+    rename_map['Hour 12'] = '12:00 PM'
+    
+    for h in range(13, 24):
+        pm_hour = h - 12
+        rename_map[f'Hour {h}'] = f'{pm_hour}:00 PM'
+        
+    rename_map['Hour 24'] = '12:00 AM'
+    
+    # 3. Rename the columns
+    df = df.rename(columns=rename_map)
+    
+    # 4. Define the exact target column order
+    target_columns = [
+        'date', 
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', 
+        '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', 
+        '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', 
+        '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM'
+    ]
+    
+    # 5. Select and reorder columns to match target schema
+    # Ensure all target columns exist in df
+    for col in target_columns:
+        if col not in df.columns:
+            raise ValueError(f"Column {col} not found in transformed dataframe")
+            
+    df = df[target_columns]
+    
+    return df
+```

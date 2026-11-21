@@ -1,0 +1,136 @@
+Here are worked examples demonstrating step-by-step reasoning and valid Python code:
+
+### Example 1 (Case length1_1)
+Source Schema: Strata_ID (int64), Strata (object), DT_STRATA (object), DOW (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)
+Target Schema: cst (object), 1:00..24:00 (float64)
+Source Sample: DT_STRATA sample: ['7/2/2016', '7/3/2016']; PCT_HOURLY_0100 sample: [0.000701, 0.000761]
+Target Sample: cst sample: ['Fri 01/01/2016', 'Sat 01/02/2016']; 1:00 sample: [0.001222, 0.001313]
+Step-by-Step Reasoning Plan:
+1. Analyze schemas: Source has date column 'DT_STRATA' and hourly columns 'PCT_HOURLY_0100' through 'PCT_HOURLY_2500'.
+2. Target schema requires column 'cst' with formatted date strings like 'Fri 01/01/2016' (%a %m/%d/%Y).
+3. Parse 'DT_STRATA' to datetime and format as '%a %m/%d/%Y' in column 'cst'.
+4. Rename hourly columns: 'PCT_HOURLY_0100' -> '1:00', ..., 'PCT_HOURLY_2400' -> '24:00'.
+5. Drop extra columns ('Strata_ID', 'Strata', 'DOW', 'PCT_HOURLY_2500') and align returned columns verbatim to target.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'{i}:00' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    return df[target_cols]
+```
+
+### Example 2 (Case length2_1)
+Source Schema: CST (object), 1:00..24:00:00 (float64)
+Target Schema: dt_strata (object), dow (int64), pct_hourly_0100..pct_hourly_2500 (float64)
+Source Sample: CST sample: ['Sat 12/01/2012', 'Sun 12/02/2012']; 1:00 sample: [0.9841, 0.9012]
+Target Sample: dt_strata sample: ['04/01/2009', '04/02/2009']; dow sample: [3, 4]; pct_hourly_0100 sample: [1.02, 0.93]
+Step-by-Step Reasoning Plan:
+1. Inspect date: Source 'CST' has format 'Day MM/DD/YYYY'. Split by whitespace to extract the date part.
+2. Convert to datetime, then format as '%m/%d/%Y' for 'dt_strata'.
+3. Compute 'dow' (day of week) where Monday=1 ... Sunday=7 using `dt.dt.dayofweek + 1`.
+4. Rename hourly columns: '1:00' -> 'pct_hourly_0100', ..., '24:00'/'24:00:00' -> 'pct_hourly_2400'.
+5. Target includes 'pct_hourly_2500' filled with 0. Add this column and select target columns verbatim.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    date_str = df['CST'].str.split(' ').str[-1]
+    dt = pd.to_datetime(date_str, format='%m/%d/%Y')
+    df['dt_strata'] = dt.dt.strftime('%m/%d/%Y')
+    df['dow'] = dt.dt.dayofweek + 1
+    rename_dict = {f'{i}:00': f'pct_hourly_{i:02d}00' for i in range(1, 24)}
+    if '24:00:00' in df.columns:
+        rename_dict['24:00:00'] = 'pct_hourly_2400'
+    elif '24:00' in df.columns:
+        rename_dict['24:00'] = 'pct_hourly_2400'
+    df = df.rename(columns=rename_dict)
+    df['pct_hourly_2500'] = 0
+    target_cols = ['dt_strata', 'dow'] + [f'pct_hourly_{i:02d}00' for i in range(1, 26)]
+    return df[target_cols]
+```
+
+### Example 3 (Case length3_1)
+Source Schema: Strata_ID (int64), Strata (object), DT_STRATA (object), DOW (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)
+Target Schema: date (object), Hour 1..Hour 24 (float64)
+Source Sample: DT_STRATA sample: ['7/2/2016']; PCT_HOURLY_0100 sample: [0.000701]
+Target Sample: date sample: ['01/01/2016']; Hour 1 sample: [0.001222]
+Step-by-Step Reasoning Plan:
+1. Analyze date: Source column 'DT_STRATA' has dates formatted as M/D/YYYY. Format as '%m/%d/%Y' in column 'date'.
+2. Map hour columns: 'PCT_HOURLY_{i:02d}00' maps to 'Hour {i}' for i=1..24.
+3. Select columns: 'date' followed by 'Hour 1' through 'Hour 24'. Drop unused columns.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['date'] = dt.dt.strftime('%m/%d/%Y')
+    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'Hour {i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    target_cols = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    return df[target_cols]
+```
+
+============================================================
+Now, synthesize the transformation function for the following case:
+
+### Benchmark Case: length13_1
+- Source sample rows: 17568 rows (Note: test_0.csv may have different row count)
+- Target rows: 17568 rows
+
+### Exact Target Columns (Must match verbatim):
+['datetime', 'hvac', 'domestic_water_heating', 'major_appliances', 'lighting', 'miscellaneous_plug_loads', 'total']
+
+### Datetime Format Inferences:
+- Target column 'datetime' requires date format '%Y-%m-%d %H:%M:%S' (sample: '2012-01-01 00:15:00')
+
+### Source Schema and Types:
+Unnamed: 0 (int64), eiaid (int64), time (object), raw_count (int64), scaled_unit_count (float64), net_site_electricity_kwh (float64), electricity_heating_kwh (float64), electricity_central_system_heating_kwh (float64), electricity_cooling_kwh (float64), electricity_central_system_cooling_kwh (float64), electricity_interior_lighting_kwh (float64), electricity_exterior_lighting_kwh (float64), electricity_fans_heating_kwh (float64), electricity_fans_cooling_kwh (float64), electricity_pumps_heating_kwh (float64), electricity_central_system_pumps_heating_kwh (float64), electricity_pumps_cooling_kwh (float64), electricity_central_system_pumps_cooling_kwh (float64), electricity_water_systems_kwh (float64), electricity_refrigerator_kwh (float64), electricity_clothes_washer_kwh (float64), electricity_clothes_dryer_kwh (float64), electricity_cooking_range_kwh (float64), electricity_dishwasher_kwh (float64), electricity_plug_loads_kwh (float64), electricity_house_fan_kwh (float64), electricity_range_fan_kwh (float64), electricity_bath_fan_kwh (float64), electricity_ceiling_fan_kwh (float64), electricity_pool_heater_kwh (float64), electricity_pool_pump_kwh (float64), electricity_hot_tub_heater_kwh (float64), electricity_hot_tub_pump_kwh (float64)
+
+### Target Schema and Types:
+datetime (object), hvac (float64), domestic_water_heating (float64), major_appliances (float64), lighting (float64), miscellaneous_plug_loads (float64), total (float64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- eiaid: [np.int64(4110)]
+- raw_count: [np.int64(541079)]
+- scaled_unit_count: [np.float64(2991885.100384797), np.float64(2991885.100384798), np.float64(2991885.100384799), np.float64(2991885.1003847998), np.float64(2991885.100384796), np.float64(2991885.1003848)]
+- electricity_pumps_cooling_kwh: [np.float64(0.0)]
+- electricity_house_fan_kwh: [np.float64(0.0)]
+
+### Source Table Sample (training_0.csv):
+|   Unnamed: 0 |   eiaid | time                    |   raw_count |   scaled_unit_count |   net_site_electricity_kwh |   electricity_heating_kwh |   electricity_central_system_heating_kwh |   electricity_cooling_kwh |   electricity_central_system_cooling_kwh |   electricity_interior_lighting_kwh |   electricity_exterior_lighting_kwh |   electricity_fans_heating_kwh |   electricity_fans_cooling_kwh |   electricity_pumps_heating_kwh |   electricity_central_system_pumps_heating_kwh |   electricity_pumps_cooling_kwh |   electricity_central_system_pumps_cooling_kwh |   electricity_water_systems_kwh |   electricity_refrigerator_kwh |   electricity_clothes_washer_kwh |   electricity_clothes_dryer_kwh |   electricity_cooking_range_kwh |   electricity_dishwasher_kwh |   electricity_plug_loads_kwh |   electricity_house_fan_kwh |   electricity_range_fan_kwh |   electricity_bath_fan_kwh |   electricity_ceiling_fan_kwh |   electricity_pool_heater_kwh |   electricity_pool_pump_kwh |   electricity_hot_tub_heater_kwh |   electricity_hot_tub_pump_kwh |
+|-------------:|--------:|:------------------------|------------:|--------------------:|---------------------------:|--------------------------:|-----------------------------------------:|--------------------------:|-----------------------------------------:|------------------------------------:|------------------------------------:|-------------------------------:|-------------------------------:|--------------------------------:|-----------------------------------------------:|--------------------------------:|-----------------------------------------------:|--------------------------------:|-------------------------------:|---------------------------------:|--------------------------------:|--------------------------------:|-----------------------------:|-----------------------------:|----------------------------:|----------------------------:|---------------------------:|------------------------------:|------------------------------:|----------------------------:|---------------------------------:|-------------------------------:|
+|        17568 |    4110 | 2012-07-02 00:15:00.000 |      541079 |         2.99189e+06 |                     826347 |                  0.130059 |                                      0   |                 406631    |                                2106.66   |                             23523.1 |                             4592.04 |                        1.07838 |                       83543.4  |                     0.000142605 |                                          0     |                               0 |                                       398.354  |                         17024.4 |                        51271.1 |                          444.159 |                         12672   |                         3725.23 |                      289.3   |                       149820 |                           0 |                    178.023  |                    1347.75 |                       8952.72 |                       64.3796 |                    1180.88  |                          3325.63 |                        4035.23 |
+|        17569 |    4110 | 2012-07-02 00:30:00.000 |      541079 |         2.99189e+06 |                     823907 |                  0        |                                      0   |                 394133    |                                2054.67   |                             23523.1 |                             4592.04 |                        0       |                       80854.7  |                     0           |                                          0     |                               0 |                                       398.354  |                         13006.7 |                        51271.1 |                          492.178 |                         29201.8 |                         3725.23 |                      646.33  |                       149820 |                           0 |                     78.5581 |                    1329.57 |                       8952.72 |                       64.3796 |                    1180.88  |                          3325.63 |                        4035.23 |
+|        17570 |    4110 | 2012-07-02 00:45:00.000 |      541079 |         2.99189e+06 |                     793787 |                  0        |                                      0   |                 384163    |                                1998.74   |                             23523.1 |                             4592.04 |                        0       |                       78684.1  |                     0           |                                          0     |                               0 |                                       398.354  |                         12242.3 |                        51271.1 |                         1580.35  |                         11251.8 |                         3725.23 |                      349.487 |                       149820 |                           0 |                     78.5581 |                    1329.57 |                       8952.72 |                       64.3796 |                    1180.88  |                          3325.63 |                        4035.23 |
+|        17571 |    4110 | 2012-07-02 01:00:00.000 |      541079 |         2.99189e+06 |                     800940 |                  0        |                                      0   |                 375382    |                                1992.72   |                             23523.1 |                             4592.04 |                        0       |                       76812.4  |                     0           |                                          0     |                               0 |                                       400.28   |                         14689.4 |                        51271.1 |                          999.944 |                         26407.7 |                         3725.23 |                     1137.03  |                       149820 |                           0 |                     78.5581 |                    1329.57 |                       8952.72 |                       64.3796 |                    1180.88  |                          3325.63 |                        4035.23 |
+|        35132 |    4110 | 2012-12-31 23:15:00.000 |      541079 |         2.99189e+06 |                     939693 |             185821        |                                  13187.2 |                   7634.98 |                                  38.9114 |                             78956.2 |                            15413.4  |                    97837       |                        2003.5  |                    20.4209      |                                        332.949 |                               0 |                                        37.0766 |                         73087.3 |                        41163   |                         1911.41  |                         30252.7 |                         7167.15 |                     4215.16  |                       307759 |                           0 |                    235.251  |                    1300.16 |                      18390.6  |                       51.2035 |                     939.195 |                          2188.96 |                        2656.03 |
+|        35133 |    4110 | 2012-12-31 23:30:00.000 |      541079 |         2.99189e+06 |                     934366 |             190883        |                                  13334.4 |                   7537.21 |                                  30.3168 |                             78956.2 |                            15413.4  |                   100312       |                        1931.25 |                    20.7663      |                                        341.043 |                               0 |                                        35.8063 |                         68611.4 |                        41163   |                         1923.31  |                         24494.5 |                         7167.15 |                     1597.19  |                       307759 |                           0 |                    169.525  |                    1366.53 |                      18390.6  |                       51.2035 |                     939.195 |                          2188.96 |                        2656.03 |
+|        35134 |    4110 | 2012-12-31 23:45:00.000 |      541079 |         2.99189e+06 |                     923330 |             194867        |                                  13767.3 |                   7588.84 |                                  25.6157 |                             78956.2 |                            15413.4  |                   102278       |                        1935.87 |                    21.0904      |                                        351.896 |                               0 |                                        31.551  |                         62561.8 |                        41163   |                         2388.93  |                         13745.6 |                         7167.15 |                      453.565 |                       307759 |                           0 |                    169.525  |                    1366.53 |                      18390.6  |                       51.2035 |                     939.195 |                          2188.96 |                        2656.03 |
+|        35135 |    4110 | 2013-01-01 00:00:00.000 |      541079 |         2.99189e+06 |                     926013 |             197542        |                                  13892.6 |                   7648.41 |                                  28.5422 |                             78956.2 |                            15413.4  |                   103789       |                        1947.58 |                    21.3229      |                                        351.203 |                               0 |                                        32.9261 |                         58353.4 |                        41163   |                         1005.64  |                         17156.5 |                         7167.15 |                      930.976 |                       307759 |                           0 |                    169.525  |                    1366.53 |                      18390.6  |                       51.2035 |                     939.195 |                          2188.96 |                        2656.03 |
+
+### Desired Target Table Sample (target.csv):
+| datetime            |   hvac |   domestic_water_heating |   major_appliances |   lighting |   miscellaneous_plug_loads |   total |
+|:--------------------|-------:|-------------------------:|-------------------:|-----------:|---------------------------:|--------:|
+| 2012-01-01 00:15:00 | 292848 |                  1745.74 |            79768.2 |    46858.5 |                     246207 |  725806 |
+| 2012-01-01 00:30:00 | 275824 |                  9110.15 |            86176.2 |    46858.5 |                     246207 |  722554 |
+| 2012-01-01 00:45:00 | 257404 |                 10928.7  |            96353.8 |    46858.5 |                     246207 |  716130 |
+| 2012-01-01 01:00:00 | 240426 |                 12663.5  |            66709   |    46858.5 |                     246207 |  671242 |
+| 2012-07-01 23:15:00 | 562255 |                 26653.7  |            92860.9 |    46858.5 |                     161968 |  954641 |
+| 2012-07-01 23:30:00 | 544312 |                 27248.4  |            99268.9 |    46858.5 |                     161968 |  943701 |
+| 2012-07-01 23:45:00 | 523960 |                 22960.6  |           109446   |    46858.5 |                     161968 |  929238 |
+| 2012-07-02 00:00:00 | 505762 |                 20987.9  |            79801.7 |    46858.5 |                     161968 |  879423 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

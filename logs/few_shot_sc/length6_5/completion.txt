@@ -1,0 +1,149 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Input and Output Schemas**:
+    *   Source: Columns `Date`, `Class`, and numeric columns `1` through `24`.
+    *   Target: Columns `Date`, `Hr 1` through `Hr 24`.
+    *   Observation: The `Class` column in the source contains only 'RESIDENT'. The target does not have a `Class` column. The numeric columns `1`-`24` in the source correspond to hours, and the target renames them to `Hr 1`-`Hr 24`.
+
+2.  **Analyze Row Count Discrepancy**:
+    *   Source has 182 rows. Target has 183 rows.
+    *   Source sample dates range from July 2013 to December 2013.
+    *   Target sample dates start from `01/01/2013` and go through `07/02/2013` (and presumably continue).
+    *   The target appears to represent a complete contiguous range of dates for the year 2013 (365 days), whereas the source is a subset (perhaps weekdays or specific events).
+    *   However, looking closely at the data values:
+        *   Source `7/3/2013` values: `[0.56, 0.51, ...]`
+        *   Target `07/03/2013` is not in the sample, but `07/02/2013` is.
+        *   Let's check if the source data *is* the target data, just missing some rows or if there's an aggregation.
+        *   Wait, the prompt says "Row count changes from 182 to 183". This is a very small difference.
+        *   Let's look at the dates in the source sample: `7/3/2013` to `12/31/2013`. This is roughly 180 days.
+        *   The target sample shows `01/01/2013` to `07/02/2013`.
+        *   This implies the Source and Target are covering different parts of the year or the Source is a filtered subset.
+        *   Crucially, in TbT tasks, if the source doesn't contain the rows for the target dates (like Jan 2013), we usually cannot "generate" them unless there's a pattern or a reference file. But the instructions say "compute its result SOLELY from the `source` argument".
+        *   Let's re-read the "Notice": "Row count changes from 182 to 183. Check if an aggregation, grouping, or pivoting operation is required."
+        *   If the source has 182 rows and target has 183, and the columns map 1-to-1 (1->Hr 1, etc.), it's highly likely that the transformation involves **adding a missing date** or **splitting a row**?
+        *   Let's look at the `Class` column. It's constant.
+        *   Let's look at the dates again.
+            *   Source: `7/3/2013` ... `12/31/2013`.
+            *   Target: `01/01/2013` ... `07/02/2013`.
+        *   This is contradictory. The source *sample* provided in the prompt is just a snippet. The *actual* source table likely contains all the data needed for the target, or the source table *is* the target data with some manipulation.
+        *   Hypothesis 1: The source table actually contains all 183 rows, but the sample shown is just a subset? No, the prompt says "Source sample rows: 182 rows". This implies the *entire* source table has 182 rows.
+        *   Hypothesis 2: The target table has 183 rows. Where does the extra row come from?
+        *   Let's look at the dates in the target sample: `01/01/2013` is a Friday. `01/02/2013` is a Saturday.
+        *   Let's look at the source sample: `7/3/2013` is a Wednesday.
+        *   Is it possible the source is missing one day?
+        *   Or is it possible that the `Date` column in the source needs to be parsed, sorted, and then we need to fill in a gap?
+        *   Let's look at the specific values.
+            *   Target `01/01/2013` Hr 1: `0.89`.
+            *   Source `7/3/2013` Hr 1: `0.56`.
+        *   There is no overlap in the samples provided. This suggests the source table provided in the *actual* test case might be different from the sample, OR the sample is misleading about the content.
+        *   HOWEVER, in these benchmarks, the "Source Sample" usually represents the *structure* and *type* of data, but the "Source Table" used for the transformation contains the actual data.
+        *   If the source has 182 rows and target has 183, and the columns are simple renames, the most common operation that increases row count by 1 is:
+            1.  Adding a header? No, pandas DataFrames don't count headers as rows.
+            2.  Splitting a row? Unlikely for hourly data.
+            3.  **Filling a missing date in a sequence**. If the source has a contiguous sequence of dates with one missing day, and the target has the complete sequence, we need to interpolate or forward-fill the missing day.
+            4.  **Grouping/Aggregation**? Usually reduces rows.
+            5.  **Pivoting**? Usually reduces rows.
+
+        *   Let's check the dates in the source sample again.
+            `7/3, 7/4, 7/5, 7/6` (Wed, Thu, Fri, Sat).
+            `12/28, 12/29, 12/30, 12/31` (Fri, Sat, Sun, Mon).
+            It looks like the source contains all days (weekdays and weekends).
+            
+        *   Let's look at the Target sample dates:
+            `01/01, 01/02, 01/03, 01/04` (Fri, Sat, Sun, Mon).
+            `06/29, 06/30, 07/01, 07/02` (Sat, Sun, Mon, Tue).
+            
+        *   If the source has 182 rows and target has 183, and they cover the same period (e.g., 6 months of data), one day is missing in the source.
+        *   Strategy:
+            1.  Parse `Date` column to datetime.
+            2.  Set `Date` as index.
+            3.  Create a complete date range from the min date to max date in the source.
+            4.  Reindex the dataframe to this complete range. This will introduce one NaN row if there is a missing date.
+            5.  Fill the NaN values. Since it's time-series data, `ffill` (forward fill) or `bfill` (backward fill) or interpolation is appropriate. Given the smoothness of hourly load profiles, linear interpolation or forward fill is likely. Let's look at the values. They change slowly. `ffill` is a safe bet for missing daily profiles in this context, or `interpolate`.
+            6.  Rename columns `1`-`24` to `Hr 1`-`Hr 24`.
+            7.  Format `Date` back to `%m/%d/%Y`.
+            8.  Drop `Class`.
+
+        *   Let's verify the "182 to 183" clue.
+            If the period is, say, Jan 1 to June 30 (181 days) + 2 days = 183?
+            Or July 1 to Dec 31 (184 days).
+            If the source is missing one day in a 183-day period, it has 182.
+            The target is the complete 183-day period.
+            
+        *   Implementation details:
+            -   Convert `Date` to datetime.
+            -   Identify the min and max date in the source.
+            -   Generate a `pd.date_range` with frequency 'D' (daily) from min to max.
+            -   Reindex.
+            -   Fill missing values. `df.interpolate()` or `df.ffill()`. Given the small gap (1 day), `ffill` is robust.
+            -   Rename columns.
+            -   Format date.
+
+        *   Wait, what if the source *already* has the correct dates but the sample is just a subset? The prompt says "Source sample rows: 182 rows". This usually means the *entirety* of the source table passed to the function has 182 rows.
+        *   Therefore, the reindexing strategy is the most logical step to account for the row count increase.
+
+        *   Let's refine the column renaming.
+            Source: `1`, `2`, ..., `24`.
+            Target: `Hr 1`, `Hr 2`, ..., `Hr 24`.
+            
+        *   Let's refine the date formatting.
+            Source: `7/3/2013` (variable width).
+            Target: `01/01/2013` (fixed width `%m/%d/%Y`).
+
+        *   Step 1: Copy source.
+        *   Step 2: Parse `Date` to datetime.
+        *   Step 3: Set `Date` as index.
+        *   Step 4: Sort index (just in case).
+        *   Step 5: Create full date range `pd.date_range(start=df.index.min(), end=df.index.max(), freq='D')`.
+        *   Step 6: Reindex `df` to this full range.
+        *   Step 7: Fill NaNs. `df.ffill()` is standard for missing daily data in these benchmarks.
+        *   Step 8: Reset index to make `Date` a column again.
+        *   Step 9: Format `Date` as `%m/%d/%Y`.
+        *   Step 10: Rename numeric columns `1`-`24` to `Hr 1`-`Hr 24`.
+        *   Step 11: Drop `Class` column.
+        *   Step 12: Select and return target columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse Date column to datetime
+    df['Date'] = pd.to_datetime(df['Date'])
+    
+    # 2. Set Date as index to facilitate reindexing for missing dates
+    df = df.set_index('Date')
+    
+    # 3. Sort index to ensure chronological order
+    df = df.sort_index()
+    
+    # 4. Create a complete date range from min to max date in the source
+    # This handles the row count increase (182 -> 183) by filling in missing days
+    full_date_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq='D')
+    
+    # 5. Reindex to the full date range, introducing NaN rows for missing dates
+    df = df.reindex(full_date_range)
+    
+    # 6. Fill missing values. Forward fill is appropriate for daily time series data
+    # where a single day's profile might be missing.
+    df = df.ffill()
+    
+    # 7. Reset index to convert Date back to a column
+    df = df.reset_index()
+    df = df.rename(columns={'index': 'Date'})
+    
+    # 8. Format Date column to '%m/%d/%Y'
+    df['Date'] = df['Date'].dt.strftime('%m/%d/%Y')
+    
+    # 9. Rename numeric columns 1-24 to 'Hr 1' - 'Hr 24'
+    rename_dict = {str(i): f'Hr {i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    
+    # 10. Define target columns verbatim
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # 11. Return the dataframe with only the target columns
+    # Note: We drop 'Class' implicitly by selecting only target_columns
+    return df[target_columns]
+```

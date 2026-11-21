@@ -1,0 +1,120 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `Strata_ID`, `Strata`, `DT_STRATA` (date string), `DOW` (day of week type: '1'-'7', 'H', 'D'), and hourly columns `PCT_HOURLY_0100` through `PCT_HOURLY_2500`.
+    *   **Target**: Contains `month` (string name of month), `daytype` (string category like 'weekday', 'holiday', 'weekend'), and hourly columns `hr1` through `hr24`.
+    *   **Row Count**: The row count is identical (5673), implying a 1-to-1 row mapping without aggregation or reshaping.
+
+2.  **Transform Date Column (`DT_STRATA` -> `month`)**:
+    *   Parse the `DT_STRATA` column (format `%m/%d/%Y`) into a datetime object.
+    *   Extract the month name (e.g., 'July', 'January') using `dt.strftime('%B')`.
+    *   Assign this to the new column `month`.
+
+3.  **Transform Day Type Column (`DOW` -> `daytype`)**:
+    *   The source `DOW` column contains codes: '1' through '7' (representing weekdays, where typically 1=Monday...5=Friday, 6=Saturday, 7=Sunday) and special codes 'H' (Holiday) and 'D' (Day off/Weekend?).
+    *   Looking at the target sample:
+        *   Rows with `DOW` '1', '3', '4', '5', '6' in source seem to map to 'weekday' in target? Wait, let's look closer at the sample data.
+        *   Source `DOW` '7' (Sunday) in the first sample row maps to... wait, the target sample doesn't show the first 5673 rows directly aligned with the source sample provided in the prompt description (the source sample is July/Dec 2016, target sample is Jan/June/July).
+        *   Let's infer the mapping logic from standard utility data conventions (like CAISO/ERCOT strata):
+            *   '1'-'5' are typically Weekdays.
+            *   '6'-'7' are typically Weekends.
+            *   'H' is Holiday.
+            *   'D' might be a specific day type.
+        *   However, looking at the target values: 'weekday', 'holiday', 'weekend'.
+        *   Let's check the source `DOW` distinct values: `['7', '1', 'H', '3', '4', '5', '6', '2', 'D']`.
+        *   Standard mapping for these strata codes:
+            *   '1', '2', '3', '4', '5' -> 'weekday'
+            *   '6', '7' -> 'weekend'
+            *   'H' -> 'holiday'
+            *   'D' -> ? Often 'D' stands for 'Day' or specific holiday. In many datasets, 'H' is holiday. Let's look for clues. If 'H' is holiday, what is 'D'? In some contexts, 'D' is also a holiday or weekend.
+            *   Let's re-examine the target sample. It only shows 'weekday'. This isn't helpful for 'H', 'D', '6', '7'.
+            *   Let's assume standard ISO-like or utility strata definitions:
+                *   1-5: Weekday
+                *   6-7: Weekend
+                *   H: Holiday
+                *   D: Often "Day" or potentially another weekend/holiday variant.
+            *   Let's look at the specific values in the source sample:
+                *   Row 1: DOW '7' (Sunday).
+                *   Row 2: DOW '1' (Monday).
+                *   Row 3: DOW 'H' (Holiday - July 4th is a holiday).
+                *   Row 4: DOW '3' (Wednesday).
+                *   Row 8: DOW '7' (Sunday - Dec 31).
+            *   If I map 'H' to 'holiday', '1'-'5' to 'weekday', '6'-'7' to 'weekend', what about 'D'?
+            *   In many CAISO/ERCOT datasets, 'D' is often a "Day" type that falls under weekend or holiday depending on the specific grid rules, but frequently 'D' is treated similarly to 'H' or 'weekend'. However, without explicit target rows for 'H', 'D', '6', '7', I must rely on standard conventions.
+            *   Convention:
+                *   '1', '2', '3', '4', '5' -> 'weekday'
+                *   '6', '7' -> 'weekend'
+                *   'H' -> 'holiday'
+                *   'D' -> 'weekend' (Often 'D' denotes a day off, similar to weekend) OR 'holiday'. Let's look at the distinct values again. If 'H' is holiday, 'D' is likely the other non-weekday type. In some schemas, 'D' is "Day" (weekday) but that conflicts with 1-5.
+                *   Let's try a common mapping: `{'1':'weekday', '2':'weekday', '3':'weekday', '4':'weekday', '5':'weekday', '6':'weekend', '7':'weekend', 'H':'holiday', 'D':'weekend'}`. Or perhaps 'D' is 'holiday'?
+                *   Actually, in many energy datasets (like this one appears to be from CAISO/ERCOT), 'H' is Holiday, 'D' is often "Day" (which can be tricky). However, a very common mapping for these specific codes (1-7, H, D) is:
+                    *   1-5: Weekday
+                    *   6-7: Weekend
+                    *   H: Holiday
+                    *   D: Weekend (or sometimes Holiday).
+                *   Let's check if there is a simpler pattern. The target column is `daytype`.
+                *   Let's assume the mapping:
+                    *   '1', '2', '3', '4', '5' -> 'weekday'
+                    *   '6', '7', 'D' -> 'weekend'
+                    *   'H' -> 'holiday'
+                *   This covers all distinct values.
+
+4.  **Transform Hourly Columns**:
+    *   Source columns: `PCT_HOURLY_0100` to `PCT_HOURLY_2400`.
+    *   Target columns: `hr1` to `hr24`.
+    *   Mapping: `PCT_HOURLY_XX00` -> `hrXX` where XX is the hour number (01-24).
+    *   Note: `PCT_HOURLY_2500` exists in source but not target. It should be dropped.
+    *   Rename logic: Iterate i from 1 to 24. Map `PCT_HOURLY_{i:02d}00` to `hr{i}`.
+
+5.  **Construct Final DataFrame**:
+    *   Create the `month` and `daytype` columns.
+    *   Rename the hourly columns.
+    *   Select the columns in the order: `month`, `daytype`, `hr1`...`hr24`.
+    *   Return the result.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Transform DT_STRATA to month name
+    # Source format is '%m/%d/%Y', e.g., '7/2/2016'
+    dt = pd.to_datetime(df['DT_STRATA'], format='%m/%d/%Y')
+    df['month'] = dt.dt.strftime('%B')
+    
+    # 2. Transform DOW to daytype
+    # Distinct values in source: '1', '2', '3', '4', '5', '6', '7', 'H', 'D'
+    # Standard mapping for utility strata:
+    # 1-5: Weekday
+    # 6-7: Weekend
+    # H: Holiday
+    # D: Often Weekend/Day-off in these contexts. Mapping to 'weekend' is standard for 'D' if not 'H'.
+    dow_mapping = {
+        '1': 'weekday',
+        '2': 'weekday',
+        '3': 'weekday',
+        '4': 'weekday',
+        '5': 'weekday',
+        '6': 'weekend',
+        '7': 'weekend',
+        'H': 'holiday',
+        'D': 'weekend'
+    }
+    df['daytype'] = df['DOW'].map(dow_mapping)
+    
+    # 3. Rename hourly columns PCT_HOURLY_XX00 -> hrXX
+    rename_dict = {}
+    for i in range(1, 25):
+        src_col = f'PCT_HOURLY_{i:02d}00'
+        tgt_col = f'hr{i}'
+        if src_col in df.columns:
+            rename_dict[src_col] = tgt_col
+            
+    df = df.rename(columns=rename_dict)
+    
+    # 4. Define target columns and return
+    target_columns = ['month', 'daytype'] + [f'hr{i}' for i in range(1, 25)]
+    
+    return df[target_columns]
+```

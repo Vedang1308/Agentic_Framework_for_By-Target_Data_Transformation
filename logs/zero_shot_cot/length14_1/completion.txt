@@ -1,0 +1,156 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains high-frequency time-series data (15-minute intervals) for electricity consumption across various end-uses (HVAC, lighting, appliances, etc.). Key columns include `time` (timestamp) and numerous `electricity_*_kwh` columns.
+    *   **Target**: Contains aggregated data grouped by `month` and `hour`. The columns represent specific categories of energy use: `hvac`, `domestic_water_heating`, `major_appliances`, `lighting`, `miscellaneous_plug_loads`, and `total`.
+
+2.  **Determine Aggregation Logic**:
+    *   The row count drops from ~17,500 to 168. Since there are 12 months and 24 hours in a day, $12 \times 24 = 288$ possible combinations. The target has 168 rows, suggesting some combinations might be missing or the data spans a specific period. However, the primary operation is clearly **grouping** by `month` and `hour` and **summing** the energy values.
+    *   The `time` column needs to be parsed into datetime objects to extract `month` and `hour`.
+
+3.  **Map Source Columns to Target Categories**:
+    *   **`hvac`**: Typically includes heating, cooling, and associated fans/pumps.
+        *   Candidates: `electricity_heating_kwh`, `electricity_cooling_kwh`, `electricity_fans_heating_kwh`, `electricity_fans_cooling_kwh`, `electricity_pumps_heating_kwh`, `electricity_pumps_cooling_kwh`, `electricity_central_system_heating_kwh`, `electricity_central_system_cooling_kwh`, `electricity_central_system_pumps_heating_kwh`, `electricity_central_system_pumps_cooling_kwh`.
+        *   Looking at the sample data, `electricity_heating_kwh` and `electricity_cooling_kwh` are the dominant terms. The "central system" variants are often subsets or specific types. In many CBECS (Commercial Buildings Energy Consumption Survey) or similar datasets, "HVAC" is the sum of heating, cooling, and their auxiliary fans/pumps. Let's look at the magnitudes.
+        *   In the first row: `electricity_cooling_kwh` is ~406k. `electricity_fans_cooling_kwh` is ~83k. `electricity_heating_kwh` is ~0.13.
+        *   Let's check the target value for a specific month/hour to reverse-engineer the sum.
+        *   Target row: `month=7, hour=13`. Value `hvac` = 4,502,830.
+        *   Let's estimate the sum of cooling-related columns for July 13:00.
+        *   Actually, a safer bet for "HVAC" in these standardized datasets is usually the sum of:
+            *   `electricity_heating_kwh`
+            *   `electricity_cooling_kwh`
+            *   `electricity_fans_heating_kwh`
+            *   `electricity_fans_cooling_kwh`
+            *   `electricity_pumps_heating_kwh`
+            *   `electricity_pumps_cooling_kwh`
+            *   (And potentially the central system variants if they are distinct).
+        *   However, often `electricity_heating_kwh` *includes* the central system heating, or they are separate. Let's look at the column names again. `electricity_central_system_heating_kwh` is present.
+        *   Let's try a standard definition: HVAC = Heating + Cooling + Fans (Heating/Cooling) + Pumps (Heating/Cooling).
+        *   Let's look at `domestic_water_heating`. This maps directly to `electricity_water_systems_kwh`.
+        *   `major_appliances`: Usually Refrigerator, Clothes Washer, Clothes Dryer, Cooking Range, Dishwasher.
+        *   `lighting`: Interior + Exterior lighting.
+        *   `miscellaneous_plug_loads`: Plug loads, house fans, range fans, bath fans, ceiling fans, pool heaters/pumps, hot tub heaters/pumps.
+        *   `total`: `net_site_electricity_kwh`.
+
+    *   **Refining the Mappings**:
+        *   **`hvac`**: Sum of `electricity_heating_kwh`, `electricity_cooling_kwh`, `electricity_fans_heating_kwh`, `electricity_fans_cooling_kwh`, `electricity_pumps_heating_kwh`, `electricity_pumps_cooling_kwh`. *Note: The "central system" columns might be duplicates or subsets. In many CBECS derived datasets, the generic `heating` and `cooling` columns are the totals. If `central_system` is separate, it might need inclusion. Let's look at the first row: `electricity_heating_kwh` (0.13) vs `electricity_central_system_heating_kwh` (0). `electricity_cooling_kwh` (406k) vs `electricity_central_system_cooling_kwh` (2k). It seems the generic columns are the main ones. I will sum the generic heating, cooling, fans, and pumps.*
+        *   **`domestic_water_heating`**: `electricity_water_systems_kwh`.
+        *   **`major_appliances`**: Sum of `electricity_refrigerator_kwh`, `electricity_clothes_washer_kwh`, `electricity_clothes_dryer_kwh`, `electricity_cooking_range_kwh`, `electricity_dishwasher_kwh`.
+        *   **`lighting`**: Sum of `electricity_interior_lighting_kwh`, `electricity_exterior_lighting_kwh`.
+        *   **`miscellaneous_plug_loads`**: Sum of `electricity_plug_loads_kwh`, `electricity_house_fan_kwh`, `electricity_range_fan_kwh`, `electricity_bath_fan_kwh`, `electricity_ceiling_fan_kwh`, `electricity_pool_heater_kwh`, `electricity_pool_pump_kwh`, `electricity_hot_tub_heater_kwh`, `electricity_hot_tub_pump_kwh`.
+        *   **`total`**: `net_site_electricity_kwh`.
+
+4.  **Implementation Steps**:
+    *   Parse `time` column to datetime.
+    *   Extract `month` and `hour` from the datetime.
+    *   Create new columns for the target categories by summing the relevant source columns.
+    *   Group by `month` and `hour`.
+    *   Sum the values for each category.
+    *   Reset index to make `month` and `hour` columns.
+    *   Select and order the final columns as required.
+
+5.  **Verification with Sample Data**:
+    *   Let's check the `total` for `month=7, hour=13` in the target: `6.71834e+06`.
+    *   In the source, we have 15-min intervals. There are 4 intervals per hour.
+    *   If we sum `net_site_electricity_kwh` for all rows where month=7 and hour=13, we should get the target total.
+    *   The source sample only shows July 2nd and Dec 31st/Jan 1st. It doesn't show July 13th data explicitly, but the logic holds: aggregate by summing.
+
+6.  **Code Construction**:
+    *   Use `pd.to_datetime` for time parsing.
+    *   Use `df.groupby(['month', 'hour']).sum()` for aggregation.
+    *   Ensure column names match exactly.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source electricity usage DataFrame into a monthly/hourly aggregated
+    DataFrame with categorized energy usage.
+    """
+    # 1. Parse the time column
+    df = source.copy()
+    df['time'] = pd.to_datetime(df['time'])
+    
+    # 2. Extract month and hour
+    df['month'] = df['time'].dt.month
+    df['hour'] = df['time'].dt.hour
+    
+    # 3. Define the aggregation mappings
+    # HVAC: Heating, Cooling, and associated fans/pumps
+    hvac_cols = [
+        'electricity_heating_kwh',
+        'electricity_cooling_kwh',
+        'electricity_fans_heating_kwh',
+        'electricity_fans_cooling_kwh',
+        'electricity_pumps_heating_kwh',
+        'electricity_pumps_cooling_kwh'
+    ]
+    
+    # Domestic Water Heating
+    dwh_cols = [
+        'electricity_water_systems_kwh'
+    ]
+    
+    # Major Appliances
+    major_appl_cols = [
+        'electricity_refrigerator_kwh',
+        'electricity_clothes_washer_kwh',
+        'electricity_clothes_dryer_kwh',
+        'electricity_cooking_range_kwh',
+        'electricity_dishwasher_kwh'
+    ]
+    
+    # Lighting
+    lighting_cols = [
+        'electricity_interior_lighting_kwh',
+        'electricity_exterior_lighting_kwh'
+    ]
+    
+    # Miscellaneous Plug Loads
+    misc_plug_cols = [
+        'electricity_plug_loads_kwh',
+        'electricity_house_fan_kwh',
+        'electricity_range_fan_kwh',
+        'electricity_bath_fan_kwh',
+        'electricity_ceiling_fan_kwh',
+        'electricity_pool_heater_kwh',
+        'electricity_pool_pump_kwh',
+        'electricity_hot_tub_heater_kwh',
+        'electricity_hot_tub_pump_kwh'
+    ]
+    
+    # Total
+    total_cols = [
+        'net_site_electricity_kwh'
+    ]
+    
+    # 4. Create the aggregated columns
+    # We sum the relevant columns for each row first, then group by month/hour
+    # Alternatively, we can group first and then sum, but creating intermediate columns is clearer.
+    
+    df['hvac'] = df[hvac_cols].sum(axis=1)
+    df['domestic_water_heating'] = df[dwh_cols].sum(axis=1)
+    df['major_appliances'] = df[major_appl_cols].sum(axis=1)
+    df['lighting'] = df[lighting_cols].sum(axis=1)
+    df['miscellaneous_plug_loads'] = df[misc_plug_cols].sum(axis=1)
+    df['total'] = df[total_cols].sum(axis=1)
+    
+    # 5. Group by month and hour and sum the values
+    target_columns = ['month', 'hour', 'hvac', 'domestic_water_heating', 'major_appliances', 'lighting', 'miscellaneous_plug_loads', 'total']
+    
+    agg_df = df.groupby(['month', 'hour'], as_index=False).agg({
+        'hvac': 'sum',
+        'domestic_water_heating': 'sum',
+        'major_appliances': 'sum',
+        'lighting': 'sum',
+        'miscellaneous_plug_loads': 'sum',
+        'total': 'sum'
+    })
+    
+    # 6. Ensure correct column order and types
+    # The groupby result should already have the correct columns.
+    # We return the dataframe with the exact target column names.
+    
+    return agg_df[target_columns]
+```

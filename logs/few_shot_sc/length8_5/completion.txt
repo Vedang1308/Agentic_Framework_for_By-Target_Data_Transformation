@@ -1,0 +1,104 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Structures**:
+    *   **Source**: Long format with columns `date` (string), `value1` through `value24` (floats representing hourly data), and metadata columns (`class`, `Description`, etc.).
+    *   **Target**: Wide format with `hour` (1-24) and monthly columns (`january` through `december`).
+    *   **Transformation Goal**: Pivot the data from long (rows per day) to wide (rows per hour, columns per month), aggregating values across days within the same month.
+
+2.  **Parse Dates**:
+    *   Convert the `date` column to datetime objects using `pd.to_datetime`.
+    *   Extract the `month` component (1-12) to group data.
+    *   The `hour` in the target corresponds to the column index in the source (`value1` -> hour 1, `value2` -> hour 2, etc.).
+
+3.  **Reshape Data (Melt)**:
+    *   The source has 24 value columns. We need to unpivot these into a single `value` column and an `hour` identifier.
+    *   Use `pd.melt` on the source DataFrame, keeping `date` (and derived `month`) as identifiers, and melting `value1`...`value24`.
+    *   Map the melted variable names (`value1`, `value2`, ...) to integers (1, 2, ...) to create the `hour` column.
+
+4.  **Group and Aggregate**:
+    *   Group the melted data by `hour` and `month`.
+    *   Aggregate the `value` column. Looking at the target sample, the values are averages (e.g., Jan values are around 2.0, while source values are around 1.0-2.0. Wait, let's check the math.
+        *   Source row 1 (7/3/2011): value1 = 1.0243.
+        *   Source row 2 (7/4/2011): value1 = 0.8662.
+        *   ...
+        *   Target July Hour 1 = 0.9794.
+        *   If we average the July 2011 values for hour 1: (1.0243 + 0.8662 + 0.8364 + 1.1297 + ...) / count.
+        *   Let's check January. The source sample doesn't show January, but the target has January values ~2.0. The source values in the sample are ~1.0. This suggests the aggregation is likely a **mean**. Standard practice for this type of "profile" transformation is averaging daily profiles into a monthly typical profile.
+    *   So, calculate the mean of `value` for each (`hour`, `month`) pair.
+
+5.  **Pivot/Reshape to Target Format**:
+    *   After grouping, we have a DataFrame with columns `hour`, `month`, and the aggregated `value`.
+    *   Pivot this DataFrame so that `hour` becomes the index, `month` becomes the column headers, and `value` fills the cells.
+    *   Map month numbers (1-12) to month names (`january`, `february`, etc.).
+
+6.  **Final Cleanup**:
+    *   Reset the index to make `hour` a column.
+    *   Sort by `hour` (1 to 24) to match typical target ordering (though the sample is unsorted, it's safer to sort or just ensure the columns are correct). The sample shows hours 1, 10, 11, 12, 6, 7... which is not sorted. However, the requirement is to match schema and contents. Usually, sorting by hour is preferred for determinism, but if the target sample is explicitly unsorted, we might need to check if order matters. The prompt says "return df[target_columns]". It doesn't specify row order. I will sort by hour for cleanliness, as pandas groupby/pivot usually produces sorted indices.
+    *   Ensure column names match exactly: `['hour', 'january', 'february', ..., 'december']`.
+    *   Handle missing months (NaN) if a month is not present in the source data.
+
+7.  **Implementation Details**:
+    *   Define the mapping from `valueN` to `hour` N.
+    *   Define the mapping from `month` int to `month` string.
+    *   Perform melt, groupby, mean, pivot, rename, and select.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse dates and extract month
+    df['date_dt'] = pd.to_datetime(df['date'], format='%m/%d/%Y')
+    df['month'] = df['date_dt'].dt.month
+    
+    # 2. Melt the hourly value columns
+    # Identify value columns
+    value_cols = [c for c in df.columns if c.startswith('value')]
+    
+    # Melt: id_vars are date and month, value_vars are the hourly columns
+    melted = df.melt(
+        id_vars=['date_dt', 'month'], 
+        value_vars=value_cols, 
+        var_name='hour_str', 
+        value_name='val'
+    )
+    
+    # 3. Convert hour_str ('value1', 'value2'...) to integer hour (1, 2...)
+    melted['hour'] = melted['hour_str'].str.replace('value', '', regex=False).astype(int)
+    
+    # 4. Group by hour and month, and calculate the mean
+    # This aggregates all days in a specific month for each specific hour
+    grouped = melted.groupby(['hour', 'month'])['val'].mean().reset_index()
+    
+    # 5. Pivot to wide format: index=hour, columns=month, values=val
+    pivoted = grouped.pivot(index='hour', columns='month', values='val')
+    
+    # 6. Map month numbers to month names
+    month_map = {
+        1: 'january', 2: 'february', 3: 'march', 4: 'april', 5: 'may', 6: 'june',
+        7: 'july', 8: 'august', 9: 'september', 10: 'october', 11: 'november', 12: 'december'
+    }
+    pivoted = pivoted.rename(columns=month_map)
+    
+    # 7. Reset index to make 'hour' a column again
+    pivoted = pivoted.reset_index()
+    
+    # 8. Define target columns in the exact required order
+    target_columns = ['hour', 'january', 'february', 'march', 'april', 'may', 'june', 
+                      'july', 'august', 'september', 'october', 'november', 'december']
+    
+    # Ensure all target columns exist (fill with NaN if a month is missing)
+    for col in target_columns:
+        if col not in pivoted.columns:
+            pivoted[col] = float('nan')
+            
+    # Select and return only the target columns
+    # Note: The sample target is not sorted by hour, but standard practice is to return sorted or 
+    # whatever the pivot produces. The pivot produces sorted index (1..24). 
+    # If strict row order matching the sample is required, we would need to know the specific order.
+    # However, usually "contents" implies the data values. I will sort by hour for determinism.
+    pivoted = pivoted.sort_values('hour').reset_index(drop=True)
+    
+    return pivoted[target_columns]
+```

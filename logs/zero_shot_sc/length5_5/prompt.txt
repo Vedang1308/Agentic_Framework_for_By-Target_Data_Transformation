@@ -1,0 +1,49 @@
+### Benchmark Case: length5_5
+- Source sample rows: 15117 rows (Note: test_0.csv may have different row count)
+- Target rows: 53 rows
+- Notice: Row count changes from 15117 to 53. Check if an aggregation, grouping, or pivoting operation is required.
+
+### Exact Target Columns (Must match verbatim):
+['date', 'value1', 'value2', 'value3', 'value4', 'value5', 'value6', 'value7', 'value8', 'value9', 'value10', 'value11', 'value12', 'value13', 'value14', 'value15', 'value16', 'value17', 'value18', 'value19', 'value20', 'value21', 'value22', 'value23', 'value24']
+
+### Datetime Format Inferences:
+- Source column 'date' has date format '%m/%d/%Y %H:%M' (sample: '11/6/2018 21:45')
+- Target column 'date' requires date format '%m/%d/%Y' (sample: '09/16/2018')
+
+### Source Schema and Types:
+date (object), zone_016_cooling_sp (float64)
+
+### Target Schema and Types:
+date (object), value1 (float64), value2 (float64), value3 (float64), value4 (float64), value5 (float64), value6 (float64), value7 (float64), value8 (float64), value9 (float64), value10 (float64), value11 (int64), value12 (int64), value13 (int64), value14 (int64), value15 (int64), value16 (int64), value17 (int64), value18 (int64), value19 (int64), value20 (int64), value21 (int64), value22 (int64), value23 (float64), value24 (float64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- zone_016_cooling_sp: [np.float64(73.0), np.float64(84.0)]
+
+### Source Table Sample (training_0.csv):
+| date            |   zone_016_cooling_sp |
+|:----------------|----------------------:|
+| 11/6/2018 21:45 |                    73 |
+| 11/6/2018 21:50 |                    73 |
+| 11/6/2018 21:55 |                    73 |
+| 11/6/2018 22:00 |                    73 |
+| 1/18/2019 3:05  |                    73 |
+| 1/18/2019 3:10  |                    73 |
+| 1/18/2019 3:15  |                    73 |
+| 1/18/2019 3:20  |                    73 |
+
+### Desired Target Table Sample (target.csv):
+| date       |   value1 |   value2 |   value3 |   value4 |   value5 |   value6 |   value7 |   value8 |   value9 |   value10 |   value11 |   value12 |   value13 |   value14 |   value15 |   value16 |   value17 |   value18 |   value19 |   value20 |   value21 |   value22 |   value23 |   value24 |
+|:-----------|---------:|---------:|---------:|---------:|---------:|---------:|---------:|---------:|---------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|
+| 09/16/2018 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |
+| 09/29/2018 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |
+| 09/23/2018 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |
+| 10/30/2018 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |
+| 09/19/2018 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |
+| 11/06/2018 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |       nan |       nan |
+| 10/08/2018 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |
+| 10/20/2018 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |       73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |        73 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

@@ -1,0 +1,221 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source columns: `End Use Category`, `End Use`, `Time Period`, `Day Type`, `Hour Ending`, `Number of Homes...`, `Average Demand...`.
+    *   Target columns: `month`, `hour`, `hvac`, `water_heating`, `refrigerator`, `clothes_washer`, `clothes_dryer`, `dishwasher`, `cooking_range`, `pool_spa_pumps`, `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater`.
+    *   The transformation involves pivoting the long-format source data into a wide-format target table where each appliance/end-use category becomes a column.
+
+2.  **Derive `month`**:
+    *   The source has a `Time Period` column with values like 'March', 'December'.
+    *   The target `month` column contains integers (e.g., 3 for March) or NaN.
+    *   Action: Map month names to integers (January=1, ..., December=12).
+
+3.  **Derive `hour`**:
+    *   The source has an `Hour Ending` column (integers 1-24).
+    *   The target `hour` column matches these values.
+    *   Action: Rename `Hour Ending` to `hour`.
+
+4.  **Map End Uses to Target Columns**:
+    *   We need to group the source rows by `month` and `hour`, and then spread the `Average Demand Per Home With This End Use [kW]` values into specific columns based on the `End Use` or `End Use Category`.
+    *   Let's inspect the mapping between Source `End Use`/`End Use Category` and Target Columns:
+        *   `hvac`: Likely corresponds to 'HVAC' or 'Heating/Cooling'. Looking at typical residential load profiles, 'Remaining Load' often contains HVAC or is separate. However, in many such datasets, specific end uses are listed. Let's look at the distinct values provided: `['Kitchen', 'Laundry', 'Miscellaneous', 'Lighting', 'Remaining Load']`. Wait, the distinct values for `End Use Category` are limited. The `End Use` column likely has more granularity.
+        *   Let's infer mappings based on standard naming conventions in such datasets (e.g., RECS or similar):
+            *   `refrigerator`: `End Use` == 'Refrigerator' or 'Freezer' (often grouped). Source sample shows 'Freezer'. Target has `refrigerator`. Let's assume 'Freezer' and 'Refrigerator' map here.
+            *   `clothes_washer`: `End Use` == 'Clothes Washer'.
+            *   `clothes_dryer`: `End Use` == 'Clothes Dryer'.
+            *   `dishwasher`: `End Use` == 'Dishwasher'.
+            *   `cooking_range`: `End Use` == 'Cooking Range' or 'Oven' or 'Stove'.
+            *   `water_heating`: `End Use` == 'Water Heater'.
+            *   `pool_spa_pumps`: `End Use` == 'Pool Spa Pumps'.
+            *   `pool_spa_heater`: `End Use` == 'Pool Spa Heater'.
+            *   `interior_lighting`: `End Use` == 'Interior Lighting'.
+            *   `exterior_lighting`: `End Use` == 'Exterior Lighting'.
+            *   `lighting`: This might be a sum or a generic category if specific ones aren't present, or perhaps 'Other Lighting'.
+            *   `plug`: `End Use` == 'Plug Loads' or 'Miscellaneous Plug'.
+            *   `hvac`: `End Use` == 'HVAC' or 'Heating' or 'Cooling'.
+    *   *Correction/Refinement*: The source sample shows `End Use Category` values. It does *not* show all distinct `End Use` values. However, the target columns are very specific.
+    *   Let's look at the sample target data. `hvac` has values like 1.07, 0.87. Other columns are 0.
+    *   In the source sample, we see `End Use` = 'Freezer' and `End Use Category` = 'Kitchen'.
+    *   We need to create a mapping dictionary from `End Use` string to target column name. Since I don't have the full list of distinct `End Use` values, I must infer them from the target columns.
+    *   Common mappings:
+        *   'HVAC' -> 'hvac'
+        *   'Water Heater' -> 'water_heating'
+        *   'Refrigerator', 'Freezer' -> 'refrigerator'
+        *   'Clothes Washer' -> 'clothes_washer'
+        *   'Clothes Dryer' -> 'clothes_dryer'
+        *   'Dishwasher' -> 'dishwasher'
+        *   'Cooking Range', 'Range', 'Oven', 'Stove' -> 'cooking_range'
+        *   'Pool Spa Pumps' -> 'pool_spa_pumps'
+        *   'Interior Lighting' -> 'interior_lighting'
+        *   'Exterior Lighting' -> 'exterior_lighting'
+        *   'Lighting' (generic) or 'Other Lighting' -> 'lighting'
+        *   'Plug Loads', 'Plug', 'Miscellaneous Plug' -> 'plug'
+        *   'Pool Spa Heater' -> 'pool_spa_heater'
+    *   What about `Remaining Load`? In many breakdowns, if specific end uses are metered, `Remaining Load` is the residual. However, the target columns are specific appliances. It's possible `Remaining Load` is ignored or mapped to `hvac` if HVAC isn't separately metered? Or perhaps `Remaining Load` is not part of the specific appliance columns and should be dropped?
+    *   Looking at the target sample: `hvac` has non-zero values. `Remaining Load` in source has `nan` demand in the sample rows shown (rows 21-24 of Dec). This suggests `Remaining Load` might not contribute to the specific appliance columns, or the sample is misleading.
+    *   Actually, usually in these "Table-to-Table" tasks, the `End Use` column contains the exact labels that map to the target columns. I will create a robust mapping function that tries to match substrings or exact matches.
+    *   Let's assume the `End Use` column contains values like: 'HVAC', 'Water Heater', 'Refrigerator', 'Freezer', 'Clothes Washer', 'Clothes Dryer', 'Dishwasher', 'Cooking Range', 'Pool Spa Pumps', 'Interior Lighting', 'Exterior Lighting', 'Plug Loads', 'Pool Spa Heater'.
+    *   I will define a mapping dict. If an `End Use` doesn't map to a target column, it will be ignored (or aggregated if it maps to a generic bin).
+    *   Wait, the target column `lighting` exists alongside `interior_lighting` and `exterior_lighting`. This suggests there might be a generic 'Lighting' end use.
+
+5.  **Pivot Operation**:
+    *   Create a new column `target_col` based on `End Use`.
+    *   Filter out rows where `target_col` is None (unmapped uses).
+    *   Pivot the dataframe:
+        *   Index: `month`, `hour`
+        *   Columns: `target_col`
+        *   Values: `Average Demand Per Home With This End Use [kW]`
+        *   Aggregation: `sum` (in case multiple source rows map to same target column for same month/hour, e.g., 'Refrigerator' and 'Freezer' both mapping to 'refrigerator').
+    *   Fill NaN with 0.
+
+6.  **Final Formatting**:
+    *   Reset index to get `month` and `hour` as columns.
+    *   Ensure column order matches target.
+    *   Ensure dtypes match target (float/int). Note: Target has `refrigerator` as int64 in schema description but sample shows 0 (which is int-like). However, demand is continuous. The schema says `refrigerator (int64)`. This is unusual for kW. Let's look closely at the target schema types provided:
+        *   `month (float64)`, `hour (int64)`
+        *   `hvac (float64)`, `water_heating (float64)`
+        *   `refrigerator (int64)`, `clothes_washer (int64)`, ... `plug (int64)`, `pool_spa_heater (int64)`
+        *   This implies the values for appliances are integers? Or perhaps they are rounded? Or maybe the sample values `0` are just zeros. The `hvac` values `1.07` are floats.
+        *   It is safer to cast to the specified types at the end. If the data is continuous kW, casting to int64 will truncate. However, if the task requires int64, I must do it. Given the sample shows `0` for appliances, it's hard to tell if they should be rounded. I will follow the schema types strictly.
+
+7.  **Mapping Logic Construction**:
+    *   I will define a dictionary mapping source `End Use` strings to target column names.
+    *   Since I don't have the full list, I will use a heuristic mapping based on common names.
+    *   `End Use` -> Target Column:
+        *   'HVAC' -> 'hvac'
+        *   'Heating' -> 'hvac'
+        *   'Cooling' -> 'hvac'
+        *   'Water Heater' -> 'water_heating'
+        *   'Refrigerator' -> 'refrigerator'
+        *   'Freezer' -> 'refrigerator'
+        *   'Clothes Washer' -> 'clothes_washer'
+        *   'Clothes Dryer' -> 'clothes_dryer'
+        *   'Dishwasher' -> 'dishwasher'
+        *   'Cooking Range' -> 'cooking_range'
+        *   'Range' -> 'cooking_range'
+        *   'Oven' -> 'cooking_range'
+        *   'Stove' -> 'cooking_range'
+        *   'Pool Spa Pumps' -> 'pool_spa_pumps'
+        *   'Interior Lighting' -> 'interior_lighting'
+        *   'Exterior Lighting' -> 'exterior_lighting'
+        *   'Lighting' -> 'lighting'
+        *   'Plug Loads' -> 'plug'
+        *   'Plug' -> 'plug'
+        *   'Miscellaneous Plug' -> 'plug'
+        *   'Pool Spa Heater' -> 'pool_spa_heater'
+
+    *   What if `End Use` is 'Remaining Load'? It likely doesn't map to any specific appliance column. I will ignore it.
+
+8.  **Implementation Details**:
+    *   Parse `Time Period` to `month`.
+    *   Map `End Use` to `target_col`.
+    *   Pivot.
+    *   Reindex to ensure all target columns exist.
+    *   Cast types.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    # 1. Parse Month
+    month_map = {
+        'January': 1, 'February': 2, 'March': 3, 'April': 4,
+        'May': 5, 'June': 6, 'July': 7, 'August': 8,
+        'September': 9, 'October': 10, 'November': 11, 'December': 12
+    }
+    df = source.copy()
+    df['month'] = df['Time Period'].map(month_map)
+    df['hour'] = df['Hour Ending']
+    
+    # 2. Map End Use to Target Columns
+    # Define a mapping from Source 'End Use' to Target Column Name
+    end_use_to_target = {
+        'HVAC': 'hvac',
+        'Heating': 'hvac',
+        'Cooling': 'hvac',
+        'Water Heater': 'water_heating',
+        'Refrigerator': 'refrigerator',
+        'Freezer': 'refrigerator',
+        'Clothes Washer': 'clothes_washer',
+        'Clothes Dryer': 'clothes_dryer',
+        'Dishwasher': 'dishwasher',
+        'Cooking Range': 'cooking_range',
+        'Range': 'cooking_range',
+        'Oven': 'cooking_range',
+        'Stove': 'cooking_range',
+        'Pool Spa Pumps': 'pool_spa_pumps',
+        'Interior Lighting': 'interior_lighting',
+        'Exterior Lighting': 'exterior_lighting',
+        'Lighting': 'lighting',
+        'Plug Loads': 'plug',
+        'Plug': 'plug',
+        'Miscellaneous Plug': 'plug',
+        'Pool Spa Heater': 'pool_spa_heater'
+    }
+    
+    # Apply mapping. Use normalize() to handle potential case/whitespace issues if necessary,
+    # but assuming exact match first. If not found, it will be NaN.
+    df['target_col'] = df['End Use'].map(end_use_to_target)
+    
+    # Filter out rows that don't map to a target column (e.g., 'Remaining Load')
+    df_valid = df.dropna(subset=['target_col'])
+    
+    # 3. Pivot the data
+    # We need to aggregate by month and hour, spreading the demand into the target columns.
+    # Using sum to handle cases where multiple source end-uses map to the same target column 
+    # (e.g., Refrigerator and Freezer -> refrigerator) for the same month/hour.
+    pivot_df = df_valid.pivot_table(
+        index=['month', 'hour'],
+        columns='target_col',
+        values='Average Demand Per Home With This End Use [kW]',
+        aggfunc='sum'
+    ).reset_index()
+    
+    # 4. Ensure all target columns exist and fill missing with 0
+    target_columns = [
+        'month', 'hour', 'hvac', 'water_heating', 'refrigerator', 
+        'clothes_washer', 'clothes_dryer', 'dishwasher', 'cooking_range', 
+        'pool_spa_pumps', 'interior_lighting', 'exterior_lighting', 
+        'lighting', 'plug', 'pool_spa_heater'
+    ]
+    
+    # Get the appliance columns specifically for filling
+    appliance_cols = [c for c in target_columns if c not in ['month', 'hour']]
+    
+    # Fill NaN in appliance columns with 0
+    for col in appliance_cols:
+        if col in pivot_df.columns:
+            pivot_df[col] = pivot_df[col].fillna(0)
+        else:
+            pivot_df[col] = 0
+            
+    # Select and order columns
+    result_df = pivot_df[target_columns]
+    
+    # 5. Cast types to match target schema
+    # month: float64, hour: int64
+    # hvac, water_heating: float64
+    # others: int64 (as per schema description, though physically odd for kW, we follow spec)
+    
+    result_df['month'] = result_df['month'].astype('float64')
+    result_df['hour'] = result_df['hour'].astype('int64')
+    
+    result_df['hvac'] = result_df['hvac'].astype('float64')
+    result_df['water_heating'] = result_df['water_heating'].astype('float64')
+    
+    int_cols = [
+        'refrigerator', 'clothes_washer', 'clothes_dryer', 'dishwasher', 
+        'cooking_range', 'pool_spa_pumps', 'interior_lighting', 'exterior_lighting', 
+        'lighting', 'plug', 'pool_spa_heater'
+    ]
+    
+    for col in int_cols:
+        # Convert to float first to handle any residual NaNs, then to int
+        # Note: If values are small floats like 0.031, casting to int will truncate to 0.
+        # Given the target sample shows 0s, and schema says int64, this is likely intended 
+        # or the data is already integer-like (e.g. counts or scaled). 
+        # However, if the data is kW, truncation is lossy. But we must follow schema.
+        result_df[col] = result_df[col].fillna(0).astype('float64').astype('int64')
+        
+    return result_df
+```

@@ -1,0 +1,164 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source has columns: `End Use Category`, `End Use`, `Time Period`, `Day Type`, `Hour Ending`, `Number of Homes...`, `Average Demand...`.
+    *   Target has columns: `season`, `hour`, `hvac`, `domestic_water_heating`, `major_appliances`, `lighting`, `miscellaneous_plug_loads`, `total`.
+    *   The row count drops significantly (258k -> 120), indicating an aggregation or pivot operation. The target seems to represent aggregated demand metrics per hour and season.
+
+2.  **Determine `season` from `Time Period`**:
+    *   Source `Time Period` contains months (e.g., 'March', 'December').
+    *   Target `season` contains values like 'Fall'. Some rows have `nan` for season in the sample, which likely corresponds to months that don't fit the standard 4-season mapping or are excluded, but looking at the sample:
+        *   'Fall' is in the target.
+        *   Months: Jan, Feb, Mar (Winter); Apr, May, Jun (Spring); Jul, Aug, Sep (Summer); Oct, Nov, Dec (Fall).
+        *   Let's map months to seasons.
+        *   Note: The target sample shows `nan` for some rows at the bottom (hours 21-24). Looking at the source sample, those rows correspond to 'Remaining Load' or potentially specific months. However, the `season` column in the target is derived from `Time Period`.
+        *   Standard mapping:
+            *   Winter: Dec, Jan, Feb
+            *   Spring: Mar, Apr, May
+            *   Summer: Jun, Jul, Aug
+            *   Fall: Sep, Oct, Nov
+        *   Wait, the target sample has `nan` for season. Let's look closer. The sample target rows with `nan` season are hours 21-24. The source sample rows for hours 21-24 are 'Remaining Load' in 'December'. December is Winter. Why is it `nan`?
+        *   Actually, let's look at the first few target rows: 'Fall', hour 1-4.
+        *   Let's re-examine the source `Time Period`. It has values like 'March', 'December'.
+        *   Maybe the aggregation groups by `Time Period` first? No, target has `season`.
+        *   Let's assume a standard season mapping. If the result is `nan`, it might be because those specific groups were filtered out or the mapping is specific.
+        *   However, usually in these problems, `nan` in the target implies that the source data for those rows didn't have a valid mapping or was excluded. But here, the rows exist in the target with `nan`.
+        *   Let's look at the distinct values of `End Use Category`: ['Kitchen', 'Laundry', 'Miscellaneous', 'Lighting', 'Remaining Load'].
+        *   Target columns: `hvac`, `domestic_water_heating`, `major_appliances`, `lighting`, `miscellaneous_plug_loads`.
+        *   Mapping Source Categories to Target Columns:
+            *   `hvac`: Likely 'Remaining Load' (often HVAC is part of the remaining load in simplified models) or a specific category not listed? Wait, 'Remaining Load' is a category. In many energy datasets, "Remaining Load" is primarily HVAC. Let's assume `Remaining Load` -> `hvac`.
+            *   `lighting`: 'Lighting' -> `lighting`.
+            *   `major_appliances`: 'Kitchen' and 'Laundry' often fall here. Or maybe 'Kitchen' -> `major_appliances`? 'Laundry' -> `major_appliances`?
+            *   `domestic_water_heating`: Not explicitly in the source categories list provided in the prompt's distinct values? The distinct values are ['Kitchen', 'Laundry', 'Miscellaneous', 'Lighting', 'Remaining Load']. Where does water heating come from?
+            *   Maybe `End Use` (object) has more specific details? The prompt only gives distinct values for `End Use Category`.
+            *   Let's look at the target sample values. `lighting` is 0 in the sample. `hvac` is large.
+            *   If `Remaining Load` maps to `hvac`, then `hvac` values should come from rows where `End Use Category` == 'Remaining Load'.
+            *   What about `domestic_water_heating`? It's not in the category list. Is it possible `End Use` contains 'Water Heating'? The prompt doesn't give distinct values for `End Use`.
+            *   Let's reconsider the aggregation. The target has one row per `season` and `hour`.
+            *   The source has `Day Type` (Weekend, Weekday, All). The target doesn't have `Day Type`. This suggests we need to aggregate across `Day Type` as well.
+            *   The source has `Time Period` (Month). We need to group by `Season` and `Hour Ending`.
+
+3.  **Refining the Mapping Strategy**:
+    *   **Step 1: Create `season` column**. Map `Time Period` to `season`.
+        *   Winter: ['December', 'January', 'February']
+        *   Spring: ['March', 'April', 'May']
+        *   Summer: ['June', 'July', 'August']
+        *   Fall: ['September', 'October', 'November']
+    *   **Step 2: Pivot/Aggregate**.
+        *   We need to sum or average the `Average Demand Per Home With This End Use [kW]`?
+        *   The target values are large (e.g., 2900.58 for hvac). The source values are small (e.g., 0.031 for Freezer).
+        *   Source has `Number of Homes in Bin With This End Use Metered`.
+        *   Total Demand = Average Demand * Number of Homes?
+        *   If we sum `Average Demand * Number of Homes` for a specific category across all days/months in a season?
+        *   Or is it an average across the season?
+        *   Let's look at the target `total` column. It is 0 in the sample. This is suspicious.
+        *   Let's look at the source `Remaining Load` rows. `Average Demand` is `nan`. This explains why `hvac` might be calculated differently or if `Remaining Load` is excluded from some sums.
+        *   Wait, the target sample shows `hvac` values like 2900.58. If `Remaining Load` has `nan` demand, how do we get a value?
+        *   Perhaps `hvac` comes from a different category? Or maybe the `nan` in source is only for the specific sample rows shown, but other rows have values?
+        *   The prompt says "Source Table Sample". It shows `nan` for Remaining Load.
+        *   Let's look at the other categories. Kitchen Freezer: 0.031 kW. 11 homes. Total ~0.34 kW.
+        *   Target `major_appliances` is 1408.37. This is huge.
+        *   Maybe the aggregation involves summing over all months in the season and all day types?
+        *   There are 120 target rows. 12 hours? No, hours 1-24. 120 / 24 = 5. So 5 seasons? Or 4 seasons + something?
+        *   Standard seasons are 4. 4 * 24 = 96 rows. 120 rows suggests 5 groups.
+        *   Maybe `Day Type` is preserved? No, target doesn't have it.
+        *   Maybe `Time Period` is not aggregated into just 4 seasons?
+        *   Let's look at the target `season` values again. 'Fall' and `nan`.
+        *   If there are 120 rows, and 24 hours, there are 5 unique `season` values.
+        *   What are the 5 values? Maybe 'Winter', 'Spring', 'Summer', 'Fall', and 'All'?
+        *   Source `Day Type` has 'All'. Source `Time Period` has months.
+        *   If `Time Period` is 'All' (not shown in sample distincts, but possible), it might map to a specific season or 'All'.
+        *   Alternatively, maybe the 5th season is 'Year' or similar?
+        *   Let's check the distinct values of `Time Period` in the full dataset (not provided, but inferred). Usually, these datasets have monthly data and an 'All' or 'Annual' summary.
+        *   If `Time Period` == 'All', what season is it?
+        *   Let's assume the mapping:
+            *   Months -> Seasons (Winter, Spring, Summer, Fall)
+            *   'All' -> 'All' (or maybe it's excluded?)
+        *   If there are 5 groups, and 4 seasons, the 5th is likely 'All' or a specific month if not grouped.
+        *   However, the target sample shows `nan` for season. This is key.
+        *   Rows with `nan` season in target: Hours 21-24.
+        *   Source sample for Hours 21-24: `Time Period` = 'December', `End Use Category` = 'Remaining Load'.
+        *   If December maps to Winter, why is target season `nan`?
+        *   Maybe the aggregation for `Remaining Load` (hvac) is handled separately?
+        *   Or maybe `nan` in target `season` corresponds to `Time Period` == 'All' in source?
+        *   Let's look at the target row count: 120.
+        *   If we group by `Season` and `Hour`, and there are 5 seasons, 5*24=120.
+        *   So there are 5 distinct `Season` values.
+        *   Common 5th value in such datasets: 'Annual' or 'All'.
+        *   Let's assume `Time Period` 'All' maps to `season` 'All' or `nan`?
+        *   The target sample has `nan` for season. Pandas often displays NaN for missing strings.
+        *   If `Time Period` is 'All', and we map it to `nan` or 'All', we need to check consistency.
+        *   Let's assume the 5th group is 'All' (from `Time Period` == 'All') and it maps to `season` = `nan` (or 'All' which might be displayed as nan if type is object and empty?). No, 'All' is a string.
+        *   Let's look at the target sample again. The last 4 rows have `nan` season.
+        *   If the source `Time Period` for those rows is 'All', then `season` = `nan` might be the transformation for 'All'.
+        *   BUT, the source sample shows `Time Period` = 'December' for the last rows.
+        *   Contradiction: Source sample shows 'December' for hours 21-24. Target sample shows `nan` season for hours 21-24.
+        *   Hypothesis: The target sample rows shown at the bottom are NOT from the same `Time Period` as the top rows. The top rows are 'Fall'. The bottom rows are `nan`.
+        *   If `Time Period` 'December' maps to 'Winter', then the bottom rows in target should be 'Winter', not `nan`.
+        *   Unless... the target `season` column is NOT derived from `Time Period` directly for all rows.
+        *   Or, the `Time Period` 'All' exists in the source and maps to `nan`.
+        *   Let's look at the row indices. The target has 120 rows.
+        *   If we group by `Season` and `Hour`, we get 120 rows.
+        *   If `Season` has 5 values, one of them is likely `nan` or 'All'.
+        *   Let's assume `Time Period` 'All' -> `season` = `nan`.
+        *   And `Time Period` months -> `season` = Season Name.
+        *   This would create 5 groups: Winter, Spring, Summer, Fall, and `nan` (from 'All').
+        *   Does the source have 'All' in `Time Period`? The distinct values provided for `Day Type` include 'All'. It's highly likely `Time Period` also has 'All' or 'Annual'.
+        *   Let's proceed with this assumption:
+            1. Map `Time Period` to `season`.
+               - Months -> Winter/Spring/Summer/Fall.
+               - 'All' (or similar) -> `nan` (or 'All', but target shows `nan`). Let's use `nan`.
+            2. Aggregate.
+               - Group by `season` and `Hour Ending`.
+               - We need to calculate `hvac`, `domestic_water_heating`, etc.
+               - We need to map `End Use Category` to target columns.
+               - `Remaining Load` -> `hvac`?
+               - `Lighting` -> `lighting`?
+               - `Kitchen` -> `major_appliances`?
+               - `Laundry` -> `major_appliances`?
+               - `Miscellaneous` -> `miscellaneous_plug_loads`?
+               - Where is `domestic_water_heating`?
+               - Maybe `End Use` column has 'Water Heating'?
+               - Since we don't have distinct values for `End Use`, we must infer.
+               - Common mapping in RESNET/energy datasets:
+                 - HVAC: Remaining Load (or specific HVAC category)
+                 - Water Heating: Water Heating category
+                 - Major Appliances: Kitchen, Laundry
+                 - Lighting: Lighting
+                 - Plug Loads: Miscellaneous
+               - If `domestic_water_heating` is a target column, there must be a source category for it.
+               - Let's assume `End Use` contains 'Water Heating' and it might be categorized under 'Remaining Load' or a separate category not in the top-level distincts?
+               - Wait, the distinct values for `End Use Category` are exhaustive in the prompt: `['Kitchen', 'Laundry', 'Miscellaneous', 'Lighting', 'Remaining Load']`.
+               - If `domestic_water_heating` is not in these, it must be derived from `End Use`.
+               - Let's check if `End Use` can be 'Water Heating'.
+               - If so, we filter rows where `End Use` == 'Water Heating' (or similar) and sum their demand.
+               - What about `hvac`? If `Remaining Load` is the category, and `End Use` is 'Remaining Load', we sum that.
+               - What about `total`? It is 0 in the sample. This suggests `total` might be a placeholder or calculated as sum of others? If sum of others is not 0, then `total` is explicitly 0 or derived from a missing category.
+               - Given the complexity and missing info on `End Use`, let's look at the aggregation metric.
+               - `Average Demand Per Home With This End Use [kW]` * `Number of Homes...`?
+               - Or just sum of `Average Demand`?
+               - The values in target (2900 kW) are large.
+               - If we sum `Average Demand` (0.03) over many homes?
+               - `Number of Homes` is ~11-120.
+               - If we sum `Avg Demand * Num Homes` for all categories in a season?
+               - There are 31 days in a month, 2 day types (Weekday/Weekend), 24 hours.
+               - Aggregation logic:
+                 - For each `season` and `hour`:
+                   - Filter source rows matching the season (derived from Time Period) and hour.
+                   - For each target column, sum the `Total Demand` (Avg Demand * Num Homes) for the corresponding source categories/uses.
+                   - Note: If `Time Period` is monthly, we might need to average across the days in the month? Or sum?
+                   - The target has one value per hour/season.
+                   - If source has data for every day type and month, we likely need to **average** the hourly demand across all days in that season to get a representative "Seasonal Hourly Profile".
+                   - Formula: `Target_Value = Mean( Sum(Category Demands) )` across all days/months in the season?
+                   - Or `Target_Value = Sum( Sum(Category Demands) ) / Count(Days)`?
+                   - Let's try: Group by `season`, `hour`, and maybe `Day Type`? No, target doesn't have Day Type.
+                   - So, Group by `season`, `hour`.
+                   - Metric: `Average Demand Per Home` is already per home.
+                   - `Number of Homes` varies.
+                   - Total System Demand = Sum(Avg Demand * Num Homes).
+                   - We want the average total system demand for that hour in that season?
+                   - Let's assume we calculate `Total Demand` for each row = `Average Demand` * `Number of Homes`.
+                   - Then group by `season`, `hour`, and `End Use Category` (or `End Use`).
+                   - Sum the `Total Demand` for each category.
+                   - Then, since there are multiple days/months, we take the **mean** of these sums? Or just the sum?
+                   - If we sum all days in the season, the value would be huge.
+                   -

@@ -1,0 +1,170 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source: Contains metadata columns (`class`, `Description`, `analysis`, `uom`), a date column (`date`), and 24 hourly value columns (`value1` to `value24`).
+    *   Target: Contains `month` (string), `daytype` (string: 'weekday' or 'weekend'), and 24 hourly columns (`hr1` to `hr24`).
+    *   Row Count Change: Source has 182 rows, Target has 183 rows. This suggests that the transformation is not a simple 1-to-1 row mapping. However, looking at the target sample, we see multiple rows for the same month/daytype combination (e.g., two rows for 'January', 'weekend'). This implies that the target table preserves the granularity of individual days but aggregates or groups them by month and day type for labeling, or perhaps the source data has multiple entries per day?
+    *   Let's look closer at the source sample. The source has unique dates (e.g., 7/3/2011, 7/4/2011). The target has rows labeled by Month and DayType.
+    *   Wait, the target sample shows *multiple* rows for "January, weekend". If the source has one row per day, and the target has one row per day (just relabeled), the row counts should match. Why does the count change from 182 to 183?
+    *   Let's re-examine the target sample. It lists:
+        *   January, weekend (2 rows)
+        *   January, weekday (2 rows)
+        *   June, weekday (2 rows)
+        *   July, weekday (1 row)
+        *   July, weekend (1 row)
+    *   This looks like the target might be aggregating data? No, the values in `hr1` etc. are specific floats. If it were an average, we'd expect fewer rows. If it's just renaming, the row count should be identical.
+    *   Let's check the date range. Source sample shows dates in July 2011 and Dec 2011. Target sample shows January, June, July.
+    *   Hypothesis: The source table contains daily profiles. The target table also contains daily profiles, but the `month` and `daytype` columns are derived from the `date`. The row count discrepancy (182 vs 183) might be due to a specific date handling issue (e.g., a leap year, or a specific day being split/merged, or simply a typo in the problem description's row count note). However, in TbT tasks, usually, if the schema changes from "date" to "month/daytype", and the hourly values remain distinct per row, it's a row-wise transformation.
+    *   Let's look at the values.
+        *   Source Row 1: 7/3/2011 (Sunday). Values: 1.0243, 0.8341...
+        *   Target Row "July, weekend": 0.8341, 0.6966... Wait.
+        *   Let's check Source Row 2: 7/4/2011 (Monday). Values: 0.8662, 0.7951...
+        *   Let's check Source Row 3: 7/5/2011 (Tuesday). Values: 0.8364, 0.7379...
+        *   Let's check Target Row "July, weekend" (last row in sample): `hr1`=0.8341, `hr2`=0.6966...
+        *   Let's check Source Row 1 (7/3/2011, Sunday): `value1`=1.0243, `value2`=0.8341...
+        *   There is a shift? Or maybe the target "July, weekend" corresponds to a different date?
+        *   Let's look at Target Row "July, weekday" (second to last): `hr1`=0.9794...
+        *   Let's look at Source Row 4 (7/6/2011, Wednesday): `value1`=1.1297...
+        *   This doesn't match directly.
+    *   Let's reconsider the aggregation. If the target has 183 rows and source has 182, and the target groups by Month/DayType, maybe it's calculating a *typical* day profile? But there are multiple rows for "January, weekend".
+    *   Actually, look at the target sample again.
+        *   Row 1: Jan, weekend, hr1=1.3683
+        *   Row 2: Jan, weekend, hr1=0.7882
+        *   These are different values. This implies the target is NOT an aggregate (like mean). It preserves individual day data.
+    *   Why the row count difference? 182 days in a non-leap year? 2011 is not a leap year. 365 days. 182 is roughly half a year.
+    *   Maybe the source data is only for specific months?
+    *   Let's look at the mapping of columns.
+        *   `date` -> `month` (extract month name) and `daytype` (weekday/weekend).
+        *   `value1` -> `hr1`, ..., `value24` -> `hr24`.
+    *   If the transformation is simply:
+        1. Parse `date`.
+        2. Create `month` column with full month name (e.g., "January").
+        3. Create `daytype` column: "weekday" if Mon-Fri, "weekend" if Sat-Sun.
+        4. Rename `value1`..`value24` to `hr1`..`hr24`.
+        5. Select columns.
+    *   Does this explain the row count? If the source has 182 rows, the output should have 182 rows. The prompt says target has 183. This is a strong hint that something is adding a row.
+    *   Could it be that one day is split? Or a header row is included? No, pandas DataFrames don't include headers in row counts usually.
+    *   Is it possible that `date` parsing creates a new row? Unlikely.
+    *   Is it possible that the source has duplicate dates that are being aggregated? No, the target has distinct values for same month/daytype.
+    *   Let's look at the sample data values again very carefully.
+        *   Source 7/3/2011 (Sun): v1=1.0243, v2=0.8341, v3=0.7676...
+        *   Target "July, weekend" (last row): hr1=0.8341, hr2=0.6966...
+        *   Target "July, weekday" (2nd last): hr1=0.9794...
+        *   Source 7/4/2011 (Mon): v1=0.8662...
+        *   Source 7/5/2011 (Tue): v1=0.8364...
+        *   Source 7/6/2011 (Wed): v1=1.1297...
+        *   None of these match the target "July" rows exactly in the first column.
+        *   However, look at Target "July, weekend" hr1=0.8341. This matches Source 7/3/2011 `value2`.
+        *   Target "July, weekend" hr2=0.6966. Source 7/3/2011 `value3`=0.7676. No.
+        *   Let's check if the target is shifted.
+        *   Maybe the target "July, weekend" row corresponds to 7/3/2011 but the values are from a different source row?
+        *   Let's check the Target "January, weekend" rows.
+        *   Source has Dec 2011 dates. Dec 31, 2011 is a Saturday.
+        *   Source 12/31/2011: v1=0.8143, v2=0.8210...
+        *   Target "January, weekend" row 1: hr1=1.3683.
+        *   Target "January, weekend" row 2: hr1=0.7882.
+        *   This doesn't match Dec 31.
+    *   Let's reconsider the "182 to 183" clue.
+    *   If the source has 182 rows, and the target has 183, and the operation is row-wise, where does the extra row come from?
+    *   Perhaps the `date` column contains a value that parses into two days? Unlikely.
+    *   Perhaps there is a `groupby` operation that results in more rows? No, groupby reduces rows.
+    *   Perhaps an `explode` operation?
+    *   Let's look at the `analysis` column. It is 'HourlyLoad'.
+    *   Let's look at the `class` column. 'RES'.
+    *   Let's look at the `Description`. 'RES01'.
+    *   These are constant.
+    *   What if the target table includes a "Total" or "Average" row? But the values are floats like the hourly data.
+    *   What if the source data has a row that is being split?
+    *   Let's look at the target columns again: `month`, `daytype`, `hr1`...`hr24`.
+    *   Let's assume the standard transformation:
+        1.  Parse `date`.
+        2.  Extract `month` name.
+        3.  Determine `daytype`.
+        4.  Rename values.
+    *   If I implement this, and the row count is off by 1, it might be due to a specific edge case in the data (e.g., a missing date in source that is filled in target? Or a duplicate in target?).
+    *   However, without seeing the full data, I must rely on the schema and sample. The sample shows a direct mapping of structure (1 row of hourly data -> 1 row of hourly data). The values in the sample *do not* match the source sample rows directly, which suggests the sample rows in the prompt are just *examples* of the format, not necessarily the *same* rows transformed. The prompt says "Source Table Sample" and "Desired Target Table Sample". It does not explicitly state that Target Row 1 is Source Row 1 transformed. In many TbT datasets, the samples are disjoint or from different parts of the dataset.
+    *   Therefore, the most logical transformation is the row-wise mapping.
+    *   Why 182 -> 183?
+        *   Maybe the source has 182 unique days, but one day has two entries in the target?
+        *   Or maybe the source has a row with `NaN` date that is dropped?
+        *   Or maybe the target includes a row for a date that wasn't in the source?
+        *   Given the strict instruction "The function must compute its result SOLELY from the `source` argument", I cannot add external data.
+        *   If the source has 182 rows, the output will have 182 rows unless I duplicate a row or split one.
+        *   Is there any column that suggests splitting? No.
+        *   Is there any aggregation that increases rows? No.
+        *   Could it be that `date` is not unique? If `date` is not unique, and we group by `month` and `daytype`, we would get fewer rows.
+        *   If we *don't* group, we keep all rows.
+        *   Let's assume the row count note is either a distractor, refers to a specific test case anomaly (like a header row being counted in one but not the other), or implies a very subtle operation.
+        *   However, looking at similar TbT problems, often "182 to 183" with hourly data might imply that a 24-hour period is being split or a specific day is treated differently.
+        *   But without evidence of splitting in the schema, the safest bet is the direct row-wise transformation.
+        *   Wait, look at the target sample again.
+        *   `January`, `weekend` appears twice.
+        *   `January`, `weekday` appears twice.
+        *   `June`, `weekday` appears twice.
+        *   `July`, `weekday` appears once.
+        *   `July`, `weekend` appears once.
+        *   This distribution (2, 2, 2, 1, 1) sums to 8 rows in the sample.
+        *   If the source had 8 rows corresponding to these, it would be 1-to-1.
+        *   I will proceed with the 1-to-1 row-wise transformation. The row count discrepancy might be due to the specific test file having a different number of rows or a specific edge case (like a leap day) that isn't visible in the schema. But the *logic* of the transformation is clearly:
+            1.  Derive `month` from `date`.
+            2.  Derive `daytype` from `date`.
+            3.  Rename `value` columns to `hr` columns.
+            4.  Drop metadata columns.
+
+    *   Refining `daytype`:
+        *   Standard definition: Monday-Friday = 'weekday', Saturday-Sunday = 'weekend'.
+        *   Pandas `dt.dayofweek`: 0=Mon, ..., 4=Fri, 5=Sat, 6=Sun.
+        *   So `daytype` = 'weekday' if `dayofweek` < 5 else 'weekend'.
+
+    *   Refining `month`:
+        *   Format: Full month name (e.g., "January").
+        *   Pandas `dt.strftime('%B')`.
+
+    *   Refining `hr` columns:
+        *   `value1` -> `hr1`
+        *   ...
+        *   `value24` -> `hr24`
+
+    *   Final Check on Row Count:
+        *   If the source has 182 rows, and I return 182 rows, and the target has 183, I might be missing a row.
+        *   Is it possible that the `date` column contains a string that represents a range? No, sample is '7/3/2011'.
+        *   Is it possible that one of the source rows is a "header" or "summary" row that needs to be expanded? The sample rows look like data.
+        *   Is it possible that the target includes a row for the *next* day if the last row is incomplete? No evidence.
+        *   I will stick to the direct transformation. The "182 to 183" might be an artifact of the specific benchmark file (e.g., one file has a trailing newline counted as a row in some parsers, or the target file has an extra empty row). In pandas, `read_csv` usually handles this. If the transformation is purely logical, 1-to-1 is the only robust assumption without more data.
+
+    *   Wait, could `daytype` be derived from `analysis` or `class`? No, `date` is the only temporal column.
+
+    *   Implementation Steps:
+        1.  Copy source.
+        2.  Parse `date` to datetime.
+        3.  Create `month` column using `dt.strftime('%B')`.
+        4.  Create `daytype` column using `dt.dayofweek`.
+        5.  Rename `value1`...`value24` to `hr1`...`hr24`.
+        6.  Select target columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column
+    df['date_parsed'] = pd.to_datetime(df['date'], format='%m/%d/%Y')
+    
+    # 2. Create 'month' column with full month name
+    df['month'] = df['date_parsed'].dt.strftime('%B')
+    
+    # 3. Create 'daytype' column: 'weekday' for Mon-Fri, 'weekend' for Sat-Sun
+    # dayofweek: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+    df['daytype'] = df['date_parsed'].dt.dayofweek.apply(lambda x: 'weekday' if x < 5 else 'weekend')
+    
+    # 4. Rename value columns to hr columns
+    rename_dict = {f'value{i}': f'hr{i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    
+    # 5. Define target columns
+    target_columns = ['month', 'daytype'] + [f'hr{i}' for i in range(1, 25)]
+    
+    # 6. Return the transformed dataframe with only target columns
+    return df[target_columns]
+```

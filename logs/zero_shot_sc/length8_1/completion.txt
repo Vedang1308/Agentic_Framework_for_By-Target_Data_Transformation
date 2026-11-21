@@ -1,0 +1,221 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Date/Time**: The `date` column is in string format (`'%m/%d/%Y %H:%M'`). We need to convert it to a pandas datetime object to extract temporal features.
+2.  **Extract Features**:
+    *   Extract the `Hour` (0-23) from the datetime.
+    *   Extract the `Month` (1-12) from the datetime.
+    *   Map the numeric month to its corresponding name (e.g., 1 -> 'January', 2 -> 'February', etc.) to align with the target column names.
+3.  **Handle Missing/Invalid Values**: Looking at the target sample, there are values like `85` which seem unusually high compared to the source values (mostly 22-26). In many sensor datasets, `85` might be a placeholder for missing data or an error code. However, looking at the source sample, we don't see 85. Let's look closer at the target.
+    *   Target `January` at Hour 0 is `24.562`. Source has `7/28/2019 4:50` -> 24.562. Wait, July is month 7. January is month 1.
+    *   Let's check the mapping.
+    *   Source: `7/28/2019 4:50` (Hour 4, Month July) -> Value 24.562.
+    *   Target: Hour 4 row (not shown in snippet, but let's infer).
+    *   Target: Hour 0, January column -> 24.562.
+    *   Wait, the source sample shows `7/28/2019 4:50` with value `24.562`.
+    *   The target shows `Hour 0`, `January` = `24.562`.
+    *   This implies a potential mismatch in my initial quick glance or a specific aggregation logic.
+    *   Let's look at another point. Source: `1/1/2021 0:00` -> Value `22.437`.
+    *   Target: `Hour 0`, `January` -> `24.562`.
+    *   This suggests that the value `24.562` in the target for Jan/Hour 0 does *not* come from the source row `1/1/2021 0:00`.
+    *   Let's re-read the source sample carefully.
+        *   `7/28/2019 4:50` -> 24.562. (Month 7, Hour 4)
+        *   `7/28/2019 5:00` -> 24.625. (Month 7, Hour 5)
+    *   Let's look at the Target again.
+        *   Hour 0, January: 24.562.
+        *   Hour 0, July: 24.437.
+    *   There seems to be a disconnect. Is it possible the columns are shifted or the mapping is different?
+    *   Let's check `Hour 23`, `December` in Target: `25.75`.
+    *   Source: `12/31/2020 23:30` -> 22.062. `12/31/2020 23:40` -> 22.125. `12/31/2020 23:50` -> 22.312.
+    *   Average of those is ~22.16. Target is 25.75.
+    *   Let's check `Hour 23`, `January` in Target: `24.5`.
+    *   Let's check `Hour 23`, `July` in Target: `24.437`.
+    *   
+    *   Actually, let's look at the value `85`. In the target, `December` has many `85`s. `January` Hour 20, 21 are `85`.
+    *   Usually, in these benchmarks, if a value is missing in the source for a specific group, it might be filled with a default, or the aggregation handles NaNs.
+    *   However, the values don't seem to match a simple mean of the visible source rows.
+    *   Let's reconsider the standard operation: **Pivot Table**.
+    *   Group by `Hour` and `Month`.
+    *   Aggregate `cerc_logger_1`. What aggregation? Mean? Sum?
+    *   If I take the mean of `cerc_logger_1` for Hour 4, Month 7 (July):
+        *   Source has `7/28/2019 4:50` -> 24.562.
+        *   Are there other July 4 AM entries? The sample is small.
+    *   If the target `Hour 4, July` was visible, I could verify. It's not.
+    *   But wait, look at `Target[Hour=0, January] = 24.562`.
+    *   Look at `Source[7/28/2019 4:50] = 24.562`.
+    *   Is it possible the months are mislabeled in my head or the problem?
+    *   Source `7/28` is July. Target column `January` has `24.562` at Hour 0.
+    *   This is extremely suspicious. `24.562` appears in Source at Hour 4, Month 7.
+    *   It appears in Target at Hour 0, Month 1.
+    *   
+    *   Let's look at `Source[1/1/2021 0:00] = 22.437`.
+    *   Target `Hour 0, January` is `24.562`.
+    *   Target `Hour 0, July` is `24.437`.
+    *   
+    *   Let's look at `Source[7/28/2019 5:00] = 24.625`.
+    *   Target `Hour 5` is not shown.
+    *   
+    *   Let's look at `Source[12/31/2020 23:50] = 22.312`.
+    *   Target `Hour 23, December` = `25.75`.
+    *   
+    *   There is a strong possibility that the "85" values represent missing data in the target, and the other values are means. But why the mismatch between Source July/4 and Target Jan/0?
+    *   
+    *   **Hypothesis 1**: The source sample provided in the prompt is just a *snippet* and not representative of the full distribution, OR the aggregation is complex.
+    *   **Hypothesis 2**: There is a column mapping error in my interpretation.
+    *   **Hypothesis 3**: The target table is calculated from the *entire* dataset, and the sample rows in the source are just random samples. The value `24.562` in Target/Jan/Hour 0 might be the mean of *all* January Hour 0 readings in the full dataset. The fact that `24.562` also appears in the source snippet for July is a coincidence (or the sensor readings are very similar).
+    *   
+    *   Let's check the `85` value. In many environmental datasets, `85` or `999` etc are fill values. If the source data has missing values for certain months/hours, the pivot might result in NaN. If the target has `85`, it's likely `fillna(85)`.
+    *   
+    *   Let's assume the standard transformation:
+        1. Parse dates.
+        2. Extract Hour and Month Name.
+        3. GroupBy Hour and Month Name.
+        4. Aggregate `cerc_logger_1` using `mean`.
+        5. Pivot/Unstack so Months are columns.
+        6. Fill NaNs with `85` (based on the target sample showing 85 where data might be missing or sparse).
+        7. Sort by Hour.
+        8. Reset Index and Rename columns to match exactly.
+
+    *   Let's verify the `85` fill.
+        *   Target `December` has many `85`s.
+        *   Target `January` Hour 20, 21 are `85`.
+        *   This suggests that for those specific Hour/Month combinations, there was either no data or the mean was replaced by 85. Given `85` is an integer and the others are floats, it's highly likely a fill value.
+
+    *   Let's verify the aggregation function. `mean` is the most common for sensor data. `sum` would be huge. `count` would be small integers. The values like `24.562` are averages of floats.
+
+    *   **Refined Plan**:
+        1. Convert `date` to datetime.
+        2. Create `Hour` column (`dt.hour`).
+        3. Create `Month` column (`dt.month`).
+        4. Map `Month` numbers to names: `{1: 'January', ..., 12: 'December'}`.
+        5. Group by `Hour` and `Month` (names).
+        6. Calculate the `mean` of `cerc_logger_1`.
+        7. Unstack the `Month` index to make columns.
+        8. Fill missing values with `85`.
+        9. Ensure column order matches: `['Hour', 'January', ..., 'December']`.
+        10. Reset index to make `Hour` a column.
+        11. Convert `Hour` to int.
+        12. Convert month columns to float (though they likely already are).
+
+    *   **One Detail**: The target `Hour` column is `int64`. The month columns are `float64`.
+
+    *   **Checking the "85" again**:
+        *   If I look at `Target[Hour=2, December] = 23.5`.
+        *   If I look at `Target[Hour=3, December] = 85`.
+        *   This implies December data is sparse or missing for some hours.
+
+    *   **Code Structure**:
+        ```python
+        import pandas as pd
+
+        def transform(source: pd.DataFrame) -> pd.DataFrame:
+            # 1. Parse Date
+            df = source.copy()
+            df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+            
+            # 2. Extract Hour and Month Name
+            df['Hour'] = df['date'].dt.hour
+            df['Month'] = df['date'].dt.month.map({
+                1: 'January', 2: 'February', 3: 'March', 4: 'April',
+                5: 'May', 6: 'June', 7: 'July', 8: 'August',
+                9: 'September', 10: 'October', 11: 'November', 12: 'December'
+            })
+            
+            # 3. Aggregate
+            # Group by Hour and Month, take mean of cerc_logger_1
+            agg_df = df.groupby(['Hour', 'Month'])['cerc_logger_1'].mean()
+            
+            # 4. Pivot/Unstack
+            # Unstack Month to columns
+            pivot_df = agg_df.unstack(level='Month')
+            
+            # 5. Handle Missing Values
+            # Fill NaN with 85 as observed in target
+            pivot_df = pivot_df.fillna(85)
+            
+            # 6. Format Output
+            pivot_df = pivot_df.reset_index()
+            
+            # Ensure column order
+            month_cols = ['January', 'February', 'March', 'April', 'May', 'June', 
+                         'July', 'August', 'September', 'October', 'November', 'December']
+            
+            # Select and order columns
+            result = pivot_df[['Hour'] + month_cols]
+            
+            # Ensure types
+            result['Hour'] = result['Hour'].astype(int)
+            for col in month_cols:
+                result[col] = result[col].astype(float)
+                
+            return result
+        ```
+
+    *   **Self-Correction/Verification**:
+        *   Does `unstack` create columns for all months? If a month is missing entirely from the groupby, it might not appear. `reindex` or `fillna` handles NaNs, but if the column doesn't exist, it won't be there.
+        *   Better to ensure all month columns exist. `pivot_df.reindex(columns=month_cols)` before filling.
+        *   The `groupby` will only include combinations present in the data. If December is missing for Hour 3, the unstack will have NaN for that cell. `fillna(85)` will turn it to 85.
+        *   If a Month is completely missing from the dataset, the column won't exist. We should ensure all 12 month columns are present.
+
+    *   **Final Code Adjustment**:
+        Use `pivot_table` which handles missing combinations more gracefully by creating NaNs for all defined index/column pairs if specified, or just use `unstack` and then `reindex` the columns.
+
+    ```python
+    pivot_df = agg_df.unstack(level='Month')
+    # Ensure all month columns exist
+    pivot_df = pivot_df.reindex(columns=month_cols)
+    pivot_df = pivot_df.fillna(85)
+    ```
+
+    This looks robust.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    # Make a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Parse the date column
+    df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract Hour and Month Name
+    df['Hour'] = df['date'].dt.hour
+    month_map = {
+        1: 'January', 2: 'February', 3: 'March', 4: 'April',
+        5: 'May', 6: 'June', 7: 'July', 8: 'August',
+        9: 'September', 10: 'October', 11: 'November', 12: 'December'
+    }
+    df['Month'] = df['date'].dt.month.map(month_map)
+    
+    # 3. Aggregate by Hour and Month
+    # Calculate the mean of cerc_logger_1 for each Hour/Month combination
+    agg_df = df.groupby(['Hour', 'Month'])['cerc_logger_1'].mean()
+    
+    # 4. Pivot/Unstack to create columns for each month
+    pivot_df = agg_df.unstack(level='Month')
+    
+    # Define the exact target column names for months
+    month_cols = ['January', 'February', 'March', 'April', 'May', 'June', 
+                  'July', 'August', 'September', 'October', 'November', 'December']
+    
+    # Ensure all month columns are present (even if empty in source)
+    pivot_df = pivot_df.reindex(columns=month_cols)
+    
+    # 5. Fill missing values with 85 (as observed in target sample)
+    pivot_df = pivot_df.fillna(85)
+    
+    # 6. Reset index to make 'Hour' a column
+    pivot_df = pivot_df.reset_index()
+    
+    # 7. Select and order columns
+    target_columns = ['Hour'] + month_cols
+    result = pivot_df[target_columns]
+    
+    # 8. Ensure correct data types
+    result['Hour'] = result['Hour'].astype(int)
+    for col in month_cols:
+        result[col] = result[col].astype(float)
+        
+    return result[target_columns]
+```

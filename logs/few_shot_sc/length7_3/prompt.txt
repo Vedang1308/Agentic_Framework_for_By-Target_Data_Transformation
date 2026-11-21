@@ -1,0 +1,154 @@
+Here are worked examples demonstrating step-by-step reasoning and valid Python code:
+
+### Example 1 (Case length1_1)
+Source Schema: Strata_ID (int64), Strata (object), DT_STRATA (object), DOW (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)
+Target Schema: cst (object), 1:00..24:00 (float64)
+Source Sample: DT_STRATA sample: ['7/2/2016', '7/3/2016']; PCT_HOURLY_0100 sample: [0.000701, 0.000761]
+Target Sample: cst sample: ['Fri 01/01/2016', 'Sat 01/02/2016']; 1:00 sample: [0.001222, 0.001313]
+Step-by-Step Reasoning Plan:
+1. Analyze schemas: Source has date column 'DT_STRATA' and hourly columns 'PCT_HOURLY_0100' through 'PCT_HOURLY_2500'.
+2. Target schema requires column 'cst' with formatted date strings like 'Fri 01/01/2016' (%a %m/%d/%Y).
+3. Parse 'DT_STRATA' to datetime and format as '%a %m/%d/%Y' in column 'cst'.
+4. Rename hourly columns: 'PCT_HOURLY_0100' -> '1:00', ..., 'PCT_HOURLY_2400' -> '24:00'.
+5. Drop extra columns ('Strata_ID', 'Strata', 'DOW', 'PCT_HOURLY_2500') and align returned columns verbatim to target.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'{i}:00' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    return df[target_cols]
+```
+
+### Example 2 (Case length2_1)
+Source Schema: CST (object), 1:00..24:00:00 (float64)
+Target Schema: dt_strata (object), dow (int64), pct_hourly_0100..pct_hourly_2500 (float64)
+Source Sample: CST sample: ['Sat 12/01/2012', 'Sun 12/02/2012']; 1:00 sample: [0.9841, 0.9012]
+Target Sample: dt_strata sample: ['04/01/2009', '04/02/2009']; dow sample: [3, 4]; pct_hourly_0100 sample: [1.02, 0.93]
+Step-by-Step Reasoning Plan:
+1. Inspect date: Source 'CST' has format 'Day MM/DD/YYYY'. Split by whitespace to extract the date part.
+2. Convert to datetime, then format as '%m/%d/%Y' for 'dt_strata'.
+3. Compute 'dow' (day of week) where Monday=1 ... Sunday=7 using `dt.dt.dayofweek + 1`.
+4. Rename hourly columns: '1:00' -> 'pct_hourly_0100', ..., '24:00'/'24:00:00' -> 'pct_hourly_2400'.
+5. Target includes 'pct_hourly_2500' filled with 0. Add this column and select target columns verbatim.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    date_str = df['CST'].str.split(' ').str[-1]
+    dt = pd.to_datetime(date_str, format='%m/%d/%Y')
+    df['dt_strata'] = dt.dt.strftime('%m/%d/%Y')
+    df['dow'] = dt.dt.dayofweek + 1
+    rename_dict = {f'{i}:00': f'pct_hourly_{i:02d}00' for i in range(1, 24)}
+    if '24:00:00' in df.columns:
+        rename_dict['24:00:00'] = 'pct_hourly_2400'
+    elif '24:00' in df.columns:
+        rename_dict['24:00'] = 'pct_hourly_2400'
+    df = df.rename(columns=rename_dict)
+    df['pct_hourly_2500'] = 0
+    target_cols = ['dt_strata', 'dow'] + [f'pct_hourly_{i:02d}00' for i in range(1, 26)]
+    return df[target_cols]
+```
+
+### Example 3 (Case length3_1)
+Source Schema: Strata_ID (int64), Strata (object), DT_STRATA (object), DOW (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)
+Target Schema: date (object), Hour 1..Hour 24 (float64)
+Source Sample: DT_STRATA sample: ['7/2/2016']; PCT_HOURLY_0100 sample: [0.000701]
+Target Sample: date sample: ['01/01/2016']; Hour 1 sample: [0.001222]
+Step-by-Step Reasoning Plan:
+1. Analyze date: Source column 'DT_STRATA' has dates formatted as M/D/YYYY. Format as '%m/%d/%Y' in column 'date'.
+2. Map hour columns: 'PCT_HOURLY_{i:02d}00' maps to 'Hour {i}' for i=1..24.
+3. Select columns: 'date' followed by 'Hour 1' through 'Hour 24'. Drop unused columns.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['date'] = dt.dt.strftime('%m/%d/%Y')
+    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'Hour {i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    target_cols = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    return df[target_cols]
+```
+
+============================================================
+Now, synthesize the transformation function for the following case:
+
+### Benchmark Case: length7_3
+- Source sample rows: 12 rows (Note: test_0.csv may have different row count)
+- Target rows: 12 rows
+
+### Exact Target Columns (Must match verbatim):
+['month', 'day', 'hr1', 'hr2', 'hr3', 'hr4', 'hr5', 'hr6', 'hr7', 'hr8', 'hr9', 'hr10', 'hr11', 'hr12', 'hr13', 'hr14', 'hr15', 'hr16', 'hr17', 'hr18', 'hr19', 'hr20', 'hr21', 'hr22', 'hr23', 'hr24']
+
+### Source Schema and Types:
+Month (object), Daytype (object), 1:00 (float64), 2:00 (float64), 3:00 (float64), 4:00 (float64), 5:00 (float64), 6:00 (float64), 7:00 (float64), 8:00 (float64), 9:00 (float64), 10:00 (float64), 11:00 (float64), 12:00 (float64), 13:00 (float64), 14:00 (float64), 15:00 (float64), 16:00 (float64), 17:00 (float64), 18:00 (float64), 19:00 (float64), 20:00 (float64), 21:00 (float64), 22:00 (float64), 23:00 (float64), 24:00 (float64)
+
+### Target Schema and Types:
+month (object), day (object), hr1 (float64), hr2 (float64), hr3 (float64), hr4 (float64), hr5 (float64), hr6 (float64), hr7 (float64), hr8 (float64), hr9 (float64), hr10 (float64), hr11 (float64), hr12 (float64), hr13 (float64), hr14 (float64), hr15 (float64), hr16 (float64), hr17 (float64), hr18 (float64), hr19 (float64), hr20 (float64), hr21 (float64), hr22 (float64), hr23 (float64), hr24 (float64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- Month: ['Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug']
+- Daytype: ['WD', 'WE']
+- 1:00: [np.float64(0.6), np.float64(0.7), np.float64(0.5), np.float64(0.8)]
+- 2:00: [np.float64(0.6), np.float64(0.7), np.float64(0.5)]
+- 3:00: [np.float64(0.6), np.float64(0.5), np.float64(0.7)]
+- 4:00: [np.float64(0.6), np.float64(0.5), np.float64(0.4)]
+- 5:00: [np.float64(0.6), np.float64(0.5)]
+- 6:00: [np.float64(0.8), np.float64(0.7), np.float64(0.6), np.float64(0.5)]
+- 7:00: [np.float64(0.9), np.float64(0.7), np.float64(0.6), np.float64(0.5)]
+- 8:00: [np.float64(0.9), np.float64(0.8), np.float64(0.7), np.float64(0.6)]
+- 9:00: [np.float64(0.9), np.float64(1.0), np.float64(0.7), np.float64(0.8)]
+- 10:00: [np.float64(0.8), np.float64(1.0), np.float64(0.7), np.float64(0.9), np.float64(0.6)]
+- 11:00: [np.float64(0.8), np.float64(1.1), np.float64(0.7), np.float64(0.9), np.float64(1.0)]
+- 12:00: [np.float64(0.8), np.float64(1.1), np.float64(0.7), np.float64(0.9), np.float64(1.0)]
+- 13:00: [np.float64(0.8), np.float64(1.1), np.float64(0.7), np.float64(0.9), np.float64(1.0)]
+- 14:00: [np.float64(0.8), np.float64(1.1), np.float64(0.7), np.float64(0.9), np.float64(1.0)]
+- 15:00: [np.float64(0.8), np.float64(1.0), np.float64(0.7), np.float64(1.1)]
+- 16:00: [np.float64(0.8), np.float64(1.0), np.float64(0.7), np.float64(0.9), np.float64(1.1), np.float64(1.2)]
+- 17:00: [np.float64(0.9), np.float64(1.1), np.float64(0.8), np.float64(1.0), np.float64(1.2), np.float64(1.3)]
+- 18:00: [np.float64(1.0), np.float64(1.2), np.float64(0.9), np.float64(1.3)]
+- 19:00: [np.float64(1.1), np.float64(1.2), np.float64(0.9), np.float64(1.0), np.float64(1.3)]
+- 20:00: [np.float64(1.2), np.float64(1.0), np.float64(0.9)]
+- 21:00: [np.float64(1.1), np.float64(1.0), np.float64(0.9), np.float64(1.2)]
+- 22:00: [np.float64(1.0), np.float64(1.1), np.float64(0.9)]
+- 23:00: [np.float64(0.9), np.float64(0.7), np.float64(0.8), np.float64(1.0)]
+- 24:00: [np.float64(0.7), np.float64(0.8), np.float64(0.6), np.float64(0.9)]
+
+### Source Table Sample (training_0.csv):
+| Month   | Daytype   |   1:00 |   2:00 |   3:00 |   4:00 |   5:00 |   6:00 |   7:00 |   8:00 |   9:00 |   10:00 |   11:00 |   12:00 |   13:00 |   14:00 |   15:00 |   16:00 |   17:00 |   18:00 |   19:00 |   20:00 |   21:00 |   22:00 |   23:00 |   24:00 |
+|:--------|:----------|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|
+| Mar     | WD        |    0.6 |    0.6 |    0.6 |    0.6 |    0.6 |    0.8 |    0.9 |    0.9 |    0.9 |     0.8 |     0.8 |     0.8 |     0.8 |     0.8 |     0.8 |     0.8 |     0.9 |     1   |     1.1 |     1.2 |     1.1 |     1   |     0.9 |     0.7 |
+| Mar     | WE        |    0.7 |    0.7 |    0.5 |    0.6 |    0.6 |    0.7 |    0.7 |    0.9 |    1   |     1   |     1.1 |     1.1 |     1.1 |     1.1 |     1   |     1   |     1.1 |     1.2 |     1.2 |     1.2 |     1.1 |     1.1 |     0.9 |     0.8 |
+| Apr     | WD        |    0.5 |    0.5 |    0.5 |    0.5 |    0.5 |    0.6 |    0.7 |    0.8 |    0.7 |     0.7 |     0.7 |     0.7 |     0.7 |     0.7 |     0.7 |     0.7 |     0.8 |     0.9 |     0.9 |     1   |     1   |     0.9 |     0.7 |     0.6 |
+| Apr     | WE        |    0.6 |    0.5 |    0.5 |    0.5 |    0.5 |    0.5 |    0.6 |    0.7 |    0.8 |     0.9 |     0.9 |     0.9 |     0.9 |     0.9 |     0.8 |     0.8 |     0.9 |     0.9 |     1   |     1   |     1   |     0.9 |     0.8 |     0.7 |
+| Jul     | WD        |    0.8 |    0.7 |    0.7 |    0.6 |    0.6 |    0.6 |    0.7 |    0.8 |    0.8 |     0.9 |     0.9 |     1   |     1   |     1   |     1   |     1.1 |     1.1 |     1.2 |     1.2 |     1.2 |     1.2 |     1.1 |     1   |     0.9 |
+| Jul     | WE        |    0.7 |    0.6 |    0.6 |    0.6 |    0.5 |    0.6 |    0.6 |    0.7 |    0.8 |     0.9 |     1   |     1.1 |     1.1 |     1   |     1   |     1.1 |     1.2 |     1.2 |     1.2 |     1.2 |     1.2 |     1.1 |     1   |     0.9 |
+| Aug     | WD        |    0.8 |    0.7 |    0.7 |    0.6 |    0.6 |    0.7 |    0.7 |    0.8 |    0.9 |     0.9 |     0.9 |     1   |     1   |     1.1 |     1.1 |     1.1 |     1.2 |     1.3 |     1.3 |     1.2 |     1.2 |     1.1 |     1   |     0.9 |
+| Aug     | WE        |    0.7 |    0.7 |    0.6 |    0.6 |    0.6 |    0.6 |    0.6 |    0.7 |    0.9 |     1   |     1.1 |     1.1 |     1.1 |     1.1 |     1.1 |     1.2 |     1.3 |     1.3 |     1.3 |     1.2 |     1.2 |     1.1 |     1   |     0.9 |
+
+### Desired Target Table Sample (target.csv):
+| month     | day     |   hr1 |   hr2 |   hr3 |   hr4 |   hr5 |   hr6 |   hr7 |   hr8 |   hr9 |   hr10 |   hr11 |   hr12 |   hr13 |   hr14 |   hr15 |   hr16 |   hr17 |   hr18 |   hr19 |   hr20 |   hr21 |   hr22 |   hr23 |   hr24 |
+|:----------|:--------|------:|------:|------:|------:|------:|------:|------:|------:|------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|
+| September | weekday |   0.5 |   0.5 |   0.5 |   0.5 |   0.5 |   0.6 |   0.7 |   0.7 |   0.7 |    0.6 |    0.6 |    0.6 |    0.6 |    0.6 |    0.6 |    0.7 |    0.8 |    0.9 |    1   |    1   |    1   |    0.9 |    0.7 |    0.6 |
+| September | weekend |   0.6 |   0.6 |   0.5 |   0.5 |   0.5 |   0.5 |   0.6 |   0.7 |   0.8 |    0.8 |    0.9 |    0.9 |    0.9 |    0.9 |    0.9 |    1   |    1   |    1.1 |    1.1 |    1.1 |    1   |    1   |    0.8 |    0.7 |
+| October   | weekday |   0.5 |   0.5 |   0.4 |   0.4 |   0.5 |   0.6 |   0.7 |   0.7 |   0.7 |    0.6 |    0.6 |    0.6 |    0.6 |    0.6 |    0.6 |    0.7 |    0.8 |    0.9 |    1   |    1   |    1   |    0.9 |    0.7 |    0.6 |
+| October   | weekend |   0.5 |   0.5 |   0.5 |   0.5 |   0.5 |   0.5 |   0.6 |   0.7 |   0.7 |    0.8 |    0.8 |    0.9 |    0.8 |    0.8 |    0.8 |    0.7 |    0.8 |    1   |    1   |    1   |    0.9 |    0.9 |    0.7 |    0.6 |
+| January   | weekday |   0.8 |   0.7 |   0.7 |   0.7 |   0.7 |   0.9 |   1   |   1   |   1   |    0.9 |    0.9 |    0.9 |    0.9 |    0.9 |    0.9 |    1   |    1.1 |    1.3 |    1.4 |    1.3 |    1.2 |    1.1 |    1   |    0.9 |
+| January   | weekend |   0.8 |   0.8 |   0.7 |   0.7 |   0.7 |   0.8 |   0.8 |   0.9 |   1   |    1   |    1.1 |    1.1 |    1.1 |    1.1 |    1.1 |    1.2 |    1.3 |    1.4 |    1.4 |    1.3 |    1.2 |    1.1 |    1   |    0.9 |
+| February  | weekday |   0.7 |   0.7 |   0.7 |   0.7 |   0.7 |   0.9 |   0.9 |   1   |   1   |    0.9 |    0.9 |    0.9 |    0.9 |    0.9 |    0.9 |    0.9 |    1.1 |    1.2 |    1.3 |    1.3 |    1.2 |    1.1 |    0.9 |    0.8 |
+| February  | weekend |   0.8 |   0.8 |   0.7 |   0.7 |   0.7 |   0.8 |   0.8 |   1   |   1   |    1.1 |    1.1 |    1.1 |    1.1 |    1.1 |    1.1 |    1.1 |    1.2 |    1.4 |    1.4 |    1.3 |    1.2 |    1.1 |    1   |    0.9 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

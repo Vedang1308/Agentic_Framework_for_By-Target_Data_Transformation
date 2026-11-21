@@ -1,0 +1,104 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains daily records with columns `date`, `value1` through `value24`, and metadata columns (`class`, `Description`, etc.). The `value` columns represent hourly data for that day.
+    *   **Target**: Contains daily records with columns `dt_strata` (date), `dow` (day of week), `pct_hourly_0100` through `pct_hourly_2400`, and `pct_hourly_2500`.
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target might include a date not present in the specific sample provided in the prompt's "Source Table Sample" (which only shows a few rows from July and December 2011), or there is a slight mismatch in the sample description vs. the actual full dataset. However, the transformation logic should be row-wise (one source row -> one target row) based on the column mapping. The extra row in the target likely comes from the full dataset having one more day than the snippet shown, or potentially a generated row. Given the strict instruction "compute solely from source", we assume a 1-to-1 mapping of days. If the target has more rows, it implies the source *actually* has those rows in the full test case, even if the sample snippet is truncated. We will process all rows in the source.
+
+2.  **Date Parsing and Formatting**:
+    *   The source `date` column is in string format (e.g., '7/3/2011').
+    *   The target `dt_strata` column is also in string format (e.g., '1/1/2011').
+    *   We need to parse the source `date` into a datetime object to extract the Day of Week (`dow`) and then format it back to the required string format for `dt_strata`.
+    *   Note: The target `dow` is an integer. In pandas, `dt.dayofweek` returns 0 for Monday and 6 for Sunday. Let's verify with the sample.
+        *   Source sample: '7/3/2011'. July 3, 2011 was a Sunday.
+        *   Target sample: '7/2/2011' (Saturday) has `dow` 6. '7/3/2011' is not in the target sample snippet, but '1/1/2011' (Saturday) has `dow` 6. '1/2/2011' (Sunday) has `dow` 7? Wait.
+        *   Let's check '1/1/2011'. Jan 1, 2011 was a Saturday. Target `dow` is 6.
+        *   Let's check '1/2/2011'. Jan 2, 2011 was a Sunday. Target `dow` is 7.
+        *   Let's check '1/3/2011'. Jan 3, 2011 was a Monday. Target `dow` is 1.
+        *   This implies a 1-based indexing where Monday=1, ..., Sunday=7. This is standard Excel/ISO-like behavior but distinct from pandas' 0-6. We will map pandas `dayofweek` (0=Mon) to 1-7.
+
+3.  **Column Mapping and Renaming**:
+    *   Source `value1` corresponds to `pct_hourly_0100`.
+    *   Source `value2` corresponds to `pct_hourly_0200`.
+    *   ...
+    *   Source `value24` corresponds to `pct_hourly_2400`.
+    *   We need to rename these columns.
+
+4.  **Handling `pct_hourly_2500`**:
+    *   The target has a column `pct_hourly_2500` with type `int64`.
+    *   In the sample target rows, this column is always `0`.
+    *   Since there is no `value25` in the source, and the values are consistently 0, we will create this column filled with 0s.
+
+5.  **Data Type Conversion**:
+    *   `dt_strata`: String.
+    *   `dow`: Integer.
+    *   `pct_hourly_*`: Float (except 2500 which is int).
+
+6.  **Implementation Steps**:
+    *   Parse `date` column to datetime.
+    *   Create `dt_strata` by formatting the datetime back to `%m/%d/%Y`.
+    *   Create `dow` by calculating `dayofweek + 1`.
+    *   Rename `value1`...`value24` to `pct_hourly_0100`...`pct_hourly_2400`.
+    *   Add `pct_hourly_2500` column with value 0.
+    *   Select and order columns to match target schema.
+    *   Ensure correct data types.
+
+### Python Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column
+    # The source date format is '%m/%d/%Y'
+    df['date_parsed'] = pd.to_datetime(df['date'], format='%m/%d/%Y')
+    
+    # 2. Create dt_strata
+    # Format back to '%m/%d/%Y' as seen in target sample
+    df['dt_strata'] = df['date_parsed'].dt.strftime('%m/%d/%Y')
+    
+    # 3. Create dow (Day of Week)
+    # Pandas dayofweek: 0=Monday, ..., 6=Sunday
+    # Target sample: 1/1/2011 (Saturday) -> 6, 1/2/2011 (Sunday) -> 7, 1/3/2011 (Monday) -> 1
+    # This implies 1=Monday, ..., 7=Sunday
+    df['dow'] = df['date_parsed'].dt.dayofweek + 1
+    
+    # 4. Rename value columns to pct_hourly columns
+    # value1 -> pct_hourly_0100, ..., value24 -> pct_hourly_2400
+    rename_map = {}
+    for i in range(1, 25):
+        old_col = f'value{i}'
+        new_col = f'pct_hourly_{i:04d}'
+        rename_map[old_col] = new_col
+    
+    df = df.rename(columns=rename_map)
+    
+    # 5. Add pct_hourly_2500 column
+    # Based on target sample, this is always 0 and is an integer
+    df['pct_hourly_2500'] = 0
+    
+    # 6. Define target columns in the correct order
+    target_columns = [
+        'dt_strata', 'dow', 
+        'pct_hourly_0100', 'pct_hourly_0200', 'pct_hourly_0300', 'pct_hourly_0400', 
+        'pct_hourly_0500', 'pct_hourly_0600', 'pct_hourly_0700', 'pct_hourly_0800', 
+        'pct_hourly_0900', 'pct_hourly_1000', 'pct_hourly_1100', 'pct_hourly_1200', 
+        'pct_hourly_1300', 'pct_hourly_1400', 'pct_hourly_1500', 'pct_hourly_1600', 
+        'pct_hourly_1700', 'pct_hourly_1800', 'pct_hourly_1900', 'pct_hourly_2000', 
+        'pct_hourly_2100', 'pct_hourly_2200', 'pct_hourly_2300', 'pct_hourly_2400', 
+        'pct_hourly_2500'
+    ]
+    
+    # 7. Select and return the final dataframe
+    # Ensure dt_strata is object (string), dow is int64, and hourly cols are float64 (except 2500)
+    df['dt_strata'] = df['dt_strata'].astype('object')
+    df['dow'] = df['dow'].astype('int64')
+    df['pct_hourly_2500'] = df['pct_hourly_2500'].astype('int64')
+    
+    # The hourly columns should be float64. They are already float64 from source.
+    
+    return df[target_columns]
+```

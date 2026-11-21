@@ -1,0 +1,176 @@
+Step-by-Step Reasoning Plan:
+1.  **Parse Timestamps and Extract Features**:
+    *   The source column `time` contains timestamps (e.g., '2012-07-02 00:15:00.000').
+    *   Convert `time` to datetime.
+    *   Extract the `hour` component (0-23).
+    *   Determine the `season` based on the month. Standard meteorological seasons are:
+        *   Spring: March, April, May (3, 4, 5)
+        *   Summer: June, July, August (6, 7, 8)
+        *   Autumn: September, October, November (9, 10, 11)
+        *   Winter: December, January, February (12, 1, 2)
+        *   *Note*: Looking at the target sample, we see 'Summer', 'Winter', 'Spring'. We need to verify if 'Autumn' exists or if it's grouped differently. Given standard definitions, we'll map months to seasons.
+
+2.  **Map Source Columns to Target Columns**:
+    *   Identify which source columns contribute to each target column. The target columns represent aggregated energy usage categories.
+    *   `hvac`: Likely sum of heating, cooling, fans, and pumps related to HVAC.
+        *   Candidates: `electricity_heating_kwh`, `electricity_cooling_kwh`, `electricity_fans_heating_kwh`, `electricity_fans_cooling_kwh`, `electricity_pumps_heating_kwh`, `electricity_pumps_cooling_kwh`.
+        *   Let's check the magnitude. Source `net_site_electricity_kwh` is ~800k-900k per row (15 mins). Target `hvac` is ~1e7 to 1e8.
+        *   There are 4 rows per hour (15-min intervals). 17568 rows / 4 = 4392 hours.
+        *   Target has 72 rows. 72 rows = 24 hours * 3 seasons? Or 24 hours * 4 seasons? The sample shows Summer, Winter, Spring. It doesn't show Autumn. Let's assume 4 seasons for now, but if Autumn is missing in sample, it might be empty or not present in the data range. Wait, 17568 rows is exactly 1 year of 15-min data (365 * 24 * 4 = 35040? No. 365*96 = 35040. 17568 is half a year? Or maybe just specific data).
+        *   Let's look at the aggregation. Target `hour` is 0-23. Target `season` is categorical. This implies grouping by `season` and `hour`.
+        *   Aggregation operation: Since we go from 15-min intervals to hourly seasonal averages/sums, and the values are large, it's likely a **Sum** of the 15-minute intervals for all days in that season for that hour.
+        *   Let's verify the `hvac` calculation.
+            *   Source `electricity_heating_kwh` + `electricity_cooling_kwh` + `electricity_fans_heating_kwh` + `electricity_fans_cooling_kwh` + `electricity_pumps_heating_kwh` + `electricity_pumps_cooling_kwh`.
+            *   Let's check one sample row: 0.13 + 406631 + 1.07 + 83543.4 + 0.00014 + 0 = ~490k.
+            *   If we sum 4 rows (1 hour), it's ~2M.
+            *   Target `hvac` for Summer Hour 19 is 9.5e7.
+            *   How many days in Summer? ~91 days. 91 * 2M = 1.8e8. This is in the same order of magnitude as 9.5e7. So the operation is **Sum** over all timestamps in that season/hour bucket.
+
+    *   `water_heating`: `electricity_water_systems_kwh`? Or `electricity_heating_kwh`? Usually "water heating" is distinct from space heating. Let's look for a specific column. `electricity_water_systems_kwh` seems most likely.
+    *   `refrigerator`: `electricity_refrigerator_kwh`.
+    *   `clothes_washer`: `electricity_clothes_washer_kwh`.
+    *   `clothes_dryer`: `electricity_clothes_dryer_kwh`.
+    *   `dishwasher`: `electricity_dishwasher_kwh`.
+    *   `cooking_range`: `electricity_cooking_range_kwh`.
+    *   `pool_spa_pumps`: `electricity_pool_pump_kwh` + `electricity_hot_tub_pump_kwh`.
+    *   `interior_lighting`: `electricity_interior_lighting_kwh`.
+    *   `exterior_lighting`: `electricity_exterior_lighting_kwh`.
+    *   `lighting`: `interior_lighting` + `exterior_lighting`.
+    *   `plug`: `electricity_plug_loads_kwh`.
+    *   `pool_spa_heaters`: `electricity_pool_heater_kwh` + `electricity_hot_tub_heater_kwh`.
+
+    *   Refining `hvac`:
+        *   Does it include central system components?
+        *   `electricity_central_system_heating_kwh`, `electricity_central_system_cooling_kwh`, `electricity_central_system_pumps_heating_kwh`, `electricity_central_system_pumps_cooling_kwh`.
+        *   Usually, specific component columns are subsets of the main category columns, or the main category is the sum. In many datasets, `electricity_heating_kwh` is the total. Let's assume the top-level categories (`electricity_heating_kwh`, `electricity_cooling_kwh`, etc.) are the correct ones to sum, as they represent the total load for that category. If we sum the sub-components, we might double count or miss things.
+        *   Let's try: `hvac` = `electricity_heating_kwh` + `electricity_cooling_kwh` + `electricity_fans_heating_kwh` + `electricity_fans_cooling_kwh` + `electricity_pumps_heating_kwh` + `electricity_pumps_cooling_kwh`.
+
+3.  **Aggregation**:
+    *   Group by `season` and `hour`.
+    *   Sum the relevant columns for each group.
+    *   Reset index.
+
+4.  **Formatting**:
+    *   Ensure column names match the target exactly.
+    *   Ensure `season` values are 'Spring', 'Summer', 'Autumn', 'Winter'. (Note: Target sample doesn't show Autumn, but it should be calculated if data exists. If no data, it won't appear in the groupby result, which is fine).
+    *   Sort the output? The target sample isn't strictly sorted by season/hour (Summer 19, Winter 4, Winter 6...). However, deterministic output usually requires sorting. I will sort by `season` (alphabetical: Autumn, Spring, Summer, Winter) then `hour`. Or perhaps the order doesn't matter as long as content is correct. I'll stick to a standard sort.
+
+5.  **Refining Season Logic**:
+    *   Month 12, 1, 2 -> Winter
+    *   Month 3, 4, 5 -> Spring
+    *   Month 6, 7, 8 -> Summer
+    *   Month 9, 10, 11 -> Autumn
+
+6.  **Code Construction**:
+    *   Parse `time`.
+    *   Create `hour` and `season` columns.
+    *   Define helper columns for the sums.
+    *   GroupBy and Sum.
+    *   Rename columns to target names.
+    *   Select and return.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # 1. Parse time and extract hour and season
+    df['time_dt'] = pd.to_datetime(df['time'])
+    df['hour'] = df['time_dt'].dt.hour
+    
+    # Determine season based on month
+    # Winter: 12, 1, 2
+    # Spring: 3, 4, 5
+    # Summer: 6, 7, 8
+    # Autumn: 9, 10, 11
+    def get_season(month):
+        if month in [12, 1, 2]:
+            return 'Winter'
+        elif month in [3, 4, 5]:
+            return 'Spring'
+        elif month in [6, 7, 8]:
+            return 'Summer'
+        else:
+            return 'Autumn'
+            
+    df['season'] = df['time_dt'].dt.month.apply(get_season)
+    
+    # 2. Calculate intermediate aggregated columns
+    # hvac: Sum of heating, cooling, fans, and pumps
+    df['hvac_raw'] = (df['electricity_heating_kwh'] + 
+                      df['electricity_cooling_kwh'] + 
+                      df['electricity_fans_heating_kwh'] + 
+                      df['electricity_fans_cooling_kwh'] + 
+                      df['electricity_pumps_heating_kwh'] + 
+                      df['electricity_pumps_cooling_kwh'])
+    
+    # water_heating
+    df['water_heating_raw'] = df['electricity_water_systems_kwh']
+    
+    # refrigerator
+    df['refrigerator_raw'] = df['electricity_refrigerator_kwh']
+    
+    # clothes_washer
+    df['clothes_washer_raw'] = df['electricity_clothes_washer_kwh']
+    
+    # clothes_dryer
+    df['clothes_dryer_raw'] = df['electricity_clothes_dryer_kwh']
+    
+    # dishwasher
+    df['dishwasher_raw'] = df['electricity_dishwasher_kwh']
+    
+    # cooking_range
+    df['cooking_range_raw'] = df['electricity_cooking_range_kwh']
+    
+    # pool_spa_pumps: pool pump + hot tub pump
+    df['pool_spa_pumps_raw'] = df['electricity_pool_pump_kwh'] + df['electricity_hot_tub_pump_kwh']
+    
+    # interior_lighting
+    df['interior_lighting_raw'] = df['electricity_interior_lighting_kwh']
+    
+    # exterior_lighting
+    df['exterior_lighting_raw'] = df['electricity_exterior_lighting_kwh']
+    
+    # lighting: sum of interior and exterior
+    df['lighting_raw'] = df['interior_lighting_raw'] + df['exterior_lighting_raw']
+    
+    # plug
+    df['plug_raw'] = df['electricity_plug_loads_kwh']
+    
+    # pool_spa_heaters: pool heater + hot tub heater
+    df['pool_spa_heaters_raw'] = df['electricity_pool_heater_kwh'] + df['electricity_hot_tub_heater_kwh']
+    
+    # 3. Aggregate by season and hour
+    agg_cols = {
+        'hvac_raw': 'hvac',
+        'water_heating_raw': 'water_heating',
+        'refrigerator_raw': 'refrigerator',
+        'clothes_washer_raw': 'clothes_washer',
+        'clothes_dryer_raw': 'clothes_dryer',
+        'dishwasher_raw': 'dishwasher',
+        'cooking_range_raw': 'cooking_range',
+        'pool_spa_pumps_raw': 'pool_spa_pumps',
+        'interior_lighting_raw': 'interior_lighting',
+        'exterior_lighting_raw': 'exterior_lighting',
+        'lighting_raw': 'lighting',
+        'plug_raw': 'plug',
+        'pool_spa_heaters_raw': 'pool_spa_heaters'
+    }
+    
+    # Group by season and hour, sum the raw columns
+    grouped = df.groupby(['season', 'hour'], as_index=False).agg(agg_cols)
+    
+    # 4. Sort and format
+    # Sort by season (alphabetical) and hour to ensure deterministic output
+    # Note: The target sample order is not strictly alphabetical, but standard practice is sorted.
+    # If the target implies a specific order, we might need to adjust. 
+    # Given the randomness in the sample snippet, sorted is the safest generalization.
+    grouped = grouped.sort_values(['season', 'hour']).reset_index(drop=True)
+    
+    # Ensure column order matches target
+    target_columns = ['season', 'hour', 'hvac', 'water_heating', 'refrigerator', 'clothes_washer', 'clothes_dryer', 'dishwasher', 'cooking_range', 'pool_spa_pumps', 'interior_lighting', 'exterior_lighting', 'lighting', 'plug', 'pool_spa_heaters']
+    
+    return grouped[target_columns]
+```

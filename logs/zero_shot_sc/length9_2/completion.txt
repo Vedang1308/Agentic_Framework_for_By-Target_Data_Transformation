@@ -1,0 +1,255 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `PROFILE_CLASS`, `YEAR`, `MONTH`, `DAY`, `HOUR`, `NUMBER_OF_RANGES`, multiple `LOW_i`/`HIGH_i` columns, `CONSTANT`, multiple `COEFF_i` columns, and `LOSS_FACTOR`.
+    *   **Target**: Contains `season`, `daytype`, `hour`, `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end`.
+    *   **Observation**: The row count is identical (105,132). This suggests a row-wise transformation or a join/merge operation that preserves row count, rather than an aggregation that reduces rows. However, looking at the data:
+        *   Source `HOUR` values like 100, 200, 2100 map directly to Target `hour`.
+        *   Source `PROFILE_CLASS` (MP1, TR3) seems to map to `daytype` (WEEKDAY, WEEKEND) and potentially influences `season`.
+        *   Source `MONTH` likely determines `season`.
+        *   The `constant` and `coefficient` in the target are single values per row, whereas the source has `CONSTANT` and multiple `COEFF_i`.
+        *   The `low_end` and `high_end` in the target are consistently `-999` and `99999`.
+        *   The `temperature_range` in the target is consistently `100998` (which is $99999 - (-999)$).
+
+2.  **Determine Column Mappings and Transformations**:
+    *   **`hour`**: Directly from source `HOUR`.
+    *   **`low_end`**: Always `-999`.
+    *   **`high_end`**: Always `99999`.
+    *   **`temperature_range`**: Always `100998` (calculated as `high_end - low_end`).
+    *   **`season`**: Derived from `MONTH`.
+        *   Standard meteorological seasons:
+            *   Winter: Dec (12), Jan (1), Feb (2)
+            *   Spring: Mar (3), Apr (4), May (5)
+            *   Summer: Jun (6), Jul (7), Aug (8)
+            *   Autumn: Sep (9), Oct (10), Nov (11)
+        *   Let's verify with sample data:
+            *   Source Row 1: `MONTH`=1 (Jan). Target `season`="SPRING"? Wait. The sample target for the first 4 rows (Source `MONTH`=1, `DAY`=1, `HOUR`=100-400) shows `season`="SPRING". This contradicts standard meteorological definitions where Jan is Winter.
+            *   Let's look at the other sample rows. Source `MONTH`=12 (Dec). Target `season`="WINTER".
+            *   This implies a specific mapping. Let's look closer.
+            *   Row 1-4: Month 1 -> Spring.
+            *   Row 5-8: Month 12 -> Winter.
+            *   This is unusual. Let's re-read the sample carefully.
+            *   Source: `PROFILE_CLASS` MP1, Month 1. Target: `season` SPRING, `daytype` WEEKDAY.
+            *   Source: `PROFILE_CLASS` TR3, Month 12. Target: `season` WINTER, `daytype` WEEKEND.
+            *   Is `season` derived from `PROFILE_CLASS`?
+                *   MP1 -> SPRING?
+                *   TR3 -> WINTER?
+            *   Or is it derived from `MONTH`?
+                *   Month 1 -> SPRING?
+                *   Month 12 -> WINTER?
+            *   Let's check if there are other months in the full dataset. The prompt says "Distinct values... YEAR: [2015]". It doesn't list distinct months.
+            *   However, usually, these benchmarks follow standard logic or explicit mappings.
+            *   Let's look at `daytype`.
+                *   MP1 -> WEEKDAY.
+                *   TR3 -> WEEKEND.
+                *   This suggests `daytype` is derived from `PROFILE_CLASS`.
+            *   If `daytype` is from `PROFILE_CLASS`, is `season` also from `PROFILE_CLASS`?
+                *   If MP1 is Spring and TR3 is Winter, we need to know if other profile classes exist.
+            *   Alternative theory: `season` is derived from `MONTH` but using a non-standard calendar? Or perhaps the sample is misleading?
+            *   Let's look at the `constant` and `coefficient` values.
+                *   Source Row 1: `CONSTANT`=444.091, `COEFF_1`=-5.38093, `COEFF_2`=0.831064.
+                *   Target Row 1: `constant`=36.1849, `coefficient`=-0.256553.
+                *   How do we get from Source to Target `constant`/`coefficient`?
+                *   There is a `LOSS_FACTOR` column.
+                *   Maybe `constant` = `CONSTANT` / `LOSS_FACTOR`?
+                    *   444.091 / 1.05365 ≈ 421.5. No.
+                    *   444.091 * 1.05365 ≈ 467.8. No.
+                *   Maybe it involves `COEFF`s?
+                *   Let's look at Target `coefficient`=-0.256553.
+                *   Source `COEFF_1`=-5.38093, `COEFF_2`=0.831064.
+                *   Is there a relationship with `HOUR`?
+                *   Let's look at the structure of the target. It has *one* coefficient and *one* constant per row. The source has multiple coefficients.
+                *   The source has `NUMBER_OF_RANGES`.
+                *   In the sample, `NUMBER_OF_RANGES` is 2 for the first 4 rows.
+                *   Maybe the target `coefficient` is a weighted average or specific selection?
+                *   Wait, look at the target `constant` and `coefficient` values again.
+                *   Target `constant` ~36. Target `coefficient` ~-0.25.
+                *   Source `CONSTANT` ~444. Source `COEFF` ~-5, 0.8.
+                *   This looks like a scaling issue.
+                *   Let's check `LOSS_FACTOR`. 1.05365.
+                *   444.091 / 1.05365 = 421.5.
+                *   What if `constant` in target is actually `CONSTANT` from source divided by something else?
+                *   Let's look at the `low_end` and `high_end`. They are fixed.
+                *   This implies the "temperature_range" is fixed.
+                *   If the range is fixed, maybe the coefficients are normalized?
+
+    *   **Re-evaluating the Transformation Logic**:
+        The problem might be simpler than it appears if we look at the *structure* of the data.
+        The source table has `LOW_1...LOW_5` and `HIGH_1...HIGH_5`.
+        The target table has `low_end` and `high_end`.
+        In the target, `low_end` is always -999 and `high_end` is always 99999.
+        In the source, `LOW_1` is always -999. `HIGH_4` and `HIGH_5` often contain 99999 or NaN.
+        
+        Let's look at the `season` and `daytype` mapping again.
+        Sample 1: `PROFILE_CLASS`='MP1', `MONTH`=1 -> `season`='SPRING', `daytype`='WEEKDAY'.
+        Sample 2: `PROFILE_CLASS`='TR3', `MONTH`=12 -> `season`='WINTER', `daytype`='WEEKEND'.
+        
+        Hypothesis 1: `daytype` is mapped from `PROFILE_CLASS`.
+        Hypothesis 2: `season` is mapped from `MONTH`.
+        
+        Let's try to find a standard mapping for `MONTH` to `SEASON` that fits:
+        Month 1 -> Spring?
+        Month 12 -> Winter?
+        
+        Standard Meteorological:
+        Jan (1) -> Winter.
+        Dec (12) -> Winter.
+        
+        Standard Calendar (School year?):
+        Jan -> Winter.
+        
+        Is it possible `season` is derived from `PROFILE_CLASS` as well?
+        If MP1 -> Spring and TR3 -> Winter.
+        
+        Let's look at the `constant` and `coefficient` calculation.
+        Target `constant` = 36.1849.
+        Source `CONSTANT` = 444.091.
+        Source `LOSS_FACTOR` = 1.05365.
+        
+        Let's try: `Target Constant` = `Source CONSTANT` / `Source LOSS_FACTOR` / 12? No.
+        
+        Let's look at the `coefficient`.
+        Target `coefficient` = -0.256553.
+        Source `COEFF_1` = -5.38093.
+        Source `COEFF_2` = 0.831064.
+        
+        Is it possible that the target table is an *aggregation* or *unpivot*?
+        No, row counts are identical.
+        
+        Let's look at the `HOUR` column.
+        Source: 100, 200, 300, 400.
+        Target: 100, 200, 300, 400.
+        
+        Let's look at the values again.
+        Source `CONSTANT` 444.091. Target `constant` 36.1849.
+        Ratio: 444.091 / 36.1849 ≈ 12.27.
+        
+        Source `COEFF_1` -5.38093. Target `coefficient` -0.256553.
+        Ratio: -5.38093 / -0.256553 ≈ 21.0.
+        
+        This doesn't look like a simple scalar multiplication.
+        
+        **Crucial Insight**:
+        Look at the target `temperature_range`: 100998.
+        Look at source `LOW_1`: -999. `HIGH_1`: varies.
+        
+        Wait, look at the target `low_end` and `high_end`. They are constant.
+        This suggests that the target table represents a *single* range for all rows, or the specific range being queried is the global min/max.
+        
+        However, the `constant` and `coefficient` change per row.
+        
+        Let's reconsider the `season` and `daytype`.
+        If `PROFILE_CLASS` determines `daytype`:
+        MP1 -> WEEKDAY
+        TR3 -> WEEKEND
+        
+        If `MONTH` determines `season`:
+        Month 1 -> SPRING?
+        Month 12 -> WINTER?
+        
+        Let's assume there is a mapping dictionary for `PROFILE_CLASS` to `daytype` and `season`.
+        But `season` usually depends on time.
+        
+        Let's look at the provided sample again.
+        Row 1: Month 1, Day 1. 2015-01-01 was a Thursday.
+        Row 5: Month 12, Day 31. 2015-12-31 was a Thursday.
+        
+        If `daytype` was derived from `DAY` of week, both would be WEEKDAY.
+        But Row 5 is WEEKEND.
+        So `daytype` is NOT derived from the calendar day of the week.
+        It is likely derived from `PROFILE_CLASS`.
+        
+        So:
+        `daytype` = Map(`PROFILE_CLASS`)
+        `season` = Map(`MONTH`) OR Map(`PROFILE_CLASS`)
+        
+        If `season` is from `MONTH`:
+        1 -> Spring
+        12 -> Winter
+        
+        This is a non-standard mapping. Let's look for a pattern.
+        Maybe the mapping is:
+        1, 2, 3 -> Spring?
+        4, 5, 6 -> Summer?
+        ...
+        12 -> Winter?
+        
+        Let's assume the mapping is:
+        1: Spring
+        2: Spring
+        3: Spring
+        4: Summer
+        5: Summer
+        6: Summer
+        7: Autumn
+        8: Autumn
+        9: Autumn
+        10: Winter
+        11: Winter
+        12: Winter
+        
+        This fits Month 1 -> Spring and Month 12 -> Winter.
+        
+        Now, how to calculate `constant` and `coefficient`?
+        
+        Let's look at the `LOSS_FACTOR`.
+        Row 1: LOSS_FACTOR = 1.05365.
+        Row 5: LOSS_FACTOR = 1.08047.
+        
+        Let's try to reverse engineer `constant`.
+        Target `constant` = 36.1849.
+        Source `CONSTANT` = 444.091.
+        
+        Is it possible `constant` = `CONSTANT` * `COEFF_1`? No.
+        
+        Let's look at the `coefficient`.
+        Target `coefficient` = -0.256553.
+        Source `COEFF_1` = -5.38093.
+        Source `COEFF_2` = 0.831064.
+        
+        What if `coefficient` is `COEFF_1` / `LOSS_FACTOR`?
+        -5.38093 / 1.05365 = -5.107. No.
+        
+        What if `coefficient` is `COEFF_1` / 21?
+        -5.38093 / 21 = -0.2562. Close to -0.256553.
+        
+        What if `constant` is `CONSTANT` / 12.27?
+        
+        Let's look at the `NUMBER_OF_RANGES`.
+        Row 1: 2.
+        Row 5: 1.
+        
+        Let's look at the `LOW` and `HIGH` columns.
+        Row 1: LOW_1=-999, HIGH_1=22.2573. LOW_2=22.2573, HIGH_2=99999.
+        Row 5: LOW_1=-999, HIGH_1=99999.
+        
+        The target `low_end` is -999 and `high_end` is 99999.
+        This corresponds to the full range `LOW_1` to `HIGH_2` (or `HIGH_1` in Row 5).
+        
+        If the target represents the *entire* range, why are there different coefficients?
+        
+        Maybe the `constant` and `coefficient` in the target are *aggregated* or *selected* based on the range?
+        
+        Actually, look at the target `coefficient` and `constant` values again.
+        Row 1: 36.1849, -0.256553
+        Row 2: 36.1669, -0.282631
+        Row 3: 36.1363, -0.291158
+        Row 4: 35.5202, -0.277646
+        
+        Row 5: 503.748, -2.72643
+        Row 6: 409.786, -1.50104
+        Row 7: 427.941, -4.0805
+        Row 8: 412.92, -4.29947
+        
+        These values are quite different between the MP1 group and TR3 group.
+        
+        Let's try: `Target Constant` = `Source CONSTANT` / `Source LOSS_FACTOR`?
+        Row 1: 444.091 / 1.05365 = 421.5. No.
+        
+        Let's try: `Target Constant` = `Source CONSTANT` * `Source LOSS_FACTOR`?
+        Row 1: 444.091 * 1.05365 = 467.8. No.
+        
+        Let's try: `Target Coefficient` = `Source COEFF_1` / `Source LOSS_FACTOR`?
+        Row 1: -5.38093 / 1.05365 = -5.107. No.
+        
+        What if the `constant` and `co

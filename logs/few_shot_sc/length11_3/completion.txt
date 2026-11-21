@@ -1,0 +1,94 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `site`, `timestamp`, and various energy usage columns (WHS) and sensor readings. The `timestamp` is in format `%Y-%m-%d %H:%M:%S`.
+    *   **Target**: Contains `month`, `hour`, and specific aggregated energy columns like `hvac`, `water_heating`, `refrigerator`, etc.
+    *   **Key Observation**: The row count is identical (1:1 mapping). This suggests a row-wise transformation rather than an aggregation across rows. The target columns likely correspond to specific source columns or simple combinations thereof.
+
+2.  **Map Date/Time Columns**:
+    *   Extract `month` from `timestamp`: Convert `timestamp` to datetime, then extract the month number (1-12).
+    *   Extract `hour` from `timestamp`: Convert `timestamp` to datetime, then extract the hour (0-23).
+
+3.  **Map Energy Usage Columns (Heuristic Mapping)**:
+    *   We need to map source columns to target column names. Let's look at the names and sample values.
+    *   `hvac`: Likely a combination of HVAC-related columns. Source has `AC COMPRESSOR WHS [emon ch3,4]`, `AIR HANDLER WHS [emon ch5,6]`, `Minisplit WHS (2-CTs) [xpod chA-7,8]`. In the sample, for row 0 (site 19), AC=0, Air Handler=16, Minisplit=32767. Target `hvac` is 98301 for month 8, hour 16. Wait, the sample rows provided for source and target are *different* rows. Let's look at the structure.
+    *   Let's check the distinct values. `32767` appears frequently in source columns like `2nd Fridge WHS`, `SPARE1`, `SPARE3`, `POOL PUMP`, `Minisplit`, `Future use`. This value often indicates "no data" or a specific sensor limit. In the target, `32767` also appears (e.g., `water_heating` is 32767 in the first few target rows).
+    *   Let's try to find direct mappings based on column names:
+        *   `water_heating`: Source `WATER HEATER WHS [emon ch7,8]`.
+        *   `refrigerator`: Source `Primary Fridge WHS [emon ch12]` + `2nd Fridge WHS [emon ch13]`? Or just one? In target sample, `refrigerator` is 65534. 65534 = 2 * 32767. This suggests it might be the sum of two fridge columns, or a specific column scaled. Let's look at source row 0: Primary=58, 2nd=32767. Sum = 32825. Target row 4 (month 11, hour 22) has `refrigerator` = 32824. This is very close to 32825. Let's check another row. Source row 1: Primary=185, 2nd=32767. Sum = 32952. Target row 5 (month 11, hour 23) has `refrigerator` = 32844. Not a perfect match.
+        *   Let's re-examine the target sample values vs source sample values. The source sample provided is for site 19 and 35. The target sample has months 8 and 11. The source sample has month 11 (Nov 2015) and month 5 (May 2016).
+        *   Let's look at Target Row 4: Month 11, Hour 22. `hvac`=33878, `water_heating`=6, `refrigerator`=32824, `clothes_dryer`=2590, `cooking_range`=6.
+        *   Let's look for a source row with Month 11, Hour 22. The source sample doesn't have one. However, we can infer mappings from column semantics.
+        *   `hvac`: Often `AC COMPRESSOR` + `AIR HANDLER` + `Minisplit`.
+        *   `water_heating`: `WATER HEATER WHS`.
+        *   `refrigerator`: `Primary Fridge` + `2nd Fridge`.
+        *   `clothes_washer`: `Wattsup Energy Washer (WHS)`? Or `Wattsup Cumulative Washer`? The target has `clothes_washer` as int64. Source `Wattsup Energy Washer` is small integers (2, 1, 1, 1, 1). Target `clothes_washer` is 0 in all sample rows. This might be a different column. Maybe `SPARE1`? No.
+        *   `clothes_dryer`: `DRYER WHS (1-CT)` + `Dryer WHS (2-CTs)`? Source row 0: Dryer(1-CT)=3, Dryer(2-CTs)=0. Sum=3. Target row 4: 2590. This doesn't match.
+        *   Let's look at `cooking_range`: Target 6. Source `RANGE WHS (1-CT)` is 6 in row 0. This matches perfectly. So `cooking_range` = `RANGE WHS (1-CT) [emon ch10]`.
+        *   `dishwasher`: Target 0. Source `DISH WASHER WHS` is 0. Matches. So `dishwasher` = `DISH WASHER WHS [emon ch11]`.
+        *   `pool_spa_pumps`: Target 32767. Source `POOL PUMP WHS` is 32767. Matches. So `pool_spa_pumps` = `POOL PUMP WHS (2-CTs) [xpod chA-3,4]`.
+        *   `water_heating`: Target 6. Source `WATER HEATER WHS` is 7 in row 0, 7 in row 1. Target row 4 is 6. Close. Maybe it is just `WATER HEATER WHS`.
+        *   `refrigerator`: Target 32824. Source `Primary Fridge` + `2nd Fridge`. Row 0: 58 + 32767 = 32825. Target 32824. Off by 1. Row 1: 185 + 32767 = 32952. Target row 5: 32844. Off by 108. This suggests `refrigerator` might not be a simple sum, or there's a different source column.
+        *   Let's look at `hvac`. Target 33878. Source `AC` (0) + `Air Handler` (16) + `Minisplit` (32767) = 32783. Target is 33878. Difference = 1095.
+        *   Let's look at `clothes_dryer`. Target 2590. Source `Dryer` (3) + `Dryer 2-CT` (0) = 3.
+        *   There seems to be a mismatch between the simple column mapping and the target values, OR the target values in the sample are derived from different source rows not shown, or there is a complex calculation.
+        *   HOWEVER, looking at the pattern of `32767`, it appears that `32767` is a "null" or "missing" value in the source data for many channels. In the target, `32767` is preserved for `water_heating`, `refrigerator`, `clothes_dryer`, `dishwasher`, `cooking_range`, `pool_spa_pumps` in the first few rows.
+        *   Let's look at the target columns again: `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater`. These are all 0 in the target sample.
+        *   Source columns that might map to these: `SPARE1`, `SPARE2`, `SPARE3`, `SPARE4`, `Future use`.
+        *   Let's reconsider the `refrigerator` mapping. If `2nd Fridge` is 32767 (missing), maybe it's excluded? If we just take `Primary Fridge`, row 0 is 58. Target is 32824. No.
+        *   Let's look at `Calculated Unmeasured loads` and `Calculated Energy Use`.
+        *   Actually, let's look at the column names more carefully.
+            *   `hvac`: `AC COMPRESSOR` + `AIR HANDLER` + `Minisplit`.
+            *   `water_heating`: `WATER HEATER WHS`.
+            *   `refrigerator`: `Primary Fridge` + `2nd Fridge`.
+            *   `clothes_washer`: `Wattsup Energy Washer`?
+            *   `clothes_dryer`: `DRYER WHS (1-CT)` + `Dryer WHS (2-CTs)`.
+            *   `dishwasher`: `DISH WASHER WHS`.
+            *   `cooking_range`: `RANGE WHS (1-CT)`.
+            *   `pool_spa_pumps`: `POOL PUMP WHS`.
+            *   `pool_spa_heater`: `SPARE4`? Or `Future use`?
+            *   `lighting`: `SPARE1`?
+            *   `plug`: `SPARE2`?
+        *   Let's check the data types. Target `clothes_washer`, `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater` are `int64`. Others are `float64`.
+        *   In the source, `Wattsup Energy Washer` is int-like. `SPARE` columns are float-like but contain 0 or 32767.
+        *   Given the complexity and the fact that this is a "Table-to-Table" synthesis task, often the mapping is direct or a simple sum of semantically similar columns.
+        *   Let's assume the following direct mappings based on semantic similarity and common datasets (like ASHRAE Great Energy Predictor III or similar):
+            *   `hvac` = `AC COMPRESSOR WHS [emon ch3,4]` + `AIR HANDLER WHS [emon ch5,6]` + `Minisplit WHS (2-CTs) [xpod chA-7,8]`
+            *   `water_heating` = `WATER HEATER WHS [emon ch7,8]`
+            *   `refrigerator` = `Primary Fridge WHS [emon ch12]` + `2nd Fridge WHS [emon ch13]`
+            *   `clothes_washer` = `Wattsup Energy Washer (WHS)` (Cast to int)
+            *   `clothes_dryer` = `DRYER WHS (1-CT) [emon ch9]` + `Dryer WHS (2-CTs) [xpod chA-9,10]`
+            *   `dishwasher` = `DISH WASHER WHS [emon ch11]`
+            *   `cooking_range` = `RANGE WHS (1-CT) [emon ch10]`
+            *   `pool_spa_pumps` = `POOL PUMP WHS (2-CTs) [xpod chA-3,4]`
+            *   `pool_spa_heater` = `SPARE4 WHS (2-CTs) [xpod chA-5,6]` (Cast to int)
+            *   `lighting` = `SPARE1 WHS (1-CT) [emon ch14]` (Cast to int)
+            *   `plug` = `SPARE2 WHS (1-CT) [xpod chA-1]` (Cast to int)
+            *   `interior_lighting` = 0 (or `SPARE3`?)
+            *   `exterior_lighting` = 0 (or `Future use`?)
+        *   Let's check the target sample again. `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater` are ALL 0 in the provided target sample rows.
+        *   In the source sample, `SPARE1` is 64, `SPARE2` is 0, `SPARE3` is 32767, `SPARE4` is 0, `Future use` is 32767.
+        *   If `lighting` maps to `SPARE1` (64), target is 0. Mismatch.
+        *   If `plug` maps to `SPARE2` (0), target is 0. Match.
+        *   If `pool_spa_heater` maps to `SPARE4` (0), target is 0. Match.
+        *   What if `lighting`, `plug`, etc. are derived from `Calculated Unmeasured loads`?
+        *   Actually, looking at the target sample, the first 4 rows have `hvac`=98301, `water_heating`=32767, `refrigerator`=65534, `clothes_dryer`=65534, `dishwasher`=32767, `cooking_range`=32767, `pool_spa_pumps`=32767.
+        *   This pattern of 32767 and 65534 (2*32767) strongly suggests that these values are passed through from source columns that contain 32767.
+        *   If `water_heating` is 32767, source `WATER HEATER` must be 32767.
+        *   If `refrigerator` is 65534, source `Primary` + `2nd` must be 65534. Since 32767+32767=65534, both fridge columns were likely 32767.
+        *   If `clothes_dryer` is 65534, source `Dryer` + `Dryer2` must be 65534. Both likely 32767.
+        *   If `dishwasher` is 32767, source `Dishwasher` is 32767.
+        *   If `cooking_range` is 32767, source `Range` is 32767.
+        *   If `pool_spa_pumps` is 32767, source `Pool Pump` is 32767.
+        *   This confirms the direct mapping hypothesis for these columns.
+        *   For `hvac` = 98301. If `AC` + `Air Handler` + `Minisplit` = 98301.
+        *   For `clothes_washer` = 0. Source `Wattsup Energy Washer` = 0? In source sample row 0, it is 2. But the target rows are different.
+        *   For `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater` being 0.
+        *   Source `SPARE1` (64), `SPARE2` (0), `SPARE3` (32767), `SPARE4` (0).
+        *   Maybe `lighting` = `SPARE1`? But target is 0.
+        *   Maybe the target columns `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater` are not present in the source in a direct way, or they are calculated as 0 if not available?
+        *   Wait, look at the target schema types. `clothes_washer`, `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater` are `int64`.
+        *   In many of these datasets, `SPARE` columns are often unused or mapped to specific categories.
+        *   Given the ambiguity and the fact that `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater` are 0 in the sample, and we don't have clear source columns for them (SPAREs have non-zero values in source sample), it's possible they are derived from `Calculated Unmeasured loads` or simply 0.
+        *   However, a safer bet for `lighting` and `plug` might be `SPARE1` and `SPARE2` if we assume the sample rows don't align. But `SPARE1` is 64 in source, 0 in target.
+        *   Let's check `pool_spa_heater`. Source `SPARE4` is 0. Target is 0.
+        *   Let's check `plug`. Source `SPARE2` is 0.

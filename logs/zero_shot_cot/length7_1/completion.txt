@@ -1,0 +1,115 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a date column `CST` (format: `%a %m/%d/%Y`) and 24 hourly columns named `1:00` through `24:00:00`.
+    *   **Target**: Contains `month` (string), `daytype` (string: 'weekday' or 'weekend'), and 24 hourly columns named `hr1` through `hr24`.
+    *   **Row Count Change**: Source has 1339 rows, Target has 1340 rows. This suggests that the transformation might involve splitting rows or that there's a slight discrepancy in the sample vs full data, but typically in these TbT tasks, if the structure is 1-to-1 (one day -> one row), the row count should match unless there's a grouping or expansion. Looking at the target sample, it seems to preserve the daily granularity (one row per day). The extra row might be due to a specific date handling or a slight difference in the test set. However, the primary transformation is reshaping and renaming. Let's look closer at the values.
+    *   **Value Comparison**:
+        *   Source `Sat 12/01/2012` `1:00` is `0.9841`.
+        *   Target `April` `weekday` `hr1` is `1.02`.
+        *   The values in the target sample do *not* directly match the source sample rows provided. This implies the target sample is from a different part of the dataset or the transformation involves aggregation/averaging?
+        *   Wait, let's look at the target sample again. The target sample has `month` as "April" and "November". The source sample has "December 2012" and "July 2016". This confirms the target sample is just a *sample* of the output, not necessarily derived from the specific source rows shown.
+        *   Crucially, look at the precision. Source `0.9841` -> Target `1.02`? No, that's not a direct mapping.
+        *   Let's check if the target values are averages. If I average multiple days, I might get those numbers. But the target has `daytype` and `month`.
+        *   Actually, looking at the row count increase (1339 -> 1340), and the columns, it's highly likely this is a **1-to-1 transformation** where each source row becomes one target row. The row count difference might be a red herring or due to a specific edge case (like a leap year or a specific date parsing issue adding a row, or simply the test set having one more day).
+        *   Let's re-examine the values.
+            *   Source `Sat 12/01/2012`: `1:00` = 0.9841.
+            *   Is there a target row for Dec 1, 2012? The target sample shows April and November.
+            *   Let's assume the transformation is:
+                1.  Parse `CST` to extract `month` (name) and `daytype` (weekday/weekend).
+                2.  Rename columns `1:00`...`24:00:00` to `hr1`...`hr24`.
+                3.  Round values? The target values have varying precision (2 decimals, 4 decimals). Source has 4 decimals.
+                4.  Let's look at `November` `weekday` `hr1` = `1.057`. Source `Mon 12/03/2012` `1:00` = `0.9022`.
+                5.  It is extremely likely that the transformation is simply **renaming and extracting metadata**. The values in the target sample are just from different dates. The precision in the target sample varies, which might just be how pandas displays floats or how the original data was stored. I should preserve the float values as they are, unless there's a clear rounding pattern.
+                6.  Wait, look at `hr1` in target: `1.02`, `0.93`, `0.98`. These look like 2 decimal places. But `1.057` has 3. `1.0570`?
+                7.  Let's look at the source `24:00:00` column. It maps to `hr24`.
+                8.  The key is the `daytype`. Weekends are Sat/Sun. Weekdays are Mon-Fri.
+                9.  The `month` is the full name (e.g., "April", "November").
+
+2.  **Detailed Transformation Steps**:
+    *   **Step 1: Parse Date**. Convert `CST` to datetime.
+        *   Format: `%a %m/%d/%Y`.
+        *   Extract `month` using `.dt.strftime('%B')`.
+        *   Extract `dayofweek` using `.dt.dayofweek` (0=Mon, 6=Sun).
+        *   Map `dayofweek` to `daytype`: 0-4 -> 'weekday', 5-6 -> 'weekend'.
+    *   **Step 2: Rename Hour Columns**.
+        *   Source columns: `['1:00', '2:00', ..., '23:00', '24:00:00']`.
+        *   Target columns: `['hr1', 'hr2', ..., 'hr23', 'hr24']`.
+        *   Create a mapping dictionary.
+    *   **Step 3: Construct DataFrame**.
+        *   Create new columns `month` and `daytype`.
+        *   Rename the hour columns.
+        *   Drop the original `CST` column.
+    *   **Step 4: Verify Row Count**.
+        *   The prompt mentions 1339 -> 1340. This is a +1 row.
+        *   Is it possible that `24:00:00` is treated as a separate row? No, the target has `hr24`.
+        *   Is it possible that the date parsing fails for one row and it gets dropped, but then added back? Unlikely.
+        *   Is it possible that the source has a header row that is being counted? No, pandas handles headers.
+        *   Let's look at the source sample again. `Sat 12/01/2012`.
+        *   Maybe the "extra" row is a result of a specific date like Feb 29?
+        *   Or maybe the target includes a "total" row? No, the schema doesn't suggest it.
+        *   Let's stick to the 1-to-1 mapping. The row count difference in the prompt description ("1339 rows... Target rows: 1340") might be a specific artifact of the benchmark dataset (e.g., one extra day in the test set or a parsing quirk). I will implement the standard 1-to-1 transformation. If the row count changes, it's usually due to `groupby` or `explode`. Here, the structure is clearly daily profiles.
+        *   *Self-Correction*: What if the source `CST` column has a duplicate or a specific entry that splits? No, the columns are hourly.
+        *   Let's assume the standard transformation.
+
+3.  **Refining the Logic**:
+    *   `df['CST']` -> `pd.to_datetime(df['CST'], format='%a %m/%d/%Y')`
+    *   `df['month']` = `df['CST'].dt.strftime('%B')`
+    *   `df['daytype']` = `df['CST'].dt.dayofweek.map({0:'weekday', 1:'weekday', 2:'weekday', 3:'weekday', 4:'weekday', 5:'weekend', 6:'weekend'})`
+    *   Rename columns:
+        ```python
+        rename_map = {f'{i}:00': f'hr{i}' for i in range(1, 24)}
+        rename_map['24:00:00'] = 'hr24'
+        df = df.rename(columns=rename_map)
+        ```
+    *   Select and order columns: `['month', 'daytype', 'hr1', ..., 'hr24']`.
+
+4.  **Final Check**:
+    *   Does the code handle the `24:00:00` column correctly? Yes.
+    *   Does it produce `month` as full name? Yes (`%B`).
+    *   Does it produce `daytype` correctly? Yes.
+    *   Are the hour columns renamed correctly? Yes.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame with daily hourly load profiles into a target DataFrame
+    with explicit month, daytype, and renamed hourly columns.
+    """
+    df = source.copy()
+    
+    # 1. Parse the CST column to datetime
+    # Format is '%a %m/%d/%Y' e.g., 'Sat 12/01/2012'
+    df['CST_dt'] = pd.to_datetime(df['CST'], format='%a %m/%d/%Y')
+    
+    # 2. Extract 'month' as full name (e.g., 'December', 'April')
+    df['month'] = df['CST_dt'].dt.strftime('%B')
+    
+    # 3. Extract 'daytype'
+    # dayofweek: 0=Monday, ..., 4=Friday, 5=Saturday, 6=Sunday
+    # Weekdays: 0-4, Weekends: 5-6
+    df['daytype'] = df['CST_dt'].dt.dayofweek.apply(
+        lambda x: 'weekday' if x < 5 else 'weekend'
+    )
+    
+    # 4. Rename the hourly columns
+    # Source columns: '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target columns: 'hr1', 'hr2', ..., 'hr23', 'hr24'
+    rename_map = {}
+    for i in range(1, 24):
+        rename_map[f'{i}:00'] = f'hr{i}'
+    rename_map['24:00:00'] = 'hr24'
+    
+    df = df.rename(columns=rename_map)
+    
+    # 5. Define the target column order
+    target_columns = ['month', 'daytype'] + [f'hr{i}' for i in range(1, 25)]
+    
+    # 6. Select and return the required columns
+    # Drop the temporary datetime column and original CST if not already handled by selection
+    df = df[target_columns]
+    
+    return df
+```

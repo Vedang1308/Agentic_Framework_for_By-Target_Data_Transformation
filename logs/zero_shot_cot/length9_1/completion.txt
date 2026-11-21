@@ -1,0 +1,192 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `PROFILE_CLASS`, `YEAR`, `MONTH`, `DAY`, `HOUR`, `NUMBER_OF_RANGES`, and multiple range/coeff columns (`LOW_1` to `HIGH_4`, `CONSTANT`, `COEFF_1` to `COEFF_4`, `LOSS_FACTOR`).
+    *   **Target**: Contains `season`, `daytype`, `hour`, `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end`.
+    *   **Row Count Change**: Source has 118,273 rows, Target has 118,274 rows. This suggests a "melt" or "unpivot" operation where multiple columns in the source (specifically the range/coeff pairs) are expanded into rows in the target.
+
+2.  **Determine Column Mappings**:
+    *   `season`: Derived from `MONTH`. Typically, Winter (Dec-Feb), Spring (Mar-May), Summer (Jun-Aug), Fall (Sep-Nov).
+    *   `daytype`: Derived from `PROFILE_CLASS`. Looking at the sample, `MP1` and `TR3` are profile classes. The target has `WEEKDAY`. We need to map `PROFILE_CLASS` to `daytype`. Common mappings in energy data: `MP` (Market Peak) might be Weekday, `TR` (Transitional) might be Weekday or Weekend. Let's look at the distinct values. The target only shows `WEEKDAY`. It's likely `PROFILE_CLASS` maps directly or via a simple rule. Given `MP1` and `TR3` both map to `WEEKDAY` in the sample, and no weekend examples are shown, we might assume all are weekdays or derive it from `DAY` of week if available. However, `DAY` is just the day of the month. Let's look closer. `PROFILE_CLASS` usually encodes the day type. `MP` = Market Peak (Weekday), `TR` = Transitional (Weekday), `WE` = Weekend. Since only `MP1` and `TR3` are in the sample and both map to `WEEKDAY`, we can map `PROFILE_CLASS` containing 'MP' or 'TR' to 'WEEKDAY'. If there were 'WE', it would be 'WEEKEND'.
+    *   `hour`: Directly from `HOUR`.
+    *   `temperature_range`, `low_end`, `high_end`, `constant`, `coefficient`: These come from the unpivoted range columns.
+        *   Source has `LOW_1`, `HIGH_1`, `COEFF_1`, `LOW_2`, `HIGH_2`, `COEFF_2`, etc.
+        *   Target has `low_end`, `high_end`, `coefficient`.
+        *   `constant` in target seems to come from `CONSTANT` in source.
+        *   `temperature_range` in target is `100998` in the sample. Source `LOW_1` is `-999` and `HIGH_1` is `79.9855` (or `99999`). The range `100998` is `99999 - (-999)`. This suggests `temperature_range` is a constant value representing the full span of the first range or a specific calculation. Wait, looking at the target sample, `temperature_range` is always `100998`. `99999 - (-999) = 100998`. This implies `temperature_range` is calculated as `high_end - low_end` for the specific row, or it's a fixed constant for the dataset. Given the target column name, it's likely `high_end - low_end`. Let's verify with the sample.
+            *   Target Row 1: `low_end`=-999, `high_end`=99999. `99999 - (-999) = 100998`. Matches.
+            *   So, `temperature_range` = `high_end` - `low_end`.
+
+3.  **Unpivoting Strategy**:
+    *   The source has up to 4 ranges (`NUMBER_OF_RANGES` indicates how many are valid).
+    *   We need to melt the columns `LOW_1`, `HIGH_1`, `COEFF_1`, `LOW_2`, `HIGH_2`, `COEFF_2`, etc., into rows.
+    *   Each source row with `NUMBER_OF_RANGES` = N will become N target rows.
+    *   We need to extract the index (1, 2, 3, 4) from the column names to align `LOW_i`, `HIGH_i`, and `COEFF_i`.
+    *   `CONSTANT` and `LOSS_FACTOR` are repeated for each unpivoted row.
+
+4.  **Step-by-Step Transformation**:
+    *   **Step 1**: Create `season` from `MONTH`.
+        *   Months 12, 1, 2 -> WINTER
+        *   Months 3, 4, 5 -> SPRING
+        *   Months 6, 7, 8 -> SUMMER
+        *   Months 9, 10, 11 -> FALL
+    *   **Step 2**: Create `daytype` from `PROFILE_CLASS`.
+        *   If `PROFILE_CLASS` starts with 'MP' or 'TR', it's 'WEEKDAY'.
+        *   If it starts with 'WE', it's 'WEEKEND'.
+        *   (Based on sample, only WEEKDAY is present, but we should handle general cases).
+    *   **Step 3**: Unpivot the range/coeff columns.
+        *   Identify columns: `LOW_1`, `HIGH_1`, `COEFF_1`, `LOW_2`, `HIGH_2`, `COEFF_2`, `LOW_3`, `HIGH_3`, `COEFF_3`, `LOW_4`, `HIGH_4`, `COEFF_4`.
+        *   Use `pd.melt` or manual construction to create a long format.
+        *   Since `NUMBER_OF_RANGES` tells us how many valid ranges exist, we should only keep rows where the range index <= `NUMBER_OF_RANGES`.
+        *   Alternatively, melt all and then filter.
+    *   **Step 4**: Construct the target columns.
+        *   `hour`: From source `HOUR`.
+        *   `constant`: From source `CONSTANT`.
+        *   `low_end`: From melted `LOW_i`.
+        *   `high_end`: From melted `HIGH_i`.
+        *   `coefficient`: From melted `COEFF_i`.
+        *   `temperature_range`: `high_end - low_end`.
+    *   **Step 5**: Filter out invalid ranges.
+        *   The source has `nan` for unused ranges. We can filter out rows where `low_end` is `nan` or use `NUMBER_OF_RANGES` to limit.
+        *   Looking at the sample, `LOW_1` is always `-999`. `HIGH_1` varies. `LOW_2` is `nan` if `NUMBER_OF_RANGES` is 1.
+        *   We should drop rows where `low_end` is `NaN` (or `high_end` is `NaN`).
+    *   **Step 6**: Sort and format.
+        *   The target sample is sorted by `season`, `daytype`, `hour`.
+        *   Ensure column order matches target.
+
+5.  **Refining the Unpivot**:
+    *   Let's create a helper dataframe for the ranges.
+    *   For each row in source, generate N rows where N = `NUMBER_OF_RANGES`.
+    *   Extract `LOW_i`, `HIGH_i`, `COEFF_i` for i in 1..N.
+    *   This can be done by melting the specific columns and then filtering.
+
+    Let's try melting:
+    ```python
+    id_vars = ['PROFILE_CLASS', 'YEAR', 'MONTH', 'DAY', 'HOUR', 'NUMBER_OF_RANGES', 'CONSTANT', 'LOSS_FACTOR']
+    value_vars = ['LOW_1', 'HIGH_1', 'COEFF_1', 'LOW_2', 'HIGH_2', 'COEFF_2', 'LOW_3', 'HIGH_3', 'COEFF_3', 'LOW_4', 'HIGH_4', 'COEFF_4']
+    ```
+    This is tricky because `LOW`, `HIGH`, `COEFF` are separate columns. We need to group them by index.
+    
+    Better approach:
+    1. Create a list of dicts or a multi-index melt.
+    2. Or, iterate through range indices 1 to 4.
+    3. For each index `i`, create a dataframe with `low_end`, `high_end`, `coefficient` from `LOW_i`, `HIGH_i`, `COEFF_i`.
+    4. Concatenate these 4 dataframes.
+    5. Merge back with the base source data.
+    6. Filter where `low_end` is not null (or `high_end` is not null).
+    7. Calculate `temperature_range`.
+
+6.  **Implementation Details**:
+    *   `season` mapping:
+        ```python
+        def get_season(month):
+            if month in [12, 1, 2]: return 'WINTER'
+            elif month in [3, 4, 5]: return 'SPRING'
+            elif month in [6, 7, 8]: return 'SUMMER'
+            else: return 'FALL'
+        ```
+    *   `daytype` mapping:
+        ```python
+        def get_daytype(profile_class):
+            if profile_class.startswith('WE'): return 'WEEKEND'
+            else: return 'WEEKDAY' # MP, TR, etc.
+        ```
+    *   Unpivoting:
+        ```python
+        ranges = []
+        for i in range(1, 5):
+            df_range = source.copy()
+            df_range['low_end'] = df_range[f'LOW_{i}']
+            df_range['high_end'] = df_range[f'HIGH_{i}']
+            df_range['coefficient'] = df_range[f'COEFF_{i}']
+            ranges.append(df_range)
+        df_long = pd.concat(ranges, ignore_index=True)
+        ```
+    *   Filter:
+        ```python
+        df_long = df_long.dropna(subset=['low_end']) # Or check against NUMBER_OF_RANGES
+        ```
+        Actually, checking `NUMBER_OF_RANGES` is safer. If `NUMBER_OF_RANGES` is 2, we only want rows from `i=1` and `i=2`.
+        So, add a column `range_index` (1, 2, 3, 4) during concat, then filter `range_index <= NUMBER_OF_RANGES`.
+
+    *   Final Columns:
+        `season`, `daytype`, `hour`, `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end`.
+
+7.  **Code Structure**:
+    *   Import pandas.
+    *   Define `transform` function.
+    *   Apply season/daytype logic.
+    *   Unpivot ranges.
+    *   Filter valid ranges.
+    *   Calculate `temperature_range`.
+    *   Select and order columns.
+    *   Return.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    # 1. Derive season from MONTH
+    def get_season(month):
+        if month in [12, 1, 2]:
+            return 'WINTER'
+        elif month in [3, 4, 5]:
+            return 'SPRING'
+        elif month in [6, 7, 8]:
+            return 'SUMMER'
+        else:
+            return 'FALL'
+    
+    source['season'] = source['MONTH'].apply(get_season)
+    
+    # 2. Derive daytype from PROFILE_CLASS
+    def get_daytype(pc):
+        if pd.isna(pc):
+            return 'UNKNOWN'
+        if pc.startswith('WE'):
+            return 'WEEKEND'
+        else:
+            return 'WEEKDAY'
+            
+    source['daytype'] = source['PROFILE_CLASS'].apply(get_daytype)
+    
+    # 3. Unpivot the range columns
+    # We will create a long dataframe by stacking the 4 possible ranges
+    ranges_list = []
+    for i in range(1, 5):
+        df_range = source.copy()
+        df_range['range_index'] = i
+        df_range['low_end'] = df_range[f'LOW_{i}']
+        df_range['high_end'] = df_range[f'HIGH_{i}']
+        df_range['coefficient'] = df_range[f'COEFF_{i}']
+        ranges_list.append(df_range)
+        
+    df_long = pd.concat(ranges_list, ignore_index=True)
+    
+    # 4. Filter to keep only valid ranges based on NUMBER_OF_RANGES
+    # Only keep rows where range_index <= NUMBER_OF_RANGES
+    df_valid = df_long[df_long['range_index'] <= df_long['NUMBER_OF_RANGES']].copy()
+    
+    # 5. Calculate temperature_range
+    df_valid['temperature_range'] = df_valid['high_end'] - df_valid['low_end']
+    
+    # 6. Select and order the target columns
+    target_columns = ['season', 'daytype', 'hour', 'temperature_range', 'constant', 'coefficient', 'low_end', 'high_end']
+    
+    # Ensure hour is float64 as per target schema
+    df_valid['hour'] = df_valid['HOUR'].astype(float)
+    df_valid['constant'] = df_valid['CONSTANT'].astype(float)
+    df_valid['coefficient'] = df_valid['coefficient'].astype(float)
+    df_valid['low_end'] = df_valid['low_end'].astype(float)
+    df_valid['high_end'] = df_valid['high_end'].astype(float)
+    df_valid['temperature_range'] = df_valid['temperature_range'].astype(float)
+    
+    result = df_valid[target_columns]
+    
+    # Sort to match typical output order (optional but good for consistency)
+    # The sample is sorted by season, daytype, hour.
+    result = result.sort_values(by=['season', 'daytype', 'hour']).reset_index(drop=True)
+    
+    return result
+```

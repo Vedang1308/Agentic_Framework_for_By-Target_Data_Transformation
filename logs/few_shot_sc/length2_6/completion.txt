@@ -1,0 +1,69 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Company`, `Rate`, `Rate Code`, `Date`, and hourly columns `Hr 1` through `Hr 24`. The `Date` column is in string format (e.g., '1/1/2014').
+    *   **Target**: Contains columns `dt_strata` (date string), `dow` (day of week integer), `pct_hourly_0100` through `pct_hourly_2400` (floats), and `pct_hourly_2500` (integer, always 0).
+
+2.  **Date Transformation (`dt_strata`)**:
+    *   The source `Date` column needs to be converted to a datetime object to extract day-of-week information.
+    *   The target `dt_strata` column requires the date formatted as `%m/%d/%Y`.
+    *   Since the source sample '1/1/2014' matches the target sample '1/1/2014', we can parse the source date and re-format it. Note that `pd.to_datetime` handles single-digit months/days correctly.
+
+3.  **Day of Week Transformation (`dow`)**:
+    *   The target `dow` column is an integer. Looking at the samples:
+        *   Source '1/1/2014' is a Wednesday. Target `dow` is 3.
+        *   Source '1/2/2014' is a Thursday. Target `dow` is 4.
+        *   Source '12/28/2014' is a Sunday. Target `dow` is 0.
+        *   Source '12/29/2014' is a Monday. Target `dow` is 1.
+    *   This mapping corresponds to Python's `datetime.weekday()` or pandas `dt.dayofweek` where Monday=0, ..., Sunday=6.
+    *   Therefore, `dow = dt.dt.dayofweek`.
+
+4.  **Hourly Column Renaming and Mapping**:
+    *   Source columns are named `Hr 1`, `Hr 2`, ..., `Hr 24`.
+    *   Target columns are named `pct_hourly_0100`, `pct_hourly_0200`, ..., `pct_hourly_2400`.
+    *   We need to rename each `Hr i` to `pct_hourly_{i:02d}00`. For example, `Hr 1` -> `pct_hourly_0100`, `Hr 24` -> `pct_hourly_2400`.
+
+5.  **Additional Target Column (`pct_hourly_2500`)**:
+    *   The target schema includes `pct_hourly_2500` which is not present in the source.
+    *   The sample data shows this column is always `0`.
+    *   We will create this column and fill it with `0`.
+
+6.  **Final Selection**:
+    *   Construct the final DataFrame by selecting the newly created `dt_strata` and `dow` columns, followed by the renamed hourly columns from `pct_hourly_0100` to `pct_hourly_2400`, and finally `pct_hourly_2500`.
+    *   Ensure the order matches the target schema exactly.
+
+### Generated Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the Date column to datetime
+    dt = pd.to_datetime(df['Date'])
+    
+    # 2. Create 'dt_strata' column with format '%m/%d/%Y'
+    df['dt_strata'] = dt.dt.strftime('%m/%d/%Y')
+    
+    # 3. Create 'dow' column (Monday=0, ..., Sunday=6)
+    df['dow'] = dt.dt.dayofweek
+    
+    # 4. Rename hourly columns: 'Hr 1' -> 'pct_hourly_0100', ..., 'Hr 24' -> 'pct_hourly_2400'
+    rename_dict = {}
+    for i in range(1, 25):
+        rename_dict[f'Hr {i}'] = f'pct_hourly_{i:02d}00'
+    df = df.rename(columns=rename_dict)
+    
+    # 5. Add 'pct_hourly_2500' column filled with 0
+    df['pct_hourly_2500'] = 0
+    
+    # 6. Define target columns in the correct order
+    target_cols = ['dt_strata', 'dow']
+    target_cols += [f'pct_hourly_{i:02d}00' for i in range(1, 25)]
+    target_cols.append('pct_hourly_2500')
+    
+    # 7. Return the DataFrame with only the target columns
+    return df[target_cols]
+```

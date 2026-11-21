@@ -1,0 +1,45 @@
+### Benchmark Case: length7_10
+- Source sample rows: 74848 rows (Note: test_0.csv may have different row count)
+- Target rows: 84 rows
+- Notice: Row count changes from 74848 to 84. Check if an aggregation, grouping, or pivoting operation is required.
+
+### Exact Target Columns (Must match verbatim):
+['month', 'daytype', 'hr1', 'hr2', 'hr3', 'hr4', 'hr5', 'hr6', 'hr7', 'hr8', 'hr9', 'hr10', 'hr11', 'hr12', 'hr13', 'hr14', 'hr15', 'hr16', 'hr17', 'hr18', 'hr19', 'hr20', 'hr21', 'hr22', 'hr23', 'hr24']
+
+### Datetime Format Inferences:
+- Source column 'date' has date format '%m/%d/%Y %H:%M' (sample: '7/28/2019 4:50')
+
+### Source Schema and Types:
+date (object), cerc_logger_1 (float64)
+
+### Target Schema and Types:
+month (object), daytype (object), hr1 (float64), hr2 (float64), hr3 (float64), hr4 (float64), hr5 (float64), hr6 (float64), hr7 (float64), hr8 (float64), hr9 (float64), hr10 (float64), hr11 (float64), hr12 (float64), hr13 (float64), hr14 (float64), hr15 (float64), hr16 (float64), hr17 (float64), hr18 (float64), hr19 (float64), hr20 (float64), hr21 (float64), hr22 (float64), hr23 (float64), hr24 (float64)
+
+### Source Table Sample (training_0.csv):
+| date             |   cerc_logger_1 |
+|:-----------------|----------------:|
+| 7/28/2019 4:50   |          24.562 |
+| 7/28/2019 5:00   |          24.625 |
+| 7/28/2019 5:10   |          24.562 |
+| 7/28/2019 5:20   |          24.562 |
+| 12/31/2020 23:30 |          22.062 |
+| 12/31/2020 23:40 |          22.125 |
+| 12/31/2020 23:50 |          22.312 |
+| 1/1/2021 0:00    |          22.437 |
+
+### Desired Target Table Sample (target.csv):
+| month     | daytype   |    hr1 |    hr2 |    hr3 |    hr4 |    hr5 |    hr6 |    hr7 |    hr8 |    hr9 |   hr10 |   hr11 |   hr12 |   hr13 |   hr14 |   hr15 |   hr16 |   hr17 |   hr18 |   hr19 |   hr20 |   hr21 |   hr22 |   hr23 |   hr24 |
+|:----------|:----------|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|
+| August    | weekday   | 23.937 | 23.875 | 23.875 | 23.75  | 23.75  | 23.625 | 23.5   | 23.5   | 23.375 | 23.187 | 23.187 | 23.125 | 23.125 | 23.25  | 23.25  | 23.312 | 23.375 | 23.437 | 23.625 | 23.875 | 23.875 | 23.875 | 24     | 23.937 |
+| April     | weekend   | 24.562 | 24.312 | 24.187 | 24.062 | 24.062 | 24     | 23.875 | 23.875 | 23.812 | 23.812 | 23.75  | 23.75  | 23.687 | 23.625 | 23.687 | 23.562 | 23.625 | 23.75  | 23.75  | 23.75  | 23.875 | 24     | 24     | 24.562 |
+| August    | weekend   | 23.75  | 23.687 | 23.687 | 23.625 | 23.812 | 23.812 | 23.75  | 23.687 | 23.687 | 23.625 | 23.437 | 23.25  | 23.187 | 22.937 | 23.187 | 23.187 | 23.375 | 23.375 | 23.375 | 23.5   | 23.375 | 23.5   | 23.437 | 23.5   |
+| September | weekday   | 25.625 | 25.187 | 24.937 | 24.812 | 24.562 | 24.5   | 24.437 | 24.375 | 24.25  | 24.187 | 24.187 | 24.187 | 24.187 | 24.812 | 24.812 | 24.812 | 25.687 | 25.187 | 24.875 | 25.312 | 25.375 | 25.562 | 25.75  | 25.687 |
+| June      | weekday   | 23.875 | 23.812 | 23.812 | 23.75  | 23.75  | 23.75  | 23.687 | 23.75  | 23.562 | 23.5   | 23.437 | 23.375 | 23.437 | 23.312 | 23.437 | 23.375 | 23.75  | 23.812 | 24     | 24.125 | 24.187 | 24.125 | 24.187 | 23.812 |
+| June      | weekend   | 23.625 | 23.75  | 23.687 | 23.812 | 23.812 | 23.812 | 23.812 | 23.812 | 23.75  | 23.625 | 23.687 | 23.562 | 23.562 | 23.562 | 23.625 | 23.562 | 23.625 | 23.75  | 23.75  | 23.812 | 23.875 | 23.812 | 23.625 | 23.437 |
+| October   | weekend   | 25.062 | 25     | 24.937 | 25     | 24.937 | 24.875 | 24.875 | 24.812 | 24.812 | 24.687 | 24.75  | 24.625 | 24.625 | 24.562 | 24.625 | 24.625 | 24.75  | 24.812 | 24.812 | 24.687 | 24.875 | 24.687 | 24.875 | 24.937 |
+| December  | weekday   | 22.812 | 22.75  | 22.687 | 22.625 | 22.625 | 22.625 | 22.625 | 22.5   | 22.437 | 22.437 | 22.437 | 22.375 | 22.312 | 22.312 | 22.375 | 22.437 | 22.625 | 85     | 22.875 | 23.062 | 23.187 | 23.25  | 25.75  | 85     |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

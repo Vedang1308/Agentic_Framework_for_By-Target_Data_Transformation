@@ -1,0 +1,163 @@
+Step-by-Step Reasoning Plan:
+1.  **Parse Datetime**: Convert the `local_15min` column from string format ('%m/%d/%Y %H:%M') to pandas datetime objects.
+2.  **Extract Features**:
+    *   Extract the `hour` (0-23) from the datetime.
+    *   Determine the `season` based on the month. Standard meteorological seasons are often used in energy data:
+        *   Spring: March, April, May (3, 4, 5)
+        *   Summer: June, July, August (6, 7, 8)
+        *   Fall/Autumn: September, October, November (9, 10, 11)
+        *   Winter: December, January, February (12, 1, 2)
+        *   *Self-Correction/Verification*: Looking at the target sample, 'Summer' corresponds to hour 19 and 'Winter' to hours 4, 6, 7, 18. The source samples include December (Winter) and September (Fall). I need to map months to seasons correctly. Let's assume standard definitions:
+            *   Winter: 12, 1, 2
+            *   Spring: 3, 4, 5
+            *   Summer: 6, 7, 8
+            *   Fall: 9, 10, 11
+3.  **Map Source Columns to Target Categories**: The target columns represent aggregated energy loads for specific appliance categories. I need to sum the `_sum` columns from the source that correspond to these categories.
+    *   `hvac`: Likely includes `air1_sum`, `air2_sum`, `air3_sum`, `airwindowunit1_sum`, `furnace1_sum`, `furnace2_sum`, `heater1_sum`, `heater2_sum`, `heater3_sum`, `housefan1_sum`.
+    *   `water_heating`: `waterheater1_sum`, `waterheater2_sum`.
+    *   `refrigerator`: `refrigerator1_sum`, `refrigerator2_sum`, `freezer1_sum`, `icemaker1_sum`, `winecooler1_sum`.
+    *   `clothes_washer`: `clotheswasher1_sum`, `clotheswasher_dryg1_sum`.
+    *   `clothes_dryer`: `drye1_sum`, `dryg1_sum`.
+    *   `dishwasher`: `dishwasher1_sum`, `disposal1_sum` (often grouped with kitchen/dishwasher).
+    *   `cooking_range`: `oven1_sum`, `oven2_sum`, `range1_sum`, `microwave1_sum`, `venthood1_sum`.
+    *   `pool_spa_pumps`: `poolpump1_sum`, `pool1_sum`, `pool2_sum`, `jacuzzi1_sum` (pumps/motors), `circpump1_sum`, `pump1_sum`, `sewerpump1_sum`, `sumppump1_sum`, `wellpump1_sum`, `sprinkler1_sum`. *Refinement*: "Pumps" usually excludes heaters. Let's look at `pool_spa_heaters` separately.
+    *   `interior_lighting`: `bathroom1_sum`, `bathroom2_sum`, `bedroom1_sum`...`bedroom5_sum`, `diningroom1_sum`, `diningroom2_sum`, `kitchen1_sum`, `kitchen2_sum`, `livingroom1_sum`, `livingroom2_sum`, `office1_sum`, `utilityroom1_sum`, `garage1_sum`, `garage2_sum`, `shed1_sum`. *Note*: The target has `interior_lighting`, `exterior_lighting`, and `lighting`. Often `lighting` is the total or specific. Let's look at the values. In the target, `interior_lighting` == `exterior_lighting` == `lighting`. This suggests a specific mapping or that `lighting` is the sum of interior and exterior, or they are identical in this dataset's definition. Let's assume `interior_lighting` sums room lights, `exterior_lighting` sums outside lights, and `lighting` is their sum.
+        *   Interior: `bathroom1_sum`, `bathroom2_sum`, `bedroom1_sum`..`bedroom5_sum`, `diningroom1_sum`, `diningroom2_sum`, `kitchen1_sum`, `kitchen2_sum`, `livingroom1_sum`, `livingroom2_sum`, `office1_sum`, `utilityroom1_sum`, `garage1_sum`, `garage2_sum`, `shed1_sum`.
+        *   Exterior: `poollight1_sum`, `outsidelights_plugs1_sum` (partially?), `outsidelights_plugs2_sum` (partially?). Actually, `lights_plugs` columns are tricky. Let's look at `lights_plugs1_sum`..`lights_plugs6_sum`. These might be split between interior/exterior or plug.
+        *   Let's re-evaluate based on common REDD dataset mappings if possible, or logical grouping.
+        *   `plug`: `lights_plugs1_sum`..`lights_plugs6_sum`, `kitchenapp1_sum`, `kitchenapp2_sum`, `car1_sum`, `car2_sum`, `battery1_sum`, `aquarium1_sum`, `security1_sum`, `solar_sum`, `solar2_sum`.
+        *   `pool_spa_heaters`: `jacuzzi1_sum` (if heater), `pool1_sum` (if heater)? No, usually `jacuzzi1` is a pump/heater combo. Let's assume `pool_spa_heaters` includes `jacuzzi1_sum` and potentially `pool1_sum`/`pool2_sum` if they are heaters, but `poolpump1_sum` is clearly a pump.
+    *   *Simpler Approach*: Since the exact mapping isn't provided, I will infer from column names.
+        *   `hvac`: `air1_sum`, `air2_sum`, `air3_sum`, `airwindowunit1_sum`, `furnace1_sum`, `furnace2_sum`, `heater1_sum`, `heater2_sum`, `heater3_sum`, `housefan1_sum`.
+        *   `water_heating`: `waterheater1_sum`, `waterheater2_sum`.
+        *   `refrigerator`: `refrigerator1_sum`, `refrigerator2_sum`, `freezer1_sum`, `icemaker1_sum`, `winecooler1_sum`.
+        *   `clothes_washer`: `clotheswasher1_sum`, `clotheswasher_dryg1_sum`.
+        *   `clothes_dryer`: `drye1_sum`, `dryg1_sum`.
+        *   `dishwasher`: `dishwasher1_sum`, `disposal1_sum`.
+        *   `cooking_range`: `oven1_sum`, `oven2_sum`, `range1_sum`, `microwave1_sum`, `venthood1_sum`.
+        *   `pool_spa_pumps`: `poolpump1_sum`, `pool1_sum`, `pool2_sum`, `circpump1_sum`, `pump1_sum`, `sewerpump1_sum`, `sumppump1_sum`, `wellpump1_sum`, `sprinkler1_sum`.
+        *   `pool_spa_heaters`: `jacuzzi1_sum`. (Often Jacuzzis are listed as heaters in these schemas if distinct from pumps, or maybe `pool1_sum`/`pool2_sum` are heaters? Given `poolpump1` is separate, `pool1`/`pool2` might be heaters or generic. Let's assume `jacuzzi1_sum` is the primary spa heater).
+        *   `interior_lighting`: `bathroom1_sum`, `bathroom2_sum`, `bedroom1_sum`, `bedroom2_sum`, `bedroom3_sum`, `bedroom4_sum`, `bedroom5_sum`, `diningroom1_sum`, `diningroom2_sum`, `kitchen1_sum`, `kitchen2_sum`, `livingroom1_sum`, `livingroom2_sum`, `office1_sum`, `utilityroom1_sum`, `garage1_sum`, `garage2_sum`, `shed1_sum`.
+        *   `exterior_lighting`: `poollight1_sum`.
+        *   `lighting`: Sum of `interior_lighting` and `exterior_lighting`.
+        *   `plug`: `lights_plugs1_sum`, `lights_plugs2_sum`, `lights_plugs3_sum`, `lights_plugs4_sum`, `lights_plugs5_sum`, `lights_plugs6_sum`, `kitchenapp1_sum`, `kitchenapp2_sum`, `car1_sum`, `car2_sum`, `battery1_sum`, `aquarium1_sum`, `security1_sum`, `solar_sum`, `solar2_sum`.
+
+4.  **Aggregation**: Group the data by `season` and `hour`. Sum the values for each calculated category column.
+5.  **Formatting**: Ensure column names match the target verbatim.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # 1. Parse datetime
+    df['dt'] = pd.to_datetime(df['local_15min'], format='%m/%d/%Y %H:%M')
+    df['hour'] = df['dt'].dt.hour
+    df['month'] = df['dt'].dt.month
+    
+    # 2. Determine Season
+    def get_season(month):
+        if month in [12, 1, 2]:
+            return 'Winter'
+        elif month in [3, 4, 5]:
+            return 'Spring'
+        elif month in [6, 7, 8]:
+            return 'Summer'
+        else:
+            return 'Fall'
+            
+    df['season'] = df['month'].apply(get_season)
+    
+    # 3. Define Column Mappings for Aggregation
+    # HVAC
+    hvac_cols = ['air1_sum', 'air2_sum', 'air3_sum', 'airwindowunit1_sum', 
+                 'furnace1_sum', 'furnace2_sum', 'heater1_sum', 'heater2_sum', 
+                 'heater3_sum', 'housefan1_sum']
+    
+    # Water Heating
+    water_heating_cols = ['waterheater1_sum', 'waterheater2_sum']
+    
+    # Refrigerator
+    refrigerator_cols = ['refrigerator1_sum', 'refrigerator2_sum', 'freezer1_sum', 
+                         'icemaker1_sum', 'winecooler1_sum']
+    
+    # Clothes Washer
+    clothes_washer_cols = ['clotheswasher1_sum', 'clotheswasher_dryg1_sum']
+    
+    # Clothes Dryer
+    clothes_dryer_cols = ['drye1_sum', 'dryg1_sum']
+    
+    # Dishwasher
+    dishwasher_cols = ['dishwasher1_sum', 'disposal1_sum']
+    
+    # Cooking Range
+    cooking_range_cols = ['oven1_sum', 'oven2_sum', 'range1_sum', 'microwave1_sum', 'venthood1_sum']
+    
+    # Pool/Spa Pumps
+    pool_spa_pumps_cols = ['poolpump1_sum', 'pool1_sum', 'pool2_sum', 'circpump1_sum', 
+                           'pump1_sum', 'sewerpump1_sum', 'sumppump1_sum', 'wellpump1_sum', 'sprinkler1_sum']
+    
+    # Pool/Spa Heaters
+    pool_spa_heaters_cols = ['jacuzzi1_sum']
+    
+    # Interior Lighting
+    interior_lighting_cols = ['bathroom1_sum', 'bathroom2_sum', 'bedroom1_sum', 'bedroom2_sum', 
+                              'bedroom3_sum', 'bedroom4_sum', 'bedroom5_sum', 'diningroom1_sum', 
+                              'diningroom2_sum', 'kitchen1_sum', 'kitchen2_sum', 'livingroom1_sum', 
+                              'livingroom2_sum', 'office1_sum', 'utilityroom1_sum', 'garage1_sum', 
+                              'garage2_sum', 'shed1_sum']
+    
+    # Exterior Lighting
+    exterior_lighting_cols = ['poollight1_sum']
+    
+    # Plug Loads
+    plug_cols = ['lights_plugs1_sum', 'lights_plugs2_sum', 'lights_plugs3_sum', 'lights_plugs4_sum',
+                 'lights_plugs5_sum', 'lights_plugs6_sum', 'kitchenapp1_sum', 'kitchenapp2_sum',
+                 'car1_sum', 'car2_sum', 'battery1_sum', 'aquarium1_sum', 'security1_sum',
+                 'solar_sum', 'solar2_sum']
+
+    # 4. Calculate Aggregated Columns
+    df['hvac'] = df[hvac_cols].sum(axis=1)
+    df['water_heating'] = df[water_heating_cols].sum(axis=1)
+    df['refrigerator'] = df[refrigerator_cols].sum(axis=1)
+    df['clothes_washer'] = df[clothes_washer_cols].sum(axis=1)
+    df['clothes_dryer'] = df[clothes_dryer_cols].sum(axis=1)
+    df['dishwasher'] = df[dishwasher_cols].sum(axis=1)
+    df['cooking_range'] = df[cooking_range_cols].sum(axis=1)
+    df['pool_spa_pumps'] = df[pool_spa_pumps_cols].sum(axis=1)
+    df['pool_spa_heaters'] = df[pool_spa_heaters_cols].sum(axis=1)
+    df['interior_lighting'] = df[interior_lighting_cols].sum(axis=1)
+    df['exterior_lighting'] = df[exterior_lighting_cols].sum(axis=1)
+    df['plug'] = df[plug_cols].sum(axis=1)
+    
+    # Lighting is sum of interior and exterior based on target sample equality
+    df['lighting'] = df['interior_lighting'] + df['exterior_lighting']
+    
+    # 5. Group and Aggregate
+    # The target has one row per Season/Hour combination.
+    agg_dict = {
+        'hvac': 'sum',
+        'water_heating': 'sum',
+        'refrigerator': 'sum',
+        'clothes_washer': 'sum',
+        'clothes_dryer': 'sum',
+        'dishwasher': 'sum',
+        'cooking_range': 'sum',
+        'pool_spa_pumps': 'sum',
+        'pool_spa_heaters': 'sum',
+        'interior_lighting': 'sum',
+        'exterior_lighting': 'sum',
+        'lighting': 'sum',
+        'plug': 'sum'
+    }
+    
+    result = df.groupby(['season', 'hour']).agg(agg_dict).reset_index()
+    
+    # 6. Select and Order Columns
+    target_columns = ['season', 'hour', 'hvac', 'water_heating', 'refrigerator', 'clothes_washer', 
+                      'clothes_dryer', 'dishwasher', 'cooking_range', 'pool_spa_pumps', 
+                      'interior_lighting', 'exterior_lighting', 'lighting', 'plug', 'pool_spa_heaters']
+    
+    return result[target_columns]
+```

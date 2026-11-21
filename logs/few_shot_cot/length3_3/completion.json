@@ -1,0 +1,11 @@
+{
+  "usage": {
+    "prompt_tokens": 3410,
+    "completion_tokens": 2893,
+    "total_tokens": 6303
+  },
+  "latency": 92.09544348716736,
+  "strategy": "few_shot_cot",
+  "case": "length3_3",
+  "model": "qwen36-27b"
+}

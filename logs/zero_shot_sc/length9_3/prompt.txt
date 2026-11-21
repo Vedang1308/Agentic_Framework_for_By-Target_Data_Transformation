@@ -1,0 +1,44 @@
+### Benchmark Case: length9_3
+- Source sample rows: 300 rows (Note: test_0.csv may have different row count)
+- Target rows: 300 rows
+
+### Exact Target Columns (Must match verbatim):
+['season', 'daytype', 'hour', 'temperature_range', 'constant', 'coefficient', 'low_end', 'high_end']
+
+### Source Schema and Types:
+CLASS (object), SEASON DAY TYPE (object), HOUR (int64), T_MIN_1 (int64), T_MAX_1 (float64), CONSTANT_1 (float64), TEMP_1 (float64), RH_1 (float64), WIND_1 (float64), T_MIN_2 (float64), T_MAX_2 (float64), CONSTANT_2 (float64), TEMP_2 (float64), RH_2 (float64), WIND_2 (float64), T_MIN_3 (float64), T_MAX_3 (float64), CONSTANT_3 (float64), TEMP_3 (float64), RH_3 (float64), WIND_3 (float64), PROFILE_MIN (float64), PROFILE_MAX (float64)
+
+### Target Schema and Types:
+season (object), daytype (object), hour (int64), temperature_range (int64), constant (float64), coefficient (float64), low_end (int64), high_end (int64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- CLASS: ['RS0']
+
+### Source Table Sample (training_0.csv):
+| CLASS   | SEASON DAY TYPE   |   HOUR |   T_MIN_1 |   T_MAX_1 |   CONSTANT_1 |     TEMP_1 |         RH_1 |       WIND_1 |   T_MIN_2 |   T_MAX_2 |   CONSTANT_2 |      TEMP_2 |         RH_2 |       WIND_2 |   T_MIN_3 |   T_MAX_3 |   CONSTANT_3 |       TEMP_3 |         RH_3 |       WIND_3 |   PROFILE_MIN |   PROFILE_MAX |
+|:--------|:------------------|-------:|----------:|----------:|-------------:|-----------:|-------------:|-------------:|----------:|----------:|-------------:|------------:|-------------:|-------------:|----------:|----------:|-------------:|-------------:|-------------:|-------------:|--------------:|--------------:|
+| RS0     | June WE           |     13 |        68 |      75   |     -2.27261 |  0.0408502 |   0.0107447  | nan          |      75   |      82   |     -6.5827  |  0.0985877  |   0.00746994 | nan          |      82   |        91 |    -4.27286  |   0.0684744  |   0.0112146  | nan          |         0.616 |         2.821 |
+| RS0     | June WE           |     14 |        68 |      81   |     -2.1451  |  0.0409519 |   0.00935745 | nan          |      81   |      93   |     -3.3475  |  0.0602259  |   0.00848122 | nan          |     nan   |       nan |   nan        | nan          | nan          | nan          |         0.616 |         2.821 |
+| RS0     | June WE           |     15 |        70 |      78.5 |     -2.81425 |  0.0488167 |   0.0109052  | nan          |      78.5 |      83.5 |     -7.66717 |  0.11022    |   0.0120217  | nan          |      83.5 |        95 |    -2.6015   |   0.0567524  |   0.00051828 | nan          |         0.616 |         2.821 |
+| RS0     | June WE           |     16 |        68 |      76   |     -3.55845 |  0.0629464 |   0.00860501 | nan          |      76   |      83   |     -6.97602 |  0.0973837  |   0.0201065  | nan          |      83   |        97 |    -0.744828 |   0.0381572  |  -0.00381544 | nan          |         0.616 |         2.821 |
+| RS0     | December WE       |     21 |        19 |      33.5 |      2.56865 | -0.0175021 | nan          |  -0.00431114 |      33.5 |      47.5 |      2.37433 | -0.013512   | nan          |  -0.00826092 |      47.5 |        66 |     1.8743   |  -0.00753462 | nan          |   0.00102602 |         0.693 |         2.504 |
+| RS0     | December WE       |     22 |        18 |      32   |      2.55477 | -0.0163982 | nan          |  -0.0107095  |      32   |      46   |      2.31076 | -0.0163921  | nan          |   0.0039235  |      46   |        68 |     1.89634  |  -0.00980365 | nan          |   0.00388997 |         0.693 |         2.504 |
+| RS0     | December WE       |     23 |        19 |      34   |      2.68285 | -0.0262719 | nan          |  -0.00899648 |      34   |      48   |      2.35611 | -0.0210872  | nan          |   0.00469002 |      48   |        64 |     1.82646  |  -0.0115957  | nan          |   0.0135813  |         0.693 |         2.504 |
+| RS0     | December WE       |     24 |        19 |      35   |      2.37988 | -0.0225725 | nan          |  -0.0027489  |      35   |      47.5 |      1.71898 | -0.00932639 | nan          |   0.00466731 |      47.5 |        64 |     1.42192  |  -0.00704835 | nan          |   0.0099397  |         0.693 |         2.504 |
+
+### Desired Target Table Sample (target.csv):
+| season   | daytype   |   hour |   temperature_range |   constant |   coefficient |   low_end |   high_end |
+|:---------|:----------|-------:|--------------------:|-----------:|--------------:|----------:|-----------:|
+| SPRING   | WEEKDAY   |      1 |                  53 |        nan |           nan |         9 |         62 |
+| SPRING   | WEEKDAY   |      2 |                  53 |        nan |           nan |        10 |         63 |
+| SPRING   | WEEKDAY   |      3 |                  56 |        nan |           nan |         9 |         65 |
+| SPRING   | WEEKDAY   |      4 |                  56 |        nan |           nan |        10 |         66 |
+| SUMMER   | WEEKEND   |      9 |                  21 |        nan |           nan |        60 |         81 |
+| SUMMER   | WEEKEND   |     10 |                  21 |        nan |           nan |        63 |         84 |
+| SUMMER   | WEEKEND   |     11 |                  21 |        nan |           nan |        66 |         87 |
+| SUMMER   | WEEKEND   |     12 |                  22 |        nan |           nan |        67 |         89 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

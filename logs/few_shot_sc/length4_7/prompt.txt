@@ -1,0 +1,133 @@
+Here are worked examples demonstrating step-by-step reasoning and valid Python code:
+
+### Example 1 (Case length1_1)
+Source Schema: Strata_ID (int64), Strata (object), DT_STRATA (object), DOW (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)
+Target Schema: cst (object), 1:00..24:00 (float64)
+Source Sample: DT_STRATA sample: ['7/2/2016', '7/3/2016']; PCT_HOURLY_0100 sample: [0.000701, 0.000761]
+Target Sample: cst sample: ['Fri 01/01/2016', 'Sat 01/02/2016']; 1:00 sample: [0.001222, 0.001313]
+Step-by-Step Reasoning Plan:
+1. Analyze schemas: Source has date column 'DT_STRATA' and hourly columns 'PCT_HOURLY_0100' through 'PCT_HOURLY_2500'.
+2. Target schema requires column 'cst' with formatted date strings like 'Fri 01/01/2016' (%a %m/%d/%Y).
+3. Parse 'DT_STRATA' to datetime and format as '%a %m/%d/%Y' in column 'cst'.
+4. Rename hourly columns: 'PCT_HOURLY_0100' -> '1:00', ..., 'PCT_HOURLY_2400' -> '24:00'.
+5. Drop extra columns ('Strata_ID', 'Strata', 'DOW', 'PCT_HOURLY_2500') and align returned columns verbatim to target.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'{i}:00' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    return df[target_cols]
+```
+
+### Example 2 (Case length2_1)
+Source Schema: CST (object), 1:00..24:00:00 (float64)
+Target Schema: dt_strata (object), dow (int64), pct_hourly_0100..pct_hourly_2500 (float64)
+Source Sample: CST sample: ['Sat 12/01/2012', 'Sun 12/02/2012']; 1:00 sample: [0.9841, 0.9012]
+Target Sample: dt_strata sample: ['04/01/2009', '04/02/2009']; dow sample: [3, 4]; pct_hourly_0100 sample: [1.02, 0.93]
+Step-by-Step Reasoning Plan:
+1. Inspect date: Source 'CST' has format 'Day MM/DD/YYYY'. Split by whitespace to extract the date part.
+2. Convert to datetime, then format as '%m/%d/%Y' for 'dt_strata'.
+3. Compute 'dow' (day of week) where Monday=1 ... Sunday=7 using `dt.dt.dayofweek + 1`.
+4. Rename hourly columns: '1:00' -> 'pct_hourly_0100', ..., '24:00'/'24:00:00' -> 'pct_hourly_2400'.
+5. Target includes 'pct_hourly_2500' filled with 0. Add this column and select target columns verbatim.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    date_str = df['CST'].str.split(' ').str[-1]
+    dt = pd.to_datetime(date_str, format='%m/%d/%Y')
+    df['dt_strata'] = dt.dt.strftime('%m/%d/%Y')
+    df['dow'] = dt.dt.dayofweek + 1
+    rename_dict = {f'{i}:00': f'pct_hourly_{i:02d}00' for i in range(1, 24)}
+    if '24:00:00' in df.columns:
+        rename_dict['24:00:00'] = 'pct_hourly_2400'
+    elif '24:00' in df.columns:
+        rename_dict['24:00'] = 'pct_hourly_2400'
+    df = df.rename(columns=rename_dict)
+    df['pct_hourly_2500'] = 0
+    target_cols = ['dt_strata', 'dow'] + [f'pct_hourly_{i:02d}00' for i in range(1, 26)]
+    return df[target_cols]
+```
+
+### Example 3 (Case length3_1)
+Source Schema: Strata_ID (int64), Strata (object), DT_STRATA (object), DOW (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)
+Target Schema: date (object), Hour 1..Hour 24 (float64)
+Source Sample: DT_STRATA sample: ['7/2/2016']; PCT_HOURLY_0100 sample: [0.000701]
+Target Sample: date sample: ['01/01/2016']; Hour 1 sample: [0.001222]
+Step-by-Step Reasoning Plan:
+1. Analyze date: Source column 'DT_STRATA' has dates formatted as M/D/YYYY. Format as '%m/%d/%Y' in column 'date'.
+2. Map hour columns: 'PCT_HOURLY_{i:02d}00' maps to 'Hour {i}' for i=1..24.
+3. Select columns: 'date' followed by 'Hour 1' through 'Hour 24'. Drop unused columns.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['date'] = dt.dt.strftime('%m/%d/%Y')
+    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'Hour {i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    target_cols = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    return df[target_cols]
+```
+
+============================================================
+Now, synthesize the transformation function for the following case:
+
+### Benchmark Case: length4_7
+- Source sample rows: 2465 rows (Note: test_0.csv may have different row count)
+- Target rows: 2465 rows
+
+### Exact Target Columns (Must match verbatim):
+['date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']
+
+### Datetime Format Inferences:
+- Source column 'Date' has date format '%a %m/%d/%Y' (sample: 'Thu 10/01/2009')
+- Target column 'date' requires date format '%m/%d/%Y' (sample: '01/01/2003')
+
+### Source Schema and Types:
+Segment (object), Date (object), 1:00 (float64), 2:00 (float64), 3:00 (float64), 4:00 (float64), 5:00 (float64), 6:00 (float64), 7:00 (float64), 8:00 (float64), 9:00 (float64), 10:00 (float64), 11:00 (float64), 12:00 (float64), 13:00 (float64), 14:00 (float64), 15:00 (float64), 16:00 (float64), 17:00 (float64), 18:00 (float64), 19:00 (float64), 20:00 (float64), 21:00 (float64), 22:00 (float64), 23:00 (float64), 24:00:00 (float64)
+
+### Target Schema and Types:
+date (object), 1:00 AM (float64), 2:00 AM (float64), 3:00 AM (float64), 4:00 AM (float64), 5:00 AM (float64), 6:00 AM (float64), 7:00 AM (float64), 8:00 AM (float64), 9:00 AM (float64), 10:00 AM (float64), 11:00 AM (float64), 12:00 AM (float64), 1:00 PM (float64), 2:00 PM (float64), 3:00 PM (float64), 4:00 PM (float64), 5:00 PM (float64), 6:00 PM (float64), 7:00 PM (float64), 8:00 PM (float64), 9:00 PM (float64), 10:00 PM (float64), 11:00 PM (float64), 12:00 PM (float64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- Segment: ['RS6']
+
+### Source Table Sample (training_0.csv):
+| Segment   | Date           |   1:00 |   2:00 |   3:00 |   4:00 |   5:00 |   6:00 |   7:00 |   8:00 |   9:00 |   10:00 |   11:00 |   12:00 |   13:00 |   14:00 |   15:00 |   16:00 |   17:00 |   18:00 |   19:00 |   20:00 |   21:00 |   22:00 |   23:00 |   24:00:00 |
+|:----------|:---------------|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|-----------:|
+| RS6       | Thu 10/01/2009 |  1.153 |  1.198 |  1.206 |  1.24  |  1.358 |  1.721 |  1.816 |  1.63  |  1.474 |   1.303 |   1.235 |   1.119 |   1.081 |   1.115 |   1.106 |   1.235 |   1.353 |   1.588 |   1.768 |   1.809 |   1.7   |   1.666 |   1.315 |      1.155 |
+| RS6       | Fri 10/02/2009 |  1.129 |  1.092 |  1.09  |  1.049 |  1.286 |  1.502 |  1.596 |  1.447 |  1.171 |   1.125 |   1.204 |   1.145 |   1.067 |   1.027 |   1.243 |   1.377 |   1.371 |   1.403 |   1.613 |   1.635 |   1.496 |   1.558 |   1.435 |      1.249 |
+| RS6       | Sat 10/03/2009 |  1.146 |  1.152 |  1.109 |  1.093 |  1.171 |  1.177 |  1.416 |  1.661 |  1.6   |   1.549 |   1.565 |   1.528 |   1.48  |   1.539 |   1.479 |   1.628 |   1.81  |   1.735 |   1.766 |   1.699 |   1.536 |   1.467 |   1.276 |      1.232 |
+| RS6       | Sun 10/04/2009 |  1.152 |  1.072 |  1.076 |  1.102 |  1.113 |  1.058 |  1.276 |  1.64  |  1.556 |   1.437 |   1.53  |   1.681 |   1.59  |   1.619 |   1.589 |   1.456 |   1.536 |   1.804 |   2.022 |   2.271 |   1.924 |   1.61  |   1.417 |      1.311 |
+| RS6       | Mon 06/27/2016 |  2.373 |  2.087 |  1.882 |  1.79  |  1.704 |  1.92  |  1.819 |  2.102 |  2.273 |   2.324 |   2.592 |   2.763 |   2.887 |   3.075 |   3.318 |   3.401 |   3.204 |   3.364 |   3.393 |   3.179 |   3.105 |   3.001 |   2.688 |      2.501 |
+| RS6       | Tue 06/28/2016 |  2.119 |  1.852 |  1.762 |  1.57  |  1.59  |  1.668 |  1.551 |  1.679 |  1.838 |   2.015 |   2.357 |   2.309 |   2.344 |   2.564 |   2.545 |   2.804 |   2.936 |   3.086 |   2.976 |   2.876 |   2.502 |   2.159 |   1.885 |      1.564 |
+| RS6       | Wed 06/29/2016 |  1.296 |  1.302 |  1.179 |  1.095 |  1.14  |  1.222 |  1.197 |  1.286 |  1.32  |   1.386 |   1.503 |   1.594 |   1.63  |   1.784 |   1.772 |   2.1   |   2.144 |   2.275 |   2.376 |   2.257 |   2.08  |   1.866 |   1.715 |      1.392 |
+| RS6       | Thu 06/30/2016 |  1.18  |  1.14  |  1.056 |  0.95  |  0.931 |  0.974 |  1.041 |  1.14  |  1.338 |   1.446 |   1.574 |   1.683 |   1.656 |   1.848 |   2.134 |   2.168 |   2.107 |   2.365 |   2.43  |   2.452 |   2.128 |   2.121 |   1.823 |      1.823 |
+
+### Desired Target Table Sample (target.csv):
+| date       |   1:00 AM |   2:00 AM |   3:00 AM |   4:00 AM |   5:00 AM |   6:00 AM |   7:00 AM |   8:00 AM |   9:00 AM |   10:00 AM |   11:00 AM |   12:00 AM |   1:00 PM |   2:00 PM |   3:00 PM |   4:00 PM |   5:00 PM |   6:00 PM |   7:00 PM |   8:00 PM |   9:00 PM |   10:00 PM |   11:00 PM |   12:00 PM |
+|:-----------|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|-----------:|-----------:|-----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|-----------:|-----------:|-----------:|
+| 01/01/2003 |     2.188 |     2.114 |     2.013 |     1.944 |     2.064 |     2.119 |     2.019 |     2.407 |     2.59  |      2.793 |      3.098 |      3.33  |     3.556 |     3.49  |     3.311 |     3.322 |     3.262 |     3.407 |     3.302 |     3.64  |     3.537 |      3.299 |      3.177 |      2.753 |
+| 01/02/2003 |     2.619 |     2.352 |     2.157 |     2.38  |     2.444 |     2.695 |     2.835 |     2.844 |     2.983 |      2.9   |      2.79  |      2.802 |     2.872 |     2.543 |     2.654 |     2.684 |     3.032 |     3.267 |     3.492 |     3.408 |     3.318 |      3.329 |      2.999 |      2.776 |
+| 01/03/2003 |     2.463 |     2.495 |     2.53  |     2.511 |     2.596 |     2.868 |     3.032 |     3.182 |     3.248 |      3.303 |      3.134 |      3.028 |     2.981 |     2.943 |     2.896 |     3.016 |     3.113 |     3.436 |     3.553 |     3.44  |     3.398 |      3.216 |      3.018 |      2.866 |
+| 01/04/2003 |     2.736 |     2.587 |     2.622 |     2.627 |     2.569 |     2.753 |     2.718 |     2.884 |     3.353 |      3.225 |      3.15  |      2.746 |     2.869 |     2.819 |     2.489 |     2.747 |     3.055 |     3.157 |     3.291 |     3.192 |     3.215 |      2.937 |      2.624 |      2.579 |
+| 09/27/2009 |     1.202 |     1.129 |     1.021 |     0.989 |     1.006 |     1.033 |     1.313 |     1.512 |     1.609 |      1.673 |      1.814 |      1.698 |     1.818 |     1.712 |     1.745 |     1.667 |     1.829 |     1.953 |     1.979 |     2.245 |     2.086 |      1.783 |      1.428 |      1.19  |
+| 09/28/2009 |     1.079 |     1.091 |     0.968 |     1.027 |     1.123 |     1.522 |     1.522 |     1.355 |     1.395 |      1.165 |      1.205 |      1.209 |     1.262 |     1.255 |     1.415 |     1.52  |     1.665 |     1.755 |     1.945 |     1.972 |     1.838 |      1.55  |      1.378 |      1.197 |
+| 09/29/2009 |     1.143 |     1.087 |     1.082 |     1.046 |     1.259 |     1.523 |     1.656 |     1.443 |     1.329 |      1.292 |      1.171 |      1.27  |     1.313 |     1.275 |     1.287 |     1.402 |     1.475 |     1.718 |     1.83  |     1.972 |     1.85  |      1.72  |      1.337 |      1.135 |
+| 09/30/2009 |     1.079 |     1.102 |     1.078 |     1.106 |     1.254 |     1.565 |     1.756 |     1.54  |     1.26  |      1.282 |      1.181 |      1.28  |     1.095 |     1.228 |     1.242 |     1.211 |     1.563 |     1.674 |     1.924 |     1.972 |     1.988 |      1.776 |      1.527 |      1.527 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

@@ -1,0 +1,152 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source columns: `CLASS`, `SEASON DAY TYPE`, `HOUR`, `T_MIN_1`, `T_MAX_1`, `CONSTANT_1`, `TEMP_1`, `RH_1`, `WIND_1`, `T_MIN_2`, `T_MAX_2`, `CONSTANT_2`, `TEMP_2`, `RH_2`, `WIND_2`, `T_MIN_3`, `T_MAX_3`, `CONSTANT_3`, `TEMP_3`, `RH_3`, `WIND_3`, `PROFILE_MIN`, `PROFILE_MAX`.
+    *   Target columns: `season`, `daytype`, `hour`, `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end`.
+    *   Row counts match (300 rows in sample), suggesting a row-wise transformation rather than a reshape (melt/pivot).
+
+2.  **Map Categorical Columns (`season`, `daytype`)**:
+    *   Source `SEASON DAY TYPE` contains strings like "June WE", "December WE".
+    *   Target `season` contains values like "SPRING", "SUMMER".
+    *   Target `daytype` contains values like "WEEKDAY", "WEEKEND".
+    *   Logic for `daytype`: The suffix "WE" likely stands for "Weekend". If the string ends with "WE", `daytype` is "WEEKEND". Otherwise, it is likely "WEEKDAY". Looking at the sample, all are "WE", but standard logic implies splitting. Let's assume standard mapping: "WE" -> "WEEKEND", else "WEEKDAY".
+    *   Logic for `season`: The prefix (e.g., "June", "December") maps to a season.
+        *   Spring: March, April, May
+        *   Summer: June, July, August
+        *   Autumn/Fall: September, October, November
+        *   Winter: December, January, February
+        *   We need to extract the month name from `SEASON DAY TYPE` (first word) and map it to the season.
+
+3.  **Map Numeric Columns**:
+    *   `hour`: Source `HOUR` maps directly to target `hour`.
+    *   `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end`:
+        *   The source has three sets of temperature ranges: `_1`, `_2`, `_3`.
+        *   The target has single columns for these metrics.
+        *   Looking at the target sample, `constant` and `coefficient` are `nan`. This suggests that for the rows shown in the target sample, the specific data might be missing or derived differently. However, usually in these TbT tasks, if there are multiple sources (1, 2, 3), we might need to combine them.
+        *   Let's look closer at the target values.
+            *   Target `low_end` for SPRING WEEKDAY hour 1 is 9.
+            *   Target `high_end` for SPRING WEEKDAY hour 1 is 62.
+            *   Target `temperature_range` is 53. Note that 62 - 9 = 53. So `temperature_range` = `high_end` - `low_end`.
+        *   Where do `low_end` and `high_end` come from?
+            *   Source has `T_MIN_1`, `T_MAX_1`, `T_MIN_2`, `T_MAX_2`, etc.
+            *   Source also has `PROFILE_MIN` and `PROFILE_MAX`.
+            *   In the source sample, `PROFILE_MIN` is ~0.6 and `PROFILE_MAX` is ~2.8. These don't look like temperatures in Fahrenheit (which T_MIN/T_MAX seem to be, e.g., 68, 75).
+            *   Wait, the target `low_end` (9) and `high_end` (62) are quite different from the source `T_MIN`/`T_MAX` (68, 75).
+            *   Let's re-read the source sample carefully.
+                *   Row 1: June WE, Hour 13. T_MIN_1=68, T_MAX_1=75.
+                *   Target sample doesn't have June WE Hour 13. It has Spring Weekday Hour 1.
+            *   This implies the mapping is not a direct row-to-row copy of the *same* row indices if the content is completely different. However, the problem states "transform the source DataFrame into the target DataFrame" and "Row counts match". This usually implies the *structure* is the same, but the values might be transformed.
+            *   BUT, look at the target sample values: `season` is "SPRING", `daytype` is "WEEKDAY". The source sample only shows "June WE" (Summer Weekend) and "December WE" (Winter Weekend).
+            *   This is a critical observation. The source sample provided in the prompt is *not* representative of the *entire* source table, or the target sample is from a different part of the data. The prompt says "Source sample rows: 300 rows... Target rows: 300 rows". It implies a 1-to-1 mapping.
+            *   Let's look for a pattern in how `low_end` and `high_end` might be derived from `T_MIN`/`T_MAX`.
+            *   Maybe `low_end` and `high_end` are simply `T_MIN` and `T_MAX` from one of the groups?
+            *   Or maybe `low_end` and `high_end` are `PROFILE_MIN` and `PROFILE_MAX` scaled? No, 0.6 -> 9? Unlikely.
+            *   Let's look at the `temperature_range`. In the target, it's 53. In the source, T_MAX - T_MIN for group 1 is 75-68=7. Group 2: 82-75=7. Group 3: 91-82=9.
+            *   Is it possible the target `low_end` and `high_end` correspond to `T_MIN` and `T_MAX` of a specific group?
+            *   Let's check the target sample again.
+                *   SPRING WEEKDAY Hour 1: Range 53, Low 9, High 62.
+                *   SPRING WEEKDAY Hour 2: Range 53, Low 10, High 63.
+                *   SPRING WEEKDAY Hour 3: Range 56, Low 9, High 65.
+            *   These numbers (9, 62) are very low for "June" or "December" temps in F. They look like Celsius?
+                *   62 F = 16.6 C.
+                *   9 F = -12 C.
+                *   If the source is F and target is C?
+                *   Source T_MIN_1 = 68 F. (68-32)*5/9 = 20 C. Target Low = 9. No.
+            *   Let's look at `CONSTANT` and `COEFFICIENT`. Target is `nan`. Source has values. This suggests these columns might be dropped or set to NaN if not applicable.
+            *   Let's reconsider the `SEASON DAY TYPE` parsing.
+                *   "June WE" -> Season: Summer, DayType: Weekend.
+                *   "December WE" -> Season: Winter, DayType: Weekend.
+                *   Target has "SPRING", "WEEKDAY".
+                *   This confirms we need a robust parser for `SEASON DAY TYPE`.
+
+    *   **Hypothesis for `low_end` and `high_end`**:
+        *   Perhaps the target table is derived from `PROFILE_MIN` and `PROFILE_MAX`?
+        *   Source `PROFILE_MIN` = 0.616. Target `low_end` = 9.
+        *   Source `PROFILE_MAX` = 2.821. Target `high_end` = 62.
+        *   This doesn't match linearly.
+        *   What if `low_end` and `high_end` are `T_MIN` and `T_MAX` from the *first* group (`_1`)?
+            *   Source: 68, 75. Target: 9, 62. No.
+        *   What if the target `low_end` and `high_end` are actually `T_MIN` and `T_MAX` but the sample rows in the prompt are just *different rows*?
+            *   Yes, the prompt says "Source Table Sample" and "Desired Target Table Sample". They are likely disjoint sets of rows from the same underlying dataset.
+            *   Therefore, I must find the *general* transformation rule that applies to *all* rows.
+            *   If the transformation is row-wise, then for a given row, `target.low_end` must be a function of `source.*` for that same row.
+            *   Let's assume the simplest case: `low_end` = `T_MIN_1`? `high_end` = `T_MAX_1`?
+                *   If so, why are the values so different in the samples?
+                *   Maybe the source sample provided is *not* the source of the target sample?
+                *   "Source sample rows: 300 rows... Target rows: 300 rows".
+                *   If I assume `low_end` maps to `T_MIN_1` and `high_end` maps to `T_MAX_1`, then `temperature_range` = `T_MAX_1` - `T_MIN_1`.
+                *   Let's check if `constant` and `coefficient` map to `CONSTANT_1` and `TEMP_1` (or `RH_1`)?
+                *   In the target sample, `constant` and `coefficient` are `nan`. In the source sample, they are not.
+                *   This suggests that for the rows in the target sample (Spring Weekday), the source columns for constant/coefficient might have been NaN, or the logic sets them to NaN based on some condition.
+                *   However, without seeing a source row for "Spring Weekday", I have to guess the mapping.
+                *   Common pattern in these datasets:
+                    *   `season`: Extract from `SEASON DAY TYPE`.
+                    *   `daytype`: Extract from `SEASON DAY TYPE`.
+                    *   `hour`: From `HOUR`.
+                    *   `temperature_range`: `T_MAX_1` - `T_MIN_1`? Or `PROFILE_MAX` - `PROFILE_MIN`?
+                    *   `low_end`: `T_MIN_1`?
+                    *   `high_end`: `T_MAX_1`?
+                    *   `constant`: `CONSTANT_1`?
+                    *   `coefficient`: `TEMP_1`? Or `RH_1`?
+        
+        *   Let's look at the column names again.
+            *   Source: `T_MIN_1`, `T_MAX_1`, `CONSTANT_1`, `TEMP_1`, `RH_1`, `WIND_1`.
+            *   Target: `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end`.
+            *   It is highly probable that:
+                *   `low_end` <- `T_MIN_1`
+                *   `high_end` <- `T_MAX_1`
+                *   `temperature_range` <- `high_end` - `low_end` (or `T_MAX_1` - `T_MIN_1`)
+                *   `constant` <- `CONSTANT_1`
+                *   `coefficient` <- `TEMP_1` (or `RH_1` or `WIND_1`)
+            
+        *   Why are they NaN in the target sample?
+            *   Maybe the target sample rows correspond to source rows where `T_MIN_1` etc were NaN?
+            *   Or maybe the target sample provided in the prompt is *not* generated from the source sample provided, but from the *full* source table, and the values in the target sample *are* the correct transformed values for those specific rows.
+            *   If I assume `low_end` = `T_MIN_1`, then for the target row `SPRING WEEKDAY 1`, the source row must have had `T_MIN_1` = 9.
+            *   This is plausible. The source sample shows Summer/Winter. The target sample shows Spring. Spring temps are lower. 9 and 62 are plausible Fahrenheit temps for a cold spring morning/evening? 9F is very cold (-12C). 62F is mild.
+            *   If `T_MIN_1` is 9 and `T_MAX_1` is 62, then `temperature_range` is 53. This matches the target `temperature_range`.
+            *   So the mapping is likely:
+                *   `low_end` = `T_MIN_1`
+                *   `high_end` = `T_MAX_1`
+                *   `temperature_range` = `T_MAX_1` - `T_MIN_1`
+                *   `constant` = `CONSTANT_1`
+                *   `coefficient` = `TEMP_1` (or another column)
+            
+        *   Which column is `coefficient`?
+            *   Candidates: `TEMP_1`, `RH_1`, `WIND_1`.
+            *   In the source sample, `WIND_1` is NaN. `RH_1` and `TEMP_1` have values.
+            *   In the target sample, `coefficient` is NaN.
+            *   If `coefficient` mapped to `WIND_1`, and `WIND_1` is often NaN, this fits.
+            *   If `coefficient` mapped to `TEMP_1`, it would rarely be NaN.
+            *   Let's check `CONSTANT_1`. In target, `constant` is NaN. In source, `CONSTANT_1` is not NaN.
+            *   This contradicts the simple mapping if the target sample rows had valid source data.
+            *   UNLESS: The target sample rows *do* have NaN in the source columns `CONSTANT_1`, `TEMP_1`/`WIND_1`, `T_MIN_1`, `T_MAX_1`?
+            *   If `T_MIN_1` was 9 and `T_MAX_1` was 62, they are not NaN.
+            *   So why are `constant` and `coefficient` NaN in the target?
+            *   Maybe `constant` and `coefficient` are *not* `CONSTANT_1` and `TEMP_1`.
+            *   Maybe they are derived from `PROFILE_MIN`/`MAX`? No.
+            *   Maybe the columns `constant` and `coefficient` in the target are simply `CONSTANT_1` and `TEMP_1` (or similar), but for the *specific rows* in the target sample, those source columns happened to be NaN?
+            *   Let's look at the source sample again. `WIND_1` is NaN for all rows. `RH_1` is not. `TEMP_1` is not.
+            *   If `coefficient` = `WIND_1`, it would be NaN for the source sample rows.
+            *   If `constant` = `CONSTANT_1`, it would be non-NaN.
+            *   But in the target sample, *both* are NaN.
+            *   This implies that for the Spring Weekday rows, `CONSTANT_1` was also NaN.
+            *   This is possible. Different weather profiles might have different data availability.
+            *   Therefore, the safest bet is the direct column mapping:
+                *   `low_end` <- `T_MIN_1`
+                *   `high_end` <- `T_MAX_1`
+                *   `temperature_range` <- `T_MAX_1` - `T_MIN_1`
+                *   `constant` <- `CONSTANT_1`
+                *   `coefficient` <- `TEMP_1` (or `RH_1` or `WIND_1`?)
+            
+        *   Let's check the column count and order.
+            *   Source has `_1`, `_2`, `_3`. Target has single columns.
+            *   Usually, `_1` is the primary range.
+            *   Let's guess `coefficient` is `TEMP_1` because it's the next numeric column after `CONSTANT_1` in the source schema (`CONSTANT_1`, `TEMP_1`, `RH_1`, `WIND_1`).
+            *   Alternatively, `coefficient` could be `RH_1`.
+            *   Without more info, `TEMP_1` is a strong candidate for "coefficient" in a temperature model? Or `RH_1` (Relative Humidity)?
+            *   Let's look at the name `coefficient`. In linear models $y = mx + c$, $c$ is constant, $m$ is coefficient.
+            *   If the model is related to temperature, `TEMP_1` might be the variable, not the coefficient.
+            *   However, `CONSTANT_1` is explicitly named "CONSTANT".
+            *   Let's assume `coefficient` maps to `TEMP_1` as it's the most prominent remaining numeric column. Or perhaps `RH_1`.
+            *   Let's check if there's a pattern in other similar datasets. Often `TEMP` is the main variable. `CONSTANT` is the intercept. `COEFFICIENT` might be the slope.
+            *   If the source has `TEMP_1`, `RH_1`, `WIND_1`, and the target has `constant

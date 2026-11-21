@@ -1,0 +1,107 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Input and Output Schemas**:
+   - Source: `date` (string, format `%m/%d/%Y %H:%M`), `cerc_logger_1` (float).
+   - Target: `date` (string, format `%m/%d/%Y`), followed by 24 columns representing hours of the day in 12-hour format with AM/PM (e.g., '1:00 AM', ..., '12:00 AM').
+   - Row count reduction: The source has many rows per day (likely 10-15 minute intervals), while the target has one row per day. This implies an aggregation (likely mean) grouped by date and hour.
+
+2. **Parse Datetime**:
+   - Convert the source `date` column to a pandas datetime object using `pd.to_datetime`.
+   - Extract the date part (year, month, day) to group by.
+   - Extract the hour part (0-23) to determine which target column the value belongs to.
+
+3. **Map Hours to Target Column Names**:
+   - The target columns are in 12-hour format. We need a mapping from 24-hour clock (0-23) to the specific string labels.
+   - 0 -> '12:00 AM'
+   - 1 -> '1:00 AM'
+   - ...
+   - 11 -> '11:00 AM'
+   - 12 -> '12:00 PM'
+   - 13 -> '1:00 PM'
+   - ...
+   - 23 -> '11:00 PM'
+
+4. **Aggregate Data**:
+   - Group the data by the extracted date and the extracted hour.
+   - Calculate the mean of `cerc_logger_1` for each group. This handles the reduction from multiple samples per hour to a single value per hour.
+
+5. **Reshape Data (Pivot)**:
+   - Pivot the aggregated data so that:
+     - Index: Date
+     - Columns: Hour (mapped to target names)
+     - Values: Mean `cerc_logger_1`
+   - This will create a DataFrame where each row is a date and each column is an hour.
+
+6. **Format Output**:
+   - Format the index (date) as `%m/%d/%Y` and reset it to become a column named `date`.
+   - Ensure all 24 hour columns are present. If a specific hour is missing for a day, it should likely be NaN or 0, but typically pivoting handles missing combinations with NaN. The target sample shows no NaNs, implying data exists for all hours or we should fill NaNs. Given the density of source data (every 10 mins), it's highly likely all hours are covered. If not, `fillna(0)` or similar might be needed, but standard pivot usually suffices if data is complete. Let's assume standard pivot.
+   - Rename the columns to match the exact target strings.
+   - Reorder columns to match the target schema: `date` first, then '1:00 AM' through '12:00 AM'.
+
+7. **Construct Final DataFrame**:
+   - Select the columns in the exact order specified in the target schema.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the datetime column
+    # Source format: '7/28/2019 4:50' -> %m/%d/%Y %H:%M
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract date and hour for grouping
+    df['date_only'] = df['datetime'].dt.date
+    df['hour_24'] = df['datetime'].dt.hour
+    
+    # 3. Define mapping from 24-hour hour to target column names
+    # 0 -> 12:00 AM, 1 -> 1:00 AM, ..., 11 -> 11:00 AM
+    # 12 -> 12:00 PM, 13 -> 1:00 PM, ..., 23 -> 11:00 PM
+    hour_map = {}
+    for h in range(24):
+        if h == 0:
+            label = '12:00 AM'
+        elif h < 12:
+            label = f'{h}:00 AM'
+        elif h == 12:
+            label = '12:00 PM'
+        else:
+            label = f'{h-12}:00 PM'
+        hour_map[h] = label
+        
+    df['hour_label'] = df['hour_24'].map(hour_map)
+    
+    # 4. Aggregate by date and hour
+    # Calculate mean of cerc_logger_1 for each date and hour
+    agg_df = df.groupby(['date_only', 'hour_label'])['cerc_logger_1'].mean().reset_index()
+    
+    # 5. Pivot the data
+    # Index: date_only, Columns: hour_label, Values: cerc_logger_1
+    pivot_df = agg_df.pivot(index='date_only', columns='hour_label', values='cerc_logger_1')
+    
+    # 6. Format the date column
+    pivot_df.index = pivot_df.index.strftime('%m/%d/%Y')
+    pivot_df = pivot_df.reset_index()
+    pivot_df.rename(columns={'index': 'date'}, inplace=True)
+    
+    # 7. Ensure all target columns exist and are in the correct order
+    target_columns = [
+        'date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', 
+        '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 PM', 
+        '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', 
+        '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 AM'
+    ]
+    
+    # Fill any missing hours with NaN (or 0 if preferred, but NaN is standard for missing data)
+    # The problem statement implies complete data, but robustness is good.
+    for col in target_columns[1:]:
+        if col not in pivot_df.columns:
+            pivot_df[col] = np.nan
+            
+    # Select and order columns
+    result_df = pivot_df[target_columns]
+    
+    return result_df
+```

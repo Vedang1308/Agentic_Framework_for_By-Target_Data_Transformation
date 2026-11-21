@@ -1,0 +1,156 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source has columns: `Strata_ID`, `Strata`, `DT_STRATA`, `DOW`, and hourly columns `PCT_HOURLY_0100` through `PCT_HOURLY_2500`.
+    *   Target has columns: `month`, `daytype`, and hourly columns `hr1` through `hr24`.
+    *   The row count is preserved (5673 rows in both), implying a row-wise transformation without aggregation or reshaping (melt/pivot).
+
+2.  **Derive `month` Column**:
+    *   The source column `DT_STRATA` contains dates in format `%m/%d/%Y` (e.g., '7/2/2016').
+    *   The target column `month` contains full month names (e.g., 'January', 'June', 'July').
+    *   Action: Parse `DT_STRATA` to datetime using `pd.to_datetime`. Extract the month name using `.dt.strftime('%B')`.
+
+3.  **Derive `daytype` Column**:
+    *   The source column `DOW` contains values like '1', '2', ..., '7', 'H', 'D'.
+    *   The target column `daytype` contains values like 'weekday'.
+    *   Looking at the sample data:
+        *   Source `DOW` '7' (Sunday) -> Target `daytype` 'weekday' (in the first few rows of target sample, which correspond to January dates). Wait, let's look closer.
+        *   Target sample row 1: `month`='January', `daytype`='weekday'.
+        *   Target sample row 5: `month`='June', `daytype`='weekday'.
+        *   Target sample row 8: `month`='July', `daytype`='weekday'.
+        *   The source sample provided in the prompt shows `DOW` values '7', '1', 'H', '3', '4', '5', '6'.
+        *   Standard day types in energy data are often 'weekday', 'weekend', 'holiday'.
+        *   'H' usually stands for Holiday. 'D' might be Daylight Saving or another special day.
+        *   Numbers 1-7 usually map to Mon-Sun.
+        *   Let's check the mapping logic. If the target only shows 'weekday' in the sample, it's possible that all sampled rows are weekdays, or the transformation simplifies categories.
+        *   However, usually:
+            *   1-5 (Mon-Fri) -> 'weekday'
+            *   6-7 (Sat-Sun) -> 'weekend'
+            *   'H' -> 'holiday'
+        *   Let's look at the source sample again.
+            *   Row 1: DOW='7' (Sunday). If this maps to 'weekday', that's unusual.
+            *   Row 2: DOW='1' (Monday). Maps to 'weekday'.
+            *   Row 3: DOW='H' (Holiday).
+            *   Row 4: DOW='3' (Wednesday).
+        *   Let's look at the target sample values again. All visible `daytype` values are 'weekday'. This suggests either:
+            a) The sample is filtered to only weekdays.
+            b) The transformation logic maps specific DOW codes to 'weekday'.
+        *   Let's assume standard mapping:
+            *   If DOW is in ['1', '2', '3', '4', '5'], it's a weekday.
+            *   If DOW is in ['6', '7'], it's a weekend.
+            *   If DOW is 'H', it's a holiday.
+        *   However, without explicit target rows for weekends/holidays in the sample, I must infer the most likely general rule. In many TbT tasks, if the target column is `daytype`, it distinguishes between weekdays and non-weekdays.
+        *   Let's look at the source `DOW` distinct values: `['7', '1', 'H', '3', '4', '5', '6', '2', 'D']`.
+        *   Common mapping:
+            *   '1'-'5': 'weekday'
+            *   '6', '7': 'weekend'
+            *   'H': 'holiday'
+            *   'D': ? (Maybe 'day' or 'weekday'?)
+        *   Let's check if there's a simpler pattern. Maybe `daytype` is just derived from `DOW` directly? No, target is string 'weekday'.
+        *   Let's assume the standard business logic:
+            *   `DOW` in ['1', '2', '3', '4', '5'] -> 'weekday'
+            *   `DOW` in ['6', '7'] -> 'weekend'
+            *   `DOW` == 'H' -> 'holiday'
+            *   `DOW` == 'D' -> 'weekday' (often 'D' stands for a specific day type, but if forced to choose, it might be treated as a regular day or weekend depending on context. Given 'D' is distinct from H, and numbers are days, 'D' might be a typo for a day or a specific holiday. However, looking at similar datasets, 'D' often maps to 'weekday' or is a specific holiday. Let's look at the target sample again. It only shows 'weekday'. This is ambiguous.
+            *   Alternative hypothesis: The target `daytype` is simply the string representation of the `DOW` if it's a number? No, target is 'weekday'.
+            *   Let's look at the source `DOW` values again. '1' is Monday. '7' is Sunday.
+            *   If I map 1-5 to 'weekday', 6-7 to 'weekend', H to 'holiday', what about 'D'?
+            *   Let's try to find a pattern in the provided samples.
+            *   Source Row 1: DOW='7'. Target Row 1: 'weekday'. This contradicts the standard 6/7=weekend rule.
+            *   Source Row 2: DOW='1'. Target Row 2: 'weekday'.
+            *   Source Row 3: DOW='H'. Target Row 3: 'weekday'. This contradicts H=holiday.
+            *   Source Row 4: DOW='3'. Target Row 4: 'weekday'.
+            *   It seems **all** rows in the target sample are 'weekday'.
+            *   Is it possible that `daytype` is constant? Unlikely for a general transformation.
+            *   Is it possible that the target sample is just a subset of weekdays? Yes.
+            *   Let's look at the column name `daytype`. In energy load profiles, this is crucial.
+            *   Let's reconsider the mapping. Maybe the source `DOW` column *is* the day type code, and we need to decode it.
+            *   If Source DOW '7' maps to Target 'weekday', and 'H' maps to 'weekday', then the mapping is not standard.
+            *   Wait, look at the target sample rows 1-4. They correspond to January.
+            *   Look at target sample rows 5-7. They correspond to June.
+            *   Look at target sample row 8. It corresponds to July.
+            *   The source sample provided in the prompt is for Strata_ID 16 and 34.
+            *   The target sample provided is likely from the same dataset but potentially different rows or aggregated? No, row counts match.
+            *   Let's assume the standard mapping is correct and the sample just happens to show weekdays, OR the mapping is:
+                *   If DOW is numeric 1-5: 'weekday'
+                *   If DOW is numeric 6-7: 'weekend'
+                *   If DOW is 'H': 'holiday'
+                *   If DOW is 'D': 'weekday' (or 'weekend'?)
+            *   However, there is a possibility that `daytype` is derived from the `Strata` column? No, `Strata` is like "RC402 Strata 3".
+            *   Let's look at the distinct values of `DOW` again: `['7', '1', 'H', '3', '4', '5', '6', '2', 'D']`.
+            *   If I assume the standard mapping:
+                *   1,2,3,4,5 -> 'weekday'
+                *   6,7 -> 'weekend'
+                *   H -> 'holiday'
+                *   D -> 'weekday' (guess)
+            *   Let's check if there is any other clue. The target column is `daytype`.
+            *   In many similar problems, 'H' is Holiday, 'W' is Weekend, 'D' is Weekday? No, DOW is Day Of Week.
+            *   Let's try a different angle. What if `daytype` is just the `DOW` value converted to a string? No, target is 'weekday'.
+            *   What if `daytype` is determined by whether the day is a weekend or not?
+            *   Let's assume the most robust standard mapping for energy data:
+                *   `DOW` in ['1', '2', '3', '4', '5'] -> 'weekday'
+                *   `DOW` in ['6', '7'] -> 'weekend'
+                *   `DOW` == 'H' -> 'holiday'
+                *   `DOW` == 'D' -> 'weekday' (Often 'D' is used for 'Day' or specific holidays, but if forced, 'weekday' is a safer bet than 'weekend' if it's not 6/7).
+            *   *Correction*: Looking at the source sample row 1 (DOW='7') and target row 1 ('weekday'), if these rows correspond 1-to-1, then '7' maps to 'weekday'. This is very strange.
+            *   However, the source sample and target sample might not be aligned row-by-row in the prompt description (i.e., Source Sample is from `training_0.csv`, Target Sample is from `target.csv`). They might be different subsets.
+            *   Given the ambiguity, I will stick to the standard semantic mapping:
+                *   1-5: 'weekday'
+                *   6-7: 'weekend'
+                *   H: 'holiday'
+                *   D: 'weekday' (Assuming 'D' might be a typo for a weekday or a specific day treated as such).
+            *   *Self-Correction*: Actually, in some datasets, 'D' stands for 'Day' (Weekday) and 'N' for 'Night'? No.
+            *   Let's look at the distinct values again. `['7', '1', 'H', '3', '4', '5', '6', '2', 'D']`.
+            *   If I map 1-5 to 'weekday', 6-7 to 'weekend', H to 'holiday', D to 'weekday', this covers all cases.
+
+4.  **Transform Hourly Columns**:
+    *   Source columns: `PCT_HOURLY_0100` to `PCT_HOURLY_2400`.
+    *   Target columns: `hr1` to `hr24`.
+    *   Action: Rename `PCT_HOURLY_{i:02d}00` to `hr{i}` for i in 1..24.
+    *   Note: `PCT_HOURLY_2500` is dropped.
+
+5.  **Final Selection**:
+    *   Select columns: `['month', 'daytype']` + `[f'hr{i}' for i in range(1, 25)]`.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse DT_STRATA to datetime to extract month
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['month'] = dt.dt.strftime('%B')
+    
+    # 2. Map DOW to daytype
+    # Standard mapping: 1-5 weekday, 6-7 weekend, H holiday, D weekday (assumed)
+    def map_daytype(dow):
+        if dow in ['1', '2', '3', '4', '5']:
+            return 'weekday'
+        elif dow in ['6', '7']:
+            return 'weekend'
+        elif dow == 'H':
+            return 'holiday'
+        elif dow == 'D':
+            return 'weekday' # Assumption based on common patterns if not weekend/holiday
+        else:
+            return 'weekday' # Default fallback
+    
+    df['daytype'] = df['DOW'].apply(map_daytype)
+    
+    # 3. Rename hourly columns
+    rename_dict = {}
+    for i in range(1, 25):
+        src_col = f'PCT_HOURLY_{i:02d}00'
+        tgt_col = f'hr{i}'
+        if src_col in df.columns:
+            rename_dict[src_col] = tgt_col
+            
+    df = df.rename(columns=rename_dict)
+    
+    # 4. Define target columns
+    target_columns = ['month', 'daytype'] + [f'hr{i}' for i in range(1, 25)]
+    
+    # 5. Return selected columns
+    return df[target_columns]
+```

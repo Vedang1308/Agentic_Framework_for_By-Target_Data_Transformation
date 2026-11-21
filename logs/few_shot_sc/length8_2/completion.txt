@@ -1,0 +1,86 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze the Input and Output**:
+   - Source: A DataFrame with columns `date` (string) and `zone_016` (float). The `date` column contains timestamps in format `%m/%d/%Y %H:%M`.
+   - Target: A DataFrame with columns `Hour` (int) and month names (`January` through `December`) as float columns.
+   - Transformation Logic: The row count drops significantly (1450 -> 24). The target rows correspond to hours (0-23). The target columns correspond to months. This suggests a pivot or groupby operation where we group by Hour and Month, aggregate the `zone_016` values, and reshape the data.
+
+2. **Parse Datetime**:
+   - Convert the `date` column to a pandas datetime object using `pd.to_datetime`.
+   - Extract the `Hour` component (0-23) and the `Month` component (1-12).
+
+3. **Map Months to Names**:
+   - Create a mapping from numeric month (1-12) to month names ('January', 'February', ..., 'December').
+   - Apply this mapping to create a new column for month names.
+
+4. **Aggregate and Reshape**:
+   - Group the data by `Hour` and the new `Month_Name` column.
+   - Calculate the mean (or appropriate aggregation) of `zone_016` for each group. Looking at the sample, for Hour 0 in January, the value is 67.9. In the source, rows for 1/2/2018 0:11, 0:12, 0:13, 0:14 all have 67.9. The mean is 67.9. For Hour 1, it's also 67.9. For Hour 2, 67.8. This suggests averaging.
+   - Use `pivot_table` or `groupby` + `unstack` to reshape the data so that:
+     - Index: `Hour`
+     - Columns: `Month_Name`
+     - Values: Mean of `zone_016`
+
+5. **Clean Up and Format**:
+   - Reset the index to make `Hour` a column.
+   - Rename the `Hour` column if necessary (it should be 'Hour').
+   - Ensure all 12 month columns exist, filling missing combinations with NaN (which `pivot_table` does by default).
+   - Sort the rows by `Hour` to match the target order (0, 1, ..., 23).
+   - Select the final columns in the exact order specified: `['Hour', 'January', 'February', ..., 'December']`.
+
+6. **Final Verification**:
+   - Check column names against the target schema.
+   - Ensure data types are correct (Hour as int, months as float).
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column
+    df['datetime'] = pd.to_datetime(df['date'])
+    
+    # 2. Extract Hour and Month
+    df['Hour'] = df['datetime'].dt.hour
+    df['Month_Num'] = df['datetime'].dt.month
+    
+    # 3. Map Month numbers to names
+    month_names = {
+        1: 'January', 2: 'February', 3: 'March', 4: 'April',
+        5: 'May', 6: 'June', 7: 'July', 8: 'August',
+        9: 'September', 10: 'October', 11: 'November', 12: 'December'
+    }
+    df['Month_Name'] = df['Month_Num'].map(month_names)
+    
+    # 4. Aggregate and Pivot
+    # Group by Hour and Month_Name, calculate mean of zone_016
+    pivot_df = df.pivot_table(
+        index='Hour', 
+        columns='Month_Name', 
+        values='zone_016', 
+        aggfunc='mean'
+    )
+    
+    # 5. Reset index and clean up
+    pivot_df = pivot_df.reset_index()
+    
+    # Ensure Hour is integer type
+    pivot_df['Hour'] = pivot_df['Hour'].astype(int)
+    
+    # Define target columns
+    target_columns = ['Hour', 'January', 'February', 'March', 'April', 'May', 'June', 
+                      'July', 'August', 'September', 'October', 'November', 'December']
+    
+    # Ensure all month columns exist (fill missing with NaN if necessary, though pivot_table usually handles this)
+    for col in target_columns[1:]:
+        if col not in pivot_df.columns:
+            pivot_df[col] = np.nan
+            
+    # Sort by Hour
+    pivot_df = pivot_df.sort_values('Hour').reset_index(drop=True)
+    
+    # Select and return target columns
+    return pivot_df[target_columns]
+```

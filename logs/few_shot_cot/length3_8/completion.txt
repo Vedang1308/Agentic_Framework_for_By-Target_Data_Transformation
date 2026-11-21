@@ -1,0 +1,56 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Date Transformation**:
+    *   Source column `CST` contains strings like `'Sat 12/01/2012'` (format `%a %m/%d/%Y`).
+    *   Target column `date` requires strings like `'04/01/2009'` (format `%m/%d/%Y`).
+    *   Action: Parse `CST` to datetime using `pd.to_datetime`, then format it back to string using `.dt.strftime('%m/%d/%Y')` and assign to `date`.
+
+2.  **Analyze Hourly Column Renaming**:
+    *   Source columns are named `'1:00'`, `'2:00'`, ..., `'23:00'`, `'24:00:00'`.
+    *   Target columns are named `'Hour 1'`, `'Hour 2'`, ..., `'Hour 23'`, `'Hour 24'`.
+    *   Action: Create a mapping dictionary to rename these columns. Note that `'24:00:00'` maps to `'Hour 24'`.
+
+3.  **Analyze Row Count Discrepancy**:
+    *   Source has 1339 rows, Target has 1340 rows.
+    *   The sample data shows specific dates (e.g., `12/01/2012` in source, `04/01/2009` in target). The values in the target sample (e.g., `1.02` for Hour 1 on `04/01/2009`) do not appear in the provided source sample rows.
+    *   However, looking at the structure, this is a direct row-to-row mapping transformation (pivoting is not involved as the wide format is preserved). The difference in row count (1339 vs 1340) likely implies that the target dataset includes an additional date not present in the specific source sample provided, or vice-versa, but the *transformation logic* remains a direct column rename and date format change.
+    *   Crucially, in TbT synthesis tasks, we must define the function based on the schema transformation rules. We cannot "invent" rows. The function should process whatever rows are in the `source` DataFrame. If the test case expects a specific row to be added or removed, it usually involves aggregation or filtering. Here, the schemas are identical in structure (wide format). The most robust interpretation is that the transformation is purely structural (renaming/formatting). The row count difference in the description might be due to the specific sample subsets shown vs the full file, or a minor offset in the benchmark description. Given the strict instruction "compute its result SOLELY from the source argument", we cannot add external rows. We will apply the transformation to all rows in `source`.
+
+4.  **Construct Final DataFrame**:
+    *   Apply date formatting.
+    *   Rename columns.
+    *   Select columns in the exact order specified by the target schema: `['date', 'Hour 1', ..., 'Hour 24']`.
+
+5.  **Refinement on Column Names**:
+    *   Source: `1:00` -> Target: `Hour 1`
+    *   Source: `24:00:00` -> Target: `Hour 24`
+    *   Ensure all 24 hours are mapped correctly.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse and format the date column
+    # Source format: 'Sat 12/01/2012' (%a %m/%d/%Y)
+    # Target format: '04/01/2009' (%m/%d/%Y)
+    dt = pd.to_datetime(df['CST'], format='%a %m/%d/%Y')
+    df['date'] = dt.dt.strftime('%m/%d/%Y')
+    
+    # 2. Rename hourly columns
+    # Source: '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target: 'Hour 1', 'Hour 2', ..., 'Hour 23', 'Hour 24'
+    rename_dict = {}
+    for i in range(1, 24):
+        rename_dict[f'{i}:00'] = f'Hour {i}'
+    rename_dict['24:00:00'] = 'Hour 24'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define target columns in exact order
+    target_columns = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    
+    # 4. Return the transformed dataframe with only target columns
+    return df[target_columns]
+```

@@ -1,0 +1,142 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Row Count Change**: The source has ~1.3 million rows, and the target has ~64k rows. This suggests an aggregation step. The target columns are `datetime` (hourly timestamps) and energy usage categories. The source contains hourly readings per `site`. Therefore, the transformation likely involves grouping by `timestamp` (or `datetime`) across all sites and summing the energy values.
+
+2.  **Map Source Columns to Target Categories**:
+    *   `datetime`: Derived from source `timestamp`. The format is already `%Y-%m-%d %H:%M:%S`.
+    *   `hvac`: Likely sum of HVAC-related components. Source columns: `AC COMPRESSOR WHS [emon ch3,4]`, `AIR HANDLER WHS [emon ch5,6]`, `Minisplit WHS (2-CTs) [xpod chA-7,8]`.
+    *   `domestic_water_heating`: Likely `WATER HEATER WHS [emon ch7,8]`.
+    *   `major_appliances`: Likely sum of major appliances. Source columns: `DRYER WHS (1-CT) [emon ch9]`, `RANGE WHS (1-CT) [emon ch10]`, `DISH WASHER WHS [emon ch11]`, `Primary Fridge WHS [emon ch12]`, `2nd Fridge WHS [emon ch13]`, `Dryer WHS (2-CTs) [xpod chA-9,10]`. Note: "Dryer" appears twice (1-CT and 2-CTs), likely different sensors/sites.
+    *   `lighting`: No obvious "Lighting" column in source. However, `lighting` in target is always 0 in the sample. It might be derived from `SPARE` columns or simply be 0. Looking at the source, there isn't a dedicated lighting column. Given the target sample shows 0, and no clear mapping, it's possible `lighting` is not measured or mapped to a specific spare channel that is effectively 0 or noise. Let's look closer. Actually, in many building datasets, lighting is part of "unmeasured" or "miscellaneous". But let's look at `total`.
+    *   `miscellaneous_plug_loads`: This is a float64 in target. Source has `Calculated Unmeasured loads (Whr)`. This is a strong candidate.
+    *   `total`: Source has `TOTAL BLDG WHS [emon ch1,2]` and `Calculated Energy Use (Whr)`. The target `total` values are integers. Let's check the magnitude. Source `TOTAL BLDG WHS` for site 19 is ~386-544. Target `total` is ~100k-500k. Since we are summing across many sites, the magnitudes align. `Calculated Energy Use (Whr)` often equals `TOTAL BLDG WHS` plus unmeasured loads. Let's verify the relationship. In the source sample, `Calculated Energy Use (Whr)` == `TOTAL BLDG WHS [emon ch1,2]`. So `total` is likely the sum of `TOTAL BLDG WHS [emon ch1,2]`.
+
+3.  **Refine Category Mappings**:
+    *   `hvac`: `AC COMPRESSOR WHS [emon ch3,4]` + `AIR HANDLER WHS [emon ch5,6]` + `Minisplit WHS (2-CTs) [xpod chA-7,8]`
+    *   `domestic_water_heating`: `WATER HEATER WHS [emon ch7,8]`
+    *   `major_appliances`: `DRYER WHS (1-CT) [emon ch9]` + `RANGE WHS (1-CT) [emon ch10]` + `DISH WASHER WHS [emon ch11]` + `Primary Fridge WHS [emon ch12]` + `2nd Fridge WHS [emon ch13]` + `Dryer WHS (2-CTs) [xpod chA-9,10]`
+    *   `lighting`: The target sample shows 0. There is no explicit lighting column. It is possible that `lighting` is considered part of `miscellaneous_plug_loads` or is simply 0. Given the distinct columns, I will initialize `lighting` to 0 if no source column maps to it, or check if `SPARE` columns map to it. However, `SPARE` columns often contain noise (32767). Let's assume `lighting` is 0 or derived from a column that sums to 0. Wait, looking at the target schema, `lighting` is int64. In the absence of a specific "Lighting" source column, and given the target values are 0, I will set it to 0. *Correction*: Sometimes `SPARE1` or similar might be lighting. But without clear evidence, and seeing 0s in target, 0 is a safe bet if no other column fits. Let's re-read the source columns. There is no "Lighting".
+    *   `miscellaneous_plug_loads`: `Calculated Unmeasured loads (Whr)`. The target type is float64.
+    *   `total`: `TOTAL BLDG WHS [emon ch1,2]`.
+
+4.  **Handling "Bad" Values**: The source data contains `32767` in many columns (e.g., `2nd Fridge`, `SPARE`s, `POOL PUMP`). This is a common sentinel value for "no data" or "overflow" in some sensor systems (16-bit signed max). Summing these directly would inflate the totals significantly. We should replace `32767` with `0` (or NaN, then fill with 0) before aggregation.
+
+5.  **Aggregation Strategy**:
+    *   Clean the data: Replace `32767` with `0` in all numeric columns.
+    *   Create the category columns by summing the relevant source columns.
+    *   Group by `timestamp`.
+    *   Sum the category columns.
+    *   Rename `timestamp` to `datetime`.
+    *   Ensure `datetime` is formatted as string (if necessary, though target sample looks like standard datetime string). The target schema says `datetime` is object.
+    *   Select final columns.
+
+6.  **Verification of Sums**:
+    *   Let's check if `hvac` + `domestic` + `major` + `lighting` + `misc` approximates `total`.
+    *   Source: `TOTAL BLDG WHS` is the main meter. `Calculated Energy Use` is often the sum of sub-meters + unmeasured.
+    *   Target `total` is likely the sum of the main meter `TOTAL BLDG WHS [emon ch1,2]`.
+    *   Target `miscellaneous_plug_loads` is likely `Calculated Unmeasured loads (Whr)`.
+
+7.  **Implementation Details**:
+    *   Copy source.
+    *   Replace 32767 with 0.
+    *   Compute `hvac`, `domestic_water_heating`, `major_appliances`, `miscellaneous_plug_loads`.
+    *   Set `lighting` to 0 (or check if `SPARE` columns are lighting? Unlikely given 0 in target).
+    *   Set `total` from `TOTAL BLDG WHS [emon ch1,2]`.
+    *   Group by `timestamp`.
+    *   Sum.
+    *   Rename index/columns.
+    *   Format `datetime` column to string if needed (source is object, likely already string).
+
+Let's double check the `lighting` column. In some datasets, `SPARE1` might be lighting. But `SPARE1` in source has values like 64, 0, 32767. If it were lighting, it wouldn't be 0 in the target for all rows. The target sample shows `lighting` is 0 for all shown rows. This strongly implies `lighting` is either not present or effectively zero/ignored. I will set it to 0.
+
+One detail: `miscellaneous_plug_loads` in target is float64. `Calculated Unmeasured loads (Whr)` is float64 in source. This matches.
+
+Final Plan:
+1.  Replace 32767 with 0 in all numeric columns.
+2.  Define `hvac` = sum(AC Compressor, Air Handler, Minisplit).
+3.  Define `domestic_water_heating` = Water Heater.
+4.  Define `major_appliances` = sum(Dryer 1-CT, Range, Dish Washer, Fridge 1, Fridge 2, Dryer 2-CTs).
+5.  Define `lighting` = 0.
+6.  Define `miscellaneous_plug_loads` = Calculated Unmeasured loads.
+7.  Define `total` = TOTAL BLDG WHS.
+8.  Group by `timestamp`, sum these new columns.
+9.  Rename `timestamp` to `datetime`.
+10. Ensure `datetime` is string format `%Y-%m-%d %H:%M:%S`.
+11. Return target columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # Identify numeric columns to clean
+    numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
+    
+    # Replace sentinel value 32767 with 0
+    df[numeric_cols] = df[numeric_cols].replace(32767, 0)
+    
+    # Define HVAC components
+    hvac_cols = [
+        'AC COMPRESSOR WHS [emon ch3,4]',
+        'AIR HANDLER WHS [emon ch5,6]',
+        'Minisplit WHS (2-CTs) [xpod chA-7,8]'
+    ]
+    df['hvac'] = df[hvac_cols].sum(axis=1)
+    
+    # Define Domestic Water Heating
+    df['domestic_water_heating'] = df['WATER HEATER WHS [emon ch7,8]']
+    
+    # Define Major Appliances
+    major_appliance_cols = [
+        'DRYER WHS (1-CT) [emon ch9]',
+        'RANGE WHS (1-CT) [emon ch10]',
+        'DISH WASHER WHS [emon ch11]',
+        'Primary Fridge WHS [emon ch12]',
+        '2nd Fridge WHS [emon ch13]',
+        'Dryer WHS (2-CTs) [xpod chA-9,10]'
+    ]
+    df['major_appliances'] = df[major_appliance_cols].sum(axis=1)
+    
+    # Define Lighting (Assumed 0 based on target sample and lack of source column)
+    df['lighting'] = 0
+    
+    # Define Miscellaneous Plug Loads
+    df['miscellaneous_plug_loads'] = df['Calculated Unmeasured loads (Whr)']
+    
+    # Define Total
+    df['total'] = df['TOTAL BLDG WHS [emon ch1,2]']
+    
+    # Group by timestamp and sum
+    # Note: timestamp is object, so we group by the string value
+    agg_df = df.groupby('timestamp', as_index=False).agg({
+        'hvac': 'sum',
+        'domestic_water_heating': 'sum',
+        'major_appliances': 'sum',
+        'lighting': 'sum',
+        'miscellaneous_plug_loads': 'sum',
+        'total': 'sum'
+    })
+    
+    # Rename timestamp to datetime
+    agg_df = agg_df.rename(columns={'timestamp': 'datetime'})
+    
+    # Ensure datetime is formatted correctly as string if it isn't already
+    # The source is object, likely already 'YYYY-MM-DD HH:MM:SS'
+    # Just to be safe, we can ensure it's a string
+    agg_df['datetime'] = agg_df['datetime'].astype(str)
+    
+    # Define target columns
+    target_columns = ['datetime', 'hvac', 'domestic_water_heating', 'major_appliances', 'lighting', 'miscellaneous_plug_loads', 'total']
+    
+    # Ensure correct dtypes as per target schema
+    # hvac, domestic_water_heating, major_appliances, lighting, total are int64
+    # miscellaneous_plug_loads is float64
+    agg_df['hvac'] = agg_df['hvac'].astype('int64')
+    agg_df['domestic_water_heating'] = agg_df['domestic_water_heating'].astype('int64')
+    agg_df['major_appliances'] = agg_df['major_appliances'].astype('int64')
+    agg_df['lighting'] = agg_df['lighting'].astype('int64')
+    agg_df['total'] = agg_df['total'].astype('int64')
+    # miscellaneous_plug_loads remains float64
+    
+    return agg_df[target_columns]
+```

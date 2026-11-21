@@ -1,0 +1,60 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains metadata columns (`class`, `Description`, `analysis`, `uom`), a date column (`date`), and 24 value columns (`value1` to `value24`).
+    *   **Target**: Contains a formatted date column (`cst`) and 24 hourly columns (`1:00` to `24:00`).
+    *   **Row Count Discrepancy**: The source has 182 rows, while the target has 183 rows. The target sample shows dates starting from `01/01/2011`, whereas the source sample starts from `07/03/2011`. This suggests the target table represents a complete continuous time series (likely a full year or specific period) where missing dates in the source need to be filled in. The values for missing dates in the target sample (e.g., `1.3683` for `01/01/2011`) do not appear to be simple zeros or NaNs, but since we cannot infer complex predictive models from a static transformation function without external data, we must look closer. However, in many TbT tasks, if rows are missing in source but present in target, it often implies a reindexing operation against a complete date range. Let's look at the values. The source values are floats. The target values are floats.
+    *   *Correction/Refinement*: In standard pandas transformations for these benchmarks, if the target has more rows than the source, it usually implies generating a complete date index. However, without a rule for *what* values to put in the missing rows (interpolation? forward fill? zero?), this is tricky. Let's re-read the prompt constraints. "The function must compute its result SOLELY from the `source` argument." If the source doesn't have the data for Jan 1, 2011, how can we generate the specific float `1.3683`?
+    *   *Hypothesis*: Perhaps the source *does* contain all the data, but the sample provided is just a subset? The prompt says "Source sample rows: 182 rows". A full year has 365 days. 182 is roughly half a year. The target has 183 rows. This is very close to 182. It's possible the target includes a header or an extra day? Or perhaps the source is missing one day that is added?
+    *   *Alternative Hypothesis*: Look at the dates. Source starts `7/3/2011`. Target starts `1/1/2011`. This is a huge gap. Wait, looking at the target sample again: `Sat 01/01/2011`, `Sun 01/02/2011`... `Fri 07/01/2011`, `Sat 07/02/2011`. The target sample jumps from June to July. The source sample starts July 3.
+    *   *Crucial Observation*: In many of these "length" cases, the "Source" provided in the prompt description might be a *subset* of the actual file content, or the transformation involves reindexing to a specific date range defined by the min/max of the source or a fixed range. However, generating specific non-zero values for missing dates is impossible without a model.
+    *   *Re-evaluating the "182 vs 183" clue*: If the source has 182 rows and target has 183, and the dates in the target sample cover a continuous range including dates *before* the source sample, it is highly likely that the *actual* source file (test_0.csv) contains all the necessary rows, and the "Source sample" shown in the prompt is just a tail or a random subset. The prompt says "Source sample rows: 182 rows". If the actual source file has 183 rows, then the transformation is just a mapping. If the actual source file has 182 rows and the target has 183, we are missing data.
+    *   *Standard TbT Assumption*: Usually, these tasks assume the source contains all necessary information. If the target has more rows, it might be due to a `reindex` with a complete date range derived from the source's min/max, but filling missing values is ambiguous.
+    *   *Let's look at the column mapping first*:
+        *   `date` -> `cst`: Format `%m/%d/%Y` to `%a %m/%d/%Y`.
+        *   `value1` -> `1:00`, `value2` -> `2:00`, ..., `value24` -> `24:00`.
+    *   *Handling the Row Count*: If I simply map the columns, I will get 182 rows. If the target expects 183, and I don't have the data, I can't create it. However, if the "Source sample" is just a preview and the *actual* input DataFrame passed to the function has 183 rows (matching the target count), then no row generation is needed. The prompt says "Source sample rows: 182 rows (Note: test_0.csv may have different row count)". This implies the *sample* is 182, but the *actual* data might be different. The target has 183 rows. It is safest to assume the transformation is a direct column mapping and formatting, and that the input DataFrame will contain the rows corresponding to the target. If the input is missing rows, standard pandas behavior (just mapping) will result in fewer rows. Given the strict constraint "compute solely from source", I cannot invent data. I will proceed with the direct mapping. If the source *does* have the missing rows (e.g., the sample was just truncated in the display), the code will work. If the source truly lacks them, the output will be shorter, but that's the best possible deterministic transformation without external knowledge.
+    *   *Wait, looking at the dates again*: The target sample shows `01/01/2011` to `07/02/2011` (with a gap in the sample display). The source sample shows `07/03/2011` onwards. This looks like the source and target might be disjoint or the source sample is just the *end* of the file. If the source file actually contains the Jan-Jun data, the mapping works.
+    *   *Conclusion on Rows*: Perform direct mapping. Do not attempt to generate missing dates as values cannot be inferred.
+
+2.  **Date Formatting**:
+    *   Parse `date` column using `pd.to_datetime`.
+    *   Format as `'%a %m/%d/%Y'` (e.g., 'Sat 01/01/2011'). Note: `%a` gives abbreviated weekday name.
+
+3.  **Column Renaming**:
+    *   Map `value1` to `1:00`, `value2` to `2:00`, ..., `value24` to `24:00`.
+    *   This can be done with a dictionary comprehension: `{f'value{i}': f'{i}:00' for i in range(1, 25)}`.
+
+4.  **Column Selection**:
+    *   Select the new `cst` column and the renamed hourly columns in the correct order.
+    *   Drop `class`, `Description`, `analysis`, `uom`.
+
+5.  **Final Output**:
+    *   Return the DataFrame with columns `['cst', '1:00', ..., '24:00']`.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse and format the date column
+    # Source 'date' is in '%m/%d/%Y' format (e.g., '7/3/2011')
+    # Target 'cst' is in '%a %m/%d/%Y' format (e.g., 'Sat 01/01/2011')
+    dt = pd.to_datetime(df['date'])
+    df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+    
+    # 2. Rename value columns to hourly format
+    # value1 -> 1:00, value2 -> 2:00, ..., value24 -> 24:00
+    rename_dict = {f'value{i}': f'{i}:00' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define target columns in the correct order
+    target_columns = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    
+    # 4. Select and return the target columns
+    # Note: If the source DataFrame has rows that are not in the target date range 
+    # or vice versa, this simple mapping assumes the source contains the necessary rows.
+    # Based on the problem type, we assume the source input will align with the target structure.
+    return df[target_columns]
+```

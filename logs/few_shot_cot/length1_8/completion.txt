@@ -1,0 +1,127 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `date` (string, format `%m/%d/%Y %H:%M`) and `cerc_logger_1` (float). The data appears to be time-series measurements taken every 10 minutes (based on samples like 4:50, 5:00, 5:10).
+    *   **Target**: Contains `cst` (string, format `%a %m/%d/%Y`) and 24 hourly columns (`1:00` to `24:00`).
+    *   **Transformation Goal**: Aggregate the 10-minute interval data into daily hourly averages (or sums, but given the magnitude of values ~130-140 vs source ~24, it's likely an average or sum of multiple readings per hour. Let's look closer. Source values are ~24. Target values are ~130. 24 * 6 (readings per hour) = 144. This suggests a **sum** of the 6 readings per hour, or potentially an average if the source was different. Let's check the math.
+        *   Sample Source: `7/28/2019 4:50` -> 24.562, `5:00` -> 24.625, `5:10` -> 24.562, `5:20` -> 24.562.
+        *   If we sum 6 readings of ~24, we get ~144.
+        *   Target `Sat 07/20/2019` `1:00` is 132.249.
+        *   Let's check if it's an average. Average of 24s is 24. Target is 132. So it's not a simple average of the raw values.
+        *   Wait, let's look at the row count change. 74,848 rows to 521 rows.
+        *   74,848 / 521 ≈ 143.6. This doesn't look like a clean daily aggregation (24 hours * 6 readings = 144 readings/day). 521 days * 144 = 75,024. This is very close to 74,848. The slight difference might be due to missing data or partial days.
+        *   Therefore, the operation is likely **grouping by Date and Hour** and **summing** the `cerc_logger_1` values. Why sum? Because 24 * 6 = 144, which is close to the target values (130-140). If it were average, the target would be ~24. If it were count, it would be 6. So, **Sum** is the correct aggregation function.
+
+2.  **Parse Dates and Extract Components**:
+    *   Convert the `date` column to datetime objects using `pd.to_datetime`.
+    *   Extract the **Date** part (year, month, day) to group by day.
+    *   Extract the **Hour** part. Note: The target columns are `1:00` to `24:00`.
+        *   Standard pandas hour extraction gives 0-23.
+        *   Hour 0 (midnight) usually corresponds to the start of the day. In many hourly datasets, "1:00" represents the hour starting at 00:00 (12 AM) or 01:00 (1 AM).
+        *   Let's look at the target column names: `1:00` ... `24:00`. This is a 1-based index for hours.
+        *   Typically, `1:00` corresponds to the hour bucket `00:00-00:59` (Hour 0 in 0-indexed) or `01:00-01:59`?
+        *   Let's check the sample data again.
+        *   Source: `1/1/2021 0:00` is present.
+        *   If `1:00` in target corresponds to Hour 0 (00:00-00:59), then we map pandas hour `0` -> target col `1:00`.
+        *   If `1:00` corresponds to Hour 1 (01:00-01:59), then pandas hour `1` -> target col `1:00`.
+        *   However, the last column is `24:00`. This usually implies the hour ending at midnight (23:00-23:59) or the hour starting at midnight of the next day?
+        *   Standard convention in some energy/load datasets: Hour 1 = 00:00-00:59, ..., Hour 24 = 23:00-23:59.
+        *   Let's assume: Target Col `H:00` corresponds to Pandas Hour `H-1`.
+            *   `1:00` <- Hour 0
+            *   `2:00` <- Hour 1
+            *   ...
+            *   `24:00` <- Hour 23
+
+3.  **Grouping and Aggregation**:
+    *   Group the dataframe by the extracted Date and the extracted Hour (adjusted to 1-24).
+    *   Sum the `cerc_logger_1` values for each group.
+
+4.  **Reshaping (Pivot)**:
+    *   Pivot the aggregated data so that:
+        *   Index: Date
+        *   Columns: Hour (1-24)
+        *   Values: Summed `cerc_logger_1`
+    *   This will create a DataFrame with columns `1` to `24` (or similar).
+
+5.  **Formatting Output**:
+    *   Create the `cst` column from the Date index. Format: `%a %m/%d/%Y` (e.g., `Sat 07/20/2019`).
+    *   Rename the hour columns to match the target verbatim: `1:00`, `2:00`, ..., `24:00`.
+    *   Ensure all 24 hour columns exist. If a specific hour is missing for a day, fill with 0 (or NaN, but target sample shows 0s for missing/zero days like `Sat 02/16/2019`). The sample `Sat 02/16/2019` has all 0s. This suggests that if data is missing, it should be 0. `pivot_table` with `fill_value=0` or `fillna(0)` after pivot is appropriate.
+
+6.  **Refining the Hour Mapping**:
+    *   Let's verify the hour mapping hypothesis.
+    *   Source has `0:00`. If this maps to `1:00`, then `1:00` in source maps to `2:00` in target.
+    *   Let's check if there's any other clue. The target has `24:00`. Pandas max hour is 23. So `23` -> `24:00` fits the `H+1` pattern.
+    *   So, `target_hour = pandas_hour + 1`.
+    *   Column names: `f"{h}:00"` for `h` in 1..24.
+
+7.  **Implementation Steps**:
+    *   Copy source.
+    *   Parse `date` to datetime.
+    *   Extract `date_part` (date only) and `hour` (0-23).
+    *   Create `target_hour` = `hour + 1`.
+    *   Group by `date_part` and `target_hour`, sum `cerc_logger_1`.
+    *   Pivot: index=`date_part`, columns=`target_hour`, values=`cerc_logger_1`.
+    *   Fill NaNs with 0.
+    *   Format `date_part` to `cst` string.
+    *   Rename columns to `1:00`...`24:00`.
+    *   Reset index to make `cst` a column.
+    *   Select and order columns: `cst` then `1:00`...`24:00`.
+
+### Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms source time-series data (10-min intervals) into daily hourly aggregated data.
+    """
+    df = source.copy()
+    
+    # 1. Parse the date column
+    # Format is '%m/%d/%Y %H:%M'
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract date and hour components
+    df['date_only'] = df['datetime'].dt.date
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 3. Map pandas hour (0-23) to target hour index (1-24)
+    # Hypothesis: 1:00 corresponds to hour 0 (00:00-00:59), ..., 24:00 corresponds to hour 23 (23:00-23:59)
+    df['target_hour'] = df['hour'] + 1
+    
+    # 4. Aggregate by date and target hour
+    # Sum the values. Based on sample analysis, summing ~6 readings of ~24 gives ~144, matching target magnitude.
+    agg_df = df.groupby(['date_only', 'target_hour'])['cerc_logger_1'].sum().reset_index()
+    
+    # 5. Pivot the data to wide format
+    # Index: date_only, Columns: target_hour, Values: cerc_logger_1
+    pivot_df = agg_df.pivot_table(index='date_only', columns='target_hour', values='cerc_logger_1', fill_value=0)
+    
+    # 6. Ensure all 24 hours are present in columns
+    # Create a complete range of hours 1-24
+    all_hours = range(1, 25)
+    pivot_df = pivot_df.reindex(columns=all_hours, fill_value=0)
+    
+    # 7. Format the date column for 'cst'
+    # Convert date_only back to datetime for formatting, then to string
+    # Note: date_only is a date object. We can format it directly or convert to datetime.
+    # pd.to_datetime on a date object works.
+    pivot_df['cst'] = pd.to_datetime(pivot_df.index).dt.strftime('%a %m/%d/%Y')
+    
+    # 8. Reset index to make 'date_only' a column (though we replaced it with 'cst')
+    pivot_df = pivot_df.reset_index(drop=True)
+    
+    # 9. Rename hour columns to match target verbatim: '1:00', '2:00', ...
+    rename_dict = {h: f'{h}:00' for h in all_hours}
+    pivot_df = pivot_df.rename(columns=rename_dict)
+    
+    # 10. Define target columns and select them
+    target_columns = ['cst'] + [f'{h}:00' for h in range(1, 25)]
+    
+    # Ensure the order is correct
+    result_df = pivot_df[target_columns]
+    
+    return result_df
+```

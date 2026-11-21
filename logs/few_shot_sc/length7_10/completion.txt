@@ -1,0 +1,95 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `date` (string, format `%m/%d/%Y %H:%M`) and `cerc_logger_1` (float). The data is granular (10-minute intervals based on sample).
+    *   **Target**: Contains `month` (string, e.g., 'August'), `daytype` (string, 'weekday' or 'weekend'), and 24 hourly columns `hr1` to `hr24`.
+    *   **Transformation Goal**: Aggregate the high-frequency source data into hourly averages, grouped by month and day type (weekday/weekend).
+
+2.  **Parse Dates and Extract Features**:
+    *   Convert the `date` column to pandas `datetime` objects.
+    *   Extract the **Hour** (0-23) to determine which hourly bin (`hr1`-`hr24`) the data point belongs to. Note: Hour 0 maps to `hr1`, Hour 1 maps to `hr2`, ..., Hour 23 maps to `hr24`.
+    *   Extract the **Month Name** (e.g., 'July', 'August') for the `month` column.
+    *   Determine the **Day Type**: Check if the day of the week is Monday-Friday ('weekday') or Saturday-Sunday ('weekend').
+
+3.  **Reshape Data (Melt)**:
+    *   The target requires a wide format with columns `hr1` through `hr24`.
+    *   First, create a column `hr_label` representing the target column name (e.g., `hr1`, `hr2`) based on the extracted hour.
+    *   Use `pd.melt` or pivot logic to transform the data from long format (one row per timestamp) to a structure where we can aggregate by `month`, `daytype`, and `hr_label`.
+
+4.  **Aggregate**:
+    *   Group by `month`, `daytype`, and `hr_label`.
+    *   Calculate the **mean** of `cerc_logger_1` for each group. This handles the reduction from ~74k rows to ~84 rows (12 months * 2 day types * 24 hours = 576 possible combinations, but likely not all exist or some are merged; the target sample shows specific month/daytype combinations). *Correction*: The target sample shows 8 rows. The total possible combinations are 12 months * 2 daytypes * 24 hours = 576. However, the target has 84 rows. This implies not all month/daytype/hour combinations have data, or the aggregation is just mean. Let's look at the sample: "August, weekday" is one row. This confirms the grouping keys are `month`, `daytype`, and the hour column itself.
+    *   Actually, looking at the target schema, `hr1`...`hr24` are columns. So the grouping keys are `month` and `daytype`. The values in the `hr` columns are the aggregated values for that specific hour.
+    *   So, group by `month`, `daytype`, and `hr_label`, compute mean, then pivot/unstack `hr_label` to become columns.
+
+5.  **Format Output**:
+    *   After pivoting, the columns will be `hr1`, `hr2`, ..., `hr24`.
+    *   Reset index to bring `month` and `daytype` back as columns.
+    *   Ensure the column order matches the target exactly: `['month', 'daytype', 'hr1', ..., 'hr24']`.
+    *   Fill any missing values (NaN) if necessary, though the problem implies deterministic mapping. Usually, `fillna(0)` or leaving as NaN depends on context, but standard aggregation often leaves NaN for missing groups. However, looking at the target sample, all cells seem populated. If a specific month/daytype/hour combination doesn't exist in the source, it might be NaN. Given the strictness, I will rely on the pivot. If specific missingness handling is required, it's usually specified. I'll assume standard mean aggregation.
+
+6.  **Refinement on Hour Mapping**:
+    *   Source Hour 0 -> Target `hr1`
+    *   Source Hour 1 -> Target `hr2`
+    *   ...
+    *   Source Hour 23 -> Target `hr24`
+
+7.  **Implementation Details**:
+    *   `pd.to_datetime`
+    *   `dt.strftime('%B')` for full month name.
+    *   `dt.dayofweek` < 5 for weekday.
+    *   `groupby` + `mean` + `unstack`.
+
+### Generated Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract features
+    # Month name (e.g., 'August')
+    df['month'] = df['datetime'].dt.strftime('%B')
+    
+    # Day type: 'weekday' (Mon-Fri) or 'weekend' (Sat-Sun)
+    # dayofweek: Monday=0, ..., Friday=4, Saturday=5, Sunday=6
+    df['daytype'] = df['datetime'].dt.dayofweek.apply(lambda x: 'weekday' if x < 5 else 'weekend')
+    
+    # Hour mapping: Source hour 0 -> hr1, 1 -> hr2, ..., 23 -> hr24
+    df['hr_label'] = 'hr' + (df['datetime'].dt.hour + 1).astype(str)
+    
+    # 3. Aggregate
+    # Group by month, daytype, and hr_label, then calculate the mean of cerc_logger_1
+    grouped = df.groupby(['month', 'daytype', 'hr_label'])['cerc_logger_1'].mean().reset_index()
+    
+    # 4. Pivot to wide format
+    # Rows: month, daytype
+    # Columns: hr_label (hr1, hr2, ..., hr24)
+    # Values: mean cerc_logger_1
+    pivot_df = grouped.pivot_table(index=['month', 'daytype'], columns='hr_label', values='cerc_logger_1', aggfunc='mean')
+    
+    # Reset index to make month and daytype columns again
+    pivot_df = pivot_df.reset_index()
+    
+    # Rename columns to remove potential multi-index level names if any
+    pivot_df.columns.name = None
+    
+    # 5. Ensure correct column order and names
+    # Generate expected hour columns
+    hr_columns = [f'hr{i}' for i in range(1, 25)]
+    
+    # Define final target columns
+    target_columns = ['month', 'daytype'] + hr_columns
+    
+    # Select and order columns. 
+    # Note: pivot_table might not have all hr columns if data is missing for some hours.
+    # We should reindex to ensure all hr1-hr24 exist, filling NaN if necessary.
+    pivot_df = pivot_df.reindex(columns=target_columns)
+    
+    return pivot_df[target_columns]
+```

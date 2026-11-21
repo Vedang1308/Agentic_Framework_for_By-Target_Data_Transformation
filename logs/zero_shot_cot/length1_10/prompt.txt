@@ -1,0 +1,49 @@
+### Benchmark Case: length1_10
+- Source sample rows: 15117 rows (Note: test_0.csv may have different row count)
+- Target rows: 53 rows
+- Notice: Row count changes from 15117 to 53. Check if an aggregation, grouping, or pivoting operation is required.
+
+### Exact Target Columns (Must match verbatim):
+['cst', '1:00', '2:00', '3:00', '4:00', '5:00', '6:00', '7:00', '8:00', '9:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00', '22:00', '23:00', '24:00']
+
+### Datetime Format Inferences:
+- Source column 'date' has date format '%m/%d/%Y %H:%M' (sample: '11/6/2018 21:45')
+- Target column 'cst' requires date format '%a %m/%d/%Y' (sample: 'Sun 09/30/2018')
+
+### Source Schema and Types:
+date (object), zone_016_cooling_sp (float64)
+
+### Target Schema and Types:
+cst (object), 1:00 (float64), 2:00 (float64), 3:00 (float64), 4:00 (float64), 5:00 (float64), 6:00 (float64), 7:00 (float64), 8:00 (float64), 9:00 (float64), 10:00 (float64), 11:00 (float64), 12:00 (float64), 13:00 (float64), 14:00 (float64), 15:00 (float64), 16:00 (float64), 17:00 (float64), 18:00 (float64), 19:00 (float64), 20:00 (float64), 21:00 (float64), 22:00 (float64), 23:00 (float64), 24:00 (float64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- zone_016_cooling_sp: [np.float64(73.0), np.float64(84.0)]
+
+### Source Table Sample (training_0.csv):
+| date            |   zone_016_cooling_sp |
+|:----------------|----------------------:|
+| 11/6/2018 21:45 |                    73 |
+| 11/6/2018 21:50 |                    73 |
+| 11/6/2018 21:55 |                    73 |
+| 11/6/2018 22:00 |                    73 |
+| 1/18/2019 3:05  |                    73 |
+| 1/18/2019 3:10  |                    73 |
+| 1/18/2019 3:15  |                    73 |
+| 1/18/2019 3:20  |                    73 |
+
+### Desired Target Table Sample (target.csv):
+| cst            |   1:00 |   2:00 |   3:00 |   4:00 |   5:00 |   6:00 |   7:00 |   8:00 |   9:00 |   10:00 |   11:00 |   12:00 |   13:00 |   14:00 |   15:00 |   16:00 |   17:00 |   18:00 |   19:00 |   20:00 |   21:00 |   22:00 |   23:00 |   24:00 |
+|:---------------|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|
+| Sun 09/30/2018 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |
+| Fri 10/12/2018 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |
+| Tue 10/02/2018 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |
+| Sat 09/22/2018 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |
+| Wed 10/10/2018 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |
+| Wed 09/26/2018 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |
+| Sun 10/14/2018 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |
+| Fri 10/05/2018 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |    876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |     876 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

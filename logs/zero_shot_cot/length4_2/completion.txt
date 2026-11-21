@@ -1,0 +1,192 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains metadata columns (`class`, `Description`, `analysis`, `uom`) and 24 value columns (`value1` to `value24`) representing hourly data for a given `date`. The `date` column is in string format `'%m/%d/%Y'`.
+    *   **Target**: Contains a `date` column in datetime format `'%Y-%m-%d %H:%M:%S'` and 24 columns representing specific hours of the day (e.g., `'1:00 AM'`, `'2:00 AM'`, ..., `'12:00 PM'`, etc.).
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the transformation is primarily a reshaping (pivoting) operation where each source row becomes one target row. The extra row in the target might be due to a specific date range inclusion or a slight discrepancy in the sample data provided vs. the full dataset, but the core transformation logic is a 1-to-1 mapping of rows, just reshaping the columns. Since the prompt asks for a general function, we assume the standard pivot logic applies to all rows.
+
+2.  **Map Source Value Columns to Target Hour Columns**:
+    *   The source columns `value1` through `value24` correspond to the 24 hours of the day.
+    *   Standard convention for hourly data starting at midnight:
+        *   `value1` -> 12:00 AM (Midnight)
+        *   `value2` -> 1:00 AM
+        *   ...
+        *   `value12` -> 11:00 AM
+        *   `value13` -> 12:00 PM (Noon)
+        *   `value14` -> 1:00 PM
+        *   ...
+        *   `value24` -> 11:00 PM
+    *   Let's verify this mapping against the target column names provided:
+        *   Target columns: `['1:00 AM', '2:00 AM', ..., '12:00 AM', '1:00 PM', ..., '12:00 PM']`
+        *   We need to construct a mapping dictionary from `valueN` to the specific time string.
+
+    *   **Mapping Construction**:
+        *   Hour 1 (value1): 12:00 AM
+        *   Hour 2 (value2): 1:00 AM
+        *   Hour 3 (value3): 2:00 AM
+        *   Hour 4 (value4): 3:00 AM
+        *   Hour 5 (value5): 4:00 AM
+        *   Hour 6 (value6): 5:00 AM
+        *   Hour 7 (value7): 6:00 AM
+        *   Hour 8 (value8): 7:00 AM
+        *   Hour 9 (value9): 8:00 AM
+        *   Hour 10 (value10): 9:00 AM
+        *   Hour 11 (value11): 10:00 AM
+        *   Hour 12 (value12): 11:00 AM
+        *   Hour 13 (value13): 12:00 PM
+        *   Hour 14 (value14): 1:00 PM
+        *   Hour 15 (value15): 2:00 PM
+        *   Hour 16 (value16): 3:00 PM
+        *   Hour 17 (value17): 4:00 PM
+        *   Hour 18 (value18): 5:00 PM
+        *   Hour 19 (value19): 6:00 PM
+        *   Hour 20 (value20): 7:00 PM
+        *   Hour 21 (value21): 8:00 PM
+        *   Hour 22 (value22): 9:00 PM
+        *   Hour 23 (value23): 10:00 PM
+        *   Hour 24 (value24): 11:00 PM
+
+3.  **Process the Date Column**:
+    *   Parse the source `date` string (`'%m/%d/%Y'`) into a pandas datetime object.
+    *   Format it to the target string format `'%Y-%m-%d %H:%M:%S'`. Since the time is always midnight for the daily record, the time part will be `00:00:00`.
+
+4.  **Reshape the Data**:
+    *   Select the `date` column and the `value1` to `value24` columns.
+    *   Rename the `value` columns to their corresponding time strings.
+    *   Rename the `date` column to `date` (it's already named that, but we need to ensure the format is correct).
+    *   Reorder the columns to match the target schema exactly. The target schema lists the hours in a specific order: `1:00 AM` through `11:00 AM`, then `12:00 AM`, then `1:00 PM` through `12:00 PM`. Wait, looking closely at the target columns list:
+        `['date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+        
+        This order is slightly unusual. It goes 1 AM -> 11 AM, then 12 AM (Midnight), then 1 PM -> 12 PM (Noon).
+        Actually, let's look at the sample target data.
+        Row 1: `2011-01-01 00:00:00`.
+        Col `1:00 AM`: 1.3683.
+        Col `12:00 AM`: 1.439.
+        
+        Let's check the source sample for `7/3/2011` (which is not in the target sample, but let's look at the structure).
+        The target sample starts with `2011-01-01`. The source sample starts with `7/3/2011`. This implies the source data provided in the prompt is just a snippet, and the actual transformation must handle all dates.
+        
+        Crucially, I must map `value1`...`value24` to the correct time labels.
+        Standard hourly data:
+        value1 = 12:00 AM (00:00)
+        value2 = 1:00 AM (01:00)
+        ...
+        value12 = 11:00 AM (11:00)
+        value13 = 12:00 PM (12:00)
+        ...
+        value24 = 11:00 PM (23:00)
+
+        Let's verify this standard assumption. If `value1` is 12:00 AM, then in the target table, the column `12:00 AM` should contain the data from `value1`.
+        
+        The target columns are listed in a specific order. I need to ensure the final DataFrame has columns in that exact order.
+
+5.  **Implementation Steps**:
+    *   Create a copy of the source DataFrame.
+    *   Parse the `date` column to datetime.
+    *   Format the `date` column to string `'%Y-%m-%d %H:%M:%S'`.
+    *   Define a mapping dictionary for `value1`...`value24` to the time strings.
+    *   Rename the columns.
+    *   Select only the required columns in the exact order specified by the target schema.
+    *   Return the resulting DataFrame.
+
+6.  **Refining the Column Order**:
+    The target columns are:
+    `['date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+
+    Mapping:
+    `value1` -> `12:00 AM`
+    `value2` -> `1:00 AM`
+    `value3` -> `2:00 AM`
+    `value4` -> `3:00 AM`
+    `value5` -> `4:00 AM`
+    `value6` -> `5:00 AM`
+    `value7` -> `6:00 AM`
+    `value8` -> `7:00 AM`
+    `value9` -> `8:00 AM`
+    `value10` -> `9:00 AM`
+    `value11` -> `10:00 AM`
+    `value12` -> `11:00 AM`
+    `value13` -> `12:00 PM`
+    `value14` -> `1:00 PM`
+    `value15` -> `2:00 PM`
+    `value16` -> `3:00 PM`
+    `value17` -> `4:00 PM`
+    `value18` -> `5:00 PM`
+    `value19` -> `6:00 PM`
+    `value20` -> `7:00 PM`
+    `value21` -> `8:00 PM`
+    `value22` -> `9:00 PM`
+    `value23` -> `10:00 PM`
+    `value24` -> `11:00 PM`
+
+    Note: The target column list has `12:00 AM` after `11:00 AM` and before `1:00 PM`. This is just a column ordering requirement, not a logical time sequence. I will rename the columns first, then reorder them to match the target list.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Parse and format the date column
+    # Source format: '%m/%d/%Y'
+    # Target format: '%Y-%m-%d %H:%M:%S'
+    df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y').dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Define the mapping from source value columns to target time columns
+    # Standard hourly data mapping:
+    # value1 = 12:00 AM (00:00)
+    # value2 = 1:00 AM (01:00)
+    # ...
+    # value12 = 11:00 AM (11:00)
+    # value13 = 12:00 PM (12:00)
+    # ...
+    # value24 = 11:00 PM (23:00)
+    
+    column_mapping = {
+        'value1': '12:00 AM',
+        'value2': '1:00 AM',
+        'value3': '2:00 AM',
+        'value4': '3:00 AM',
+        'value5': '4:00 AM',
+        'value6': '5:00 AM',
+        'value7': '6:00 AM',
+        'value8': '7:00 AM',
+        'value9': '8:00 AM',
+        'value10': '9:00 AM',
+        'value11': '10:00 AM',
+        'value12': '11:00 AM',
+        'value13': '12:00 PM',
+        'value14': '1:00 PM',
+        'value15': '2:00 PM',
+        'value16': '3:00 PM',
+        'value17': '4:00 PM',
+        'value18': '5:00 PM',
+        'value19': '6:00 PM',
+        'value20': '7:00 PM',
+        'value21': '8:00 PM',
+        'value22': '9:00 PM',
+        'value23': '10:00 PM',
+        'value24': '11:00 PM'
+    }
+    
+    # 3. Rename the value columns
+    df = df.rename(columns=column_mapping)
+    
+    # 4. Define the target column order verbatim
+    target_columns = [
+        'date', 
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', 
+        '12:00 AM', 
+        '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', 
+        '12:00 PM'
+    ]
+    
+    # 5. Select and reorder columns to match target schema
+    # Ensure all target columns exist in the dataframe
+    df = df[target_columns]
+    
+    return df
+```

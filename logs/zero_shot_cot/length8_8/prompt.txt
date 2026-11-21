@@ -1,0 +1,71 @@
+### Benchmark Case: length8_8
+- Source sample rows: 182 rows (Note: test_0.csv may have different row count)
+- Target rows: 24 rows
+- Notice: Row count changes from 182 to 24. Check if an aggregation, grouping, or pivoting operation is required.
+
+### Exact Target Columns (Must match verbatim):
+['hour', 'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+
+### Datetime Format Inferences:
+- Source column 'date' has date format '%m/%d/%Y' (sample: '7/3/2015')
+
+### Source Schema and Types:
+date (object), Hour 1 (float64), Hour 2 (float64), Hour 3 (float64), Hour 4 (float64), Hour 5 (float64), Hour 6 (float64), Hour 7 (float64), Hour 8 (float64), Hour 9 (int64), Hour 10 (int64), Hour 11 (int64), Hour 12 (int64), Hour 13 (int64), Hour 14 (int64), Hour 15 (int64), Hour 16 (int64), Hour 17 (float64), Hour 18 (float64), Hour 19 (float64), Hour 20 (float64), Hour 21 (float64), Hour 22 (float64), Hour 23 (float64), Hour 24 (float64)
+
+### Target Schema and Types:
+hour (int64), january (float64), february (float64), march (float64), april (float64), may (float64), june (float64), july (float64), august (float64), september (float64), october (float64), november (float64), december (float64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- Hour 1: [np.float64(0.0002398656752218)]
+- Hour 2: [np.float64(0.0002398656752218)]
+- Hour 3: [np.float64(0.0002398656752218)]
+- Hour 4: [np.float64(0.0002398656752218)]
+- Hour 5: [np.float64(0.0002398656752218)]
+- Hour 6: [np.float64(0.0001199328376109), np.float64(0.0002398656752218)]
+- Hour 7: [np.float64(0.0), np.float64(0.0001199328376109), np.float64(0.0002398656752218)]
+- Hour 8: [np.float64(0.0), np.float64(0.0001199328376109)]
+- Hour 9: [np.int64(0)]
+- Hour 10: [np.int64(0)]
+- Hour 11: [np.int64(0)]
+- Hour 12: [np.int64(0)]
+- Hour 13: [np.int64(0)]
+- Hour 14: [np.int64(0)]
+- Hour 15: [np.int64(0)]
+- Hour 16: [np.int64(0)]
+- Hour 17: [np.float64(0.0), np.float64(0.0001199328376109)]
+- Hour 18: [np.float64(0.0), np.float64(0.0002398656752218)]
+- Hour 19: [np.float64(0.0), np.float64(0.0001199328376109), np.float64(0.0002398656752218)]
+- Hour 20: [np.float64(0.0), np.float64(0.0001199328376109), np.float64(0.0002398656752218)]
+- Hour 21: [np.float64(0.0), np.float64(0.0001199328376109), np.float64(0.0002398656752218)]
+- Hour 22: [np.float64(0.0002398656752218)]
+- Hour 23: [np.float64(0.0002398656752218)]
+- Hour 24: [np.float64(0.0002398656752218)]
+
+### Source Table Sample (training_0.csv):
+| date       |      Hour 1 |      Hour 2 |      Hour 3 |      Hour 4 |      Hour 5 |      Hour 6 |      Hour 7 |      Hour 8 |   Hour 9 |   Hour 10 |   Hour 11 |   Hour 12 |   Hour 13 |   Hour 14 |   Hour 15 |   Hour 16 |     Hour 17 |     Hour 18 |     Hour 19 |     Hour 20 |     Hour 21 |     Hour 22 |     Hour 23 |     Hour 24 |
+|:-----------|------------:|------------:|------------:|------------:|------------:|------------:|------------:|------------:|---------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|------------:|------------:|------------:|------------:|------------:|------------:|------------:|------------:|
+| 7/3/2015   | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000119933 | 0           | 0           |        0 |         0 |         0 |         0 |         0 |         0 |         0 |         0 | 0           | 0           | 0           | 0           | 0           | 0.000239866 | 0.000239866 | 0.000239866 |
+| 7/4/2015   | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000119933 | 0           | 0           |        0 |         0 |         0 |         0 |         0 |         0 |         0 |         0 | 0           | 0           | 0           | 0           | 0           | 0.000239866 | 0.000239866 | 0.000239866 |
+| 7/5/2015   | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000119933 | 0           | 0           |        0 |         0 |         0 |         0 |         0 |         0 |         0 |         0 | 0           | 0           | 0           | 0           | 0           | 0.000239866 | 0.000239866 | 0.000239866 |
+| 7/6/2015   | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000119933 | 0           | 0           |        0 |         0 |         0 |         0 |         0 |         0 |         0 |         0 | 0           | 0           | 0           | 0           | 0           | 0.000239866 | 0.000239866 | 0.000239866 |
+| 12/28/2015 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000119933 |        0 |         0 |         0 |         0 |         0 |         0 |         0 |         0 | 0.000119933 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 |
+| 12/29/2015 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000119933 |        0 |         0 |         0 |         0 |         0 |         0 |         0 |         0 | 0.000119933 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 |
+| 12/30/2015 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000119933 |        0 |         0 |         0 |         0 |         0 |         0 |         0 |         0 | 0.000119933 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 |
+| 12/31/2015 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000119933 |        0 |         0 |         0 |         0 |         0 |         0 |         0 |         0 | 0.000119933 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 |
+
+### Desired Target Table Sample (target.csv):
+|   hour |     january |    february |       march |       april |         may |        june |        july |   august |   september |   october |   november |   december |
+|-------:|------------:|------------:|------------:|------------:|------------:|------------:|------------:|---------:|------------:|----------:|-----------:|-----------:|
+|      1 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 |      nan |         nan |       nan |        nan |        nan |
+|     10 | 0           | 0           | 0           | 0           | 0           | 0           | 0           |      nan |         nan |       nan |        nan |        nan |
+|     11 | 0           | 0           | 0           | 0           | 0           | 0           | 0           |      nan |         nan |       nan |        nan |        nan |
+|     12 | 0           | 0           | 0           | 0           | 0           | 0           | 0           |      nan |         nan |       nan |        nan |        nan |
+|      6 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000119933 | 0.000119933 | 0.000119933 |      nan |         nan |       nan |        nan |        nan |
+|      7 | 0.000239866 | 0.000239866 | 0.000239866 | 0.000119933 | 0           | 0           | 0           |      nan |         nan |       nan |        nan |        nan |
+|      8 | 0.000119933 | 0           | 0           | 0           | 0           | 0           | 0           |      nan |         nan |       nan |        nan |        nan |
+|      9 | 0           | 0           | 0           | 0           | 0           | 0           | 0           |      nan |         nan |       nan |        nan |        nan |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

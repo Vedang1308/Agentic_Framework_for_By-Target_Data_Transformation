@@ -1,0 +1,133 @@
+Here are worked examples demonstrating step-by-step reasoning and valid Python code:
+
+### Example 1 (Case length1_1)
+Source Schema: Strata_ID (int64), Strata (object), DT_STRATA (object), DOW (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)
+Target Schema: cst (object), 1:00..24:00 (float64)
+Source Sample: DT_STRATA sample: ['7/2/2016', '7/3/2016']; PCT_HOURLY_0100 sample: [0.000701, 0.000761]
+Target Sample: cst sample: ['Fri 01/01/2016', 'Sat 01/02/2016']; 1:00 sample: [0.001222, 0.001313]
+Step-by-Step Reasoning Plan:
+1. Analyze schemas: Source has date column 'DT_STRATA' and hourly columns 'PCT_HOURLY_0100' through 'PCT_HOURLY_2500'.
+2. Target schema requires column 'cst' with formatted date strings like 'Fri 01/01/2016' (%a %m/%d/%Y).
+3. Parse 'DT_STRATA' to datetime and format as '%a %m/%d/%Y' in column 'cst'.
+4. Rename hourly columns: 'PCT_HOURLY_0100' -> '1:00', ..., 'PCT_HOURLY_2400' -> '24:00'.
+5. Drop extra columns ('Strata_ID', 'Strata', 'DOW', 'PCT_HOURLY_2500') and align returned columns verbatim to target.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'{i}:00' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    return df[target_cols]
+```
+
+### Example 2 (Case length2_1)
+Source Schema: CST (object), 1:00..24:00:00 (float64)
+Target Schema: dt_strata (object), dow (int64), pct_hourly_0100..pct_hourly_2500 (float64)
+Source Sample: CST sample: ['Sat 12/01/2012', 'Sun 12/02/2012']; 1:00 sample: [0.9841, 0.9012]
+Target Sample: dt_strata sample: ['04/01/2009', '04/02/2009']; dow sample: [3, 4]; pct_hourly_0100 sample: [1.02, 0.93]
+Step-by-Step Reasoning Plan:
+1. Inspect date: Source 'CST' has format 'Day MM/DD/YYYY'. Split by whitespace to extract the date part.
+2. Convert to datetime, then format as '%m/%d/%Y' for 'dt_strata'.
+3. Compute 'dow' (day of week) where Monday=1 ... Sunday=7 using `dt.dt.dayofweek + 1`.
+4. Rename hourly columns: '1:00' -> 'pct_hourly_0100', ..., '24:00'/'24:00:00' -> 'pct_hourly_2400'.
+5. Target includes 'pct_hourly_2500' filled with 0. Add this column and select target columns verbatim.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    date_str = df['CST'].str.split(' ').str[-1]
+    dt = pd.to_datetime(date_str, format='%m/%d/%Y')
+    df['dt_strata'] = dt.dt.strftime('%m/%d/%Y')
+    df['dow'] = dt.dt.dayofweek + 1
+    rename_dict = {f'{i}:00': f'pct_hourly_{i:02d}00' for i in range(1, 24)}
+    if '24:00:00' in df.columns:
+        rename_dict['24:00:00'] = 'pct_hourly_2400'
+    elif '24:00' in df.columns:
+        rename_dict['24:00'] = 'pct_hourly_2400'
+    df = df.rename(columns=rename_dict)
+    df['pct_hourly_2500'] = 0
+    target_cols = ['dt_strata', 'dow'] + [f'pct_hourly_{i:02d}00' for i in range(1, 26)]
+    return df[target_cols]
+```
+
+### Example 3 (Case length3_1)
+Source Schema: Strata_ID (int64), Strata (object), DT_STRATA (object), DOW (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)
+Target Schema: date (object), Hour 1..Hour 24 (float64)
+Source Sample: DT_STRATA sample: ['7/2/2016']; PCT_HOURLY_0100 sample: [0.000701]
+Target Sample: date sample: ['01/01/2016']; Hour 1 sample: [0.001222]
+Step-by-Step Reasoning Plan:
+1. Analyze date: Source column 'DT_STRATA' has dates formatted as M/D/YYYY. Format as '%m/%d/%Y' in column 'date'.
+2. Map hour columns: 'PCT_HOURLY_{i:02d}00' maps to 'Hour {i}' for i=1..24.
+3. Select columns: 'date' followed by 'Hour 1' through 'Hour 24'. Drop unused columns.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['date'] = dt.dt.strftime('%m/%d/%Y')
+    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'Hour {i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    target_cols = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    return df[target_cols]
+```
+
+============================================================
+Now, synthesize the transformation function for the following case:
+
+### Benchmark Case: length12_3
+- Source sample rows: 1323516 rows (Note: test_0.csv may have different row count)
+- Target rows: 1323516 rows
+
+### Exact Target Columns (Must match verbatim):
+['season', 'hour', 'hvac', 'water_heating', 'refrigerator', 'clothes_washer', 'clothes_dryer', 'dishwasher', 'cooking_range', 'pool_spa_pumps', 'interior_lighting', 'exterior_lighting', 'lighting', 'plug', 'pool_spa_heater']
+
+### Datetime Format Inferences:
+- Source column 'timestamp' has date format '%Y-%m-%d %H:%M:%S' (sample: '2015-11-14 02:00:00')
+
+### Source Schema and Types:
+site (int64), timestamp (object), TOTAL BLDG WHS [emon ch1,2] (float64), AC COMPRESSOR WHS [emon ch3,4] (float64), AIR HANDLER WHS [emon ch5,6] (float64), WATER HEATER WHS [emon ch7,8] (float64), DRYER WHS (1-CT) [emon ch9] (float64), RANGE WHS (1-CT) [emon ch10] (float64), DISH WASHER WHS [emon ch11] (float64), Primary Fridge WHS [emon ch12] (float64), 2nd Fridge WHS [emon ch13] (float64), SPARE1 WHS (1-CT) [emon ch14] (float64), SPARE2 WHS (1-CT) [xpod chA-1] (float64), SPARE3 WHS (1-CT) [xpod chA-2] (float64), POOL PUMP WHS (2-CTs) [xpod chA-3,4] (float64), SPARE4 WHS (2-CTs) [xpod chA-5,6] (float64), Minisplit WHS (2-CTs) [xpod chA-7,8] (float64), Dryer WHS (2-CTs) [xpod chA-9,10] (float64), Calculated Unmeasured loads (Whr) (float64), Calculated Energy Use (Whr) (float64), Future use- WHS (2-CTs)[xpod chB-3,4] (float64), Future use- WHS (2-CTs)[xpod chB-5,6] (float64), eMonitor Temp (deg. F) (float64), Wattsup Cumulative Ent.Ctr (WHS) (float64), Wattsup Energy Ent.Ctr (WHS) (float64), Wattsup Cumulative Washer (WHS) (float64), Wattsup Energy Washer (WHS) (float64), LaCrosse Device Temp (deg. F) (float64), PointSix Temp (deg. F) (float64), PointSix Humidity (%) (float64), HOBO LOGGER TEMP (deg. F) (float64), HOBO LOGGER RH (%) (float64)
+
+### Target Schema and Types:
+season (object), hour (int64), hvac (int64), water_heating (int64), refrigerator (int64), clothes_washer (int64), clothes_dryer (int64), dishwasher (int64), cooking_range (int64), pool_spa_pumps (int64), interior_lighting (int64), exterior_lighting (int64), lighting (int64), plug (int64), pool_spa_heater (int64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- Future use- WHS (2-CTs)[xpod chB-3,4]: [np.float64(32767.0), np.float64(0.0)]
+- Future use- WHS (2-CTs)[xpod chB-5,6]: [np.float64(32767.0)]
+
+### Source Table Sample (training_0.csv):
+|   site | timestamp           |   TOTAL BLDG WHS [emon ch1,2] |   AC COMPRESSOR WHS [emon ch3,4] |   AIR HANDLER WHS [emon ch5,6] |   WATER HEATER WHS [emon ch7,8] |   DRYER WHS (1-CT) [emon ch9] |   RANGE WHS (1-CT) [emon ch10] |   DISH WASHER WHS [emon ch11] |   Primary Fridge WHS [emon ch12] |   2nd Fridge WHS [emon ch13] |   SPARE1 WHS (1-CT) [emon ch14] |   SPARE2 WHS (1-CT) [xpod chA-1] |   SPARE3 WHS (1-CT) [xpod chA-2] |   POOL PUMP WHS (2-CTs) [xpod chA-3,4] |   SPARE4 WHS (2-CTs) [xpod chA-5,6] |   Minisplit WHS (2-CTs) [xpod chA-7,8] |   Dryer WHS (2-CTs) [xpod chA-9,10] |   Calculated Unmeasured loads (Whr) |   Calculated Energy Use (Whr) |   Future use- WHS (2-CTs)[xpod chB-3,4] |   Future use- WHS (2-CTs)[xpod chB-5,6] |   eMonitor Temp (deg. F) |   Wattsup Cumulative Ent.Ctr (WHS) |   Wattsup Energy Ent.Ctr (WHS) |   Wattsup Cumulative Washer (WHS) |   Wattsup Energy Washer (WHS) |   LaCrosse Device Temp (deg. F) |   PointSix Temp (deg. F) |   PointSix Humidity (%) |   HOBO LOGGER TEMP (deg. F) |   HOBO LOGGER RH (%) |
+|-------:|:--------------------|------------------------------:|---------------------------------:|-------------------------------:|--------------------------------:|------------------------------:|-------------------------------:|------------------------------:|---------------------------------:|-----------------------------:|--------------------------------:|---------------------------------:|---------------------------------:|---------------------------------------:|------------------------------------:|---------------------------------------:|------------------------------------:|------------------------------------:|------------------------------:|----------------------------------------:|----------------------------------------:|-------------------------:|-----------------------------------:|-------------------------------:|----------------------------------:|------------------------------:|--------------------------------:|-------------------------:|------------------------:|----------------------------:|---------------------:|
+|     19 | 2015-11-14 02:00:00 |                           386 |                                0 |                             16 |                               7 |                             3 |                              6 |                             0 |                               58 |                        32767 |                              64 |                                0 |                            32767 |                                  32767 |                                   0 |                                  32767 |                                   0 |                                 175 |                           386 |                                   32767 |                                   32767 |                    81.5  |                             156909 |                             55 |                             58651 |                             2 |                           32767 |                    75.71 |                   49.5  |                       75.83 |                46.17 |
+|     19 | 2015-11-14 03:00:00 |                           544 |                                0 |                             16 |                               7 |                             3 |                              6 |                             0 |                              185 |                        32767 |                              64 |                                0 |                            32767 |                                  32767 |                                   0 |                                  32767 |                                   0 |                                 208 |                           544 |                                   32767 |                                   32767 |                    81.5  |                             156963 |                             54 |                             58652 |                             1 |                           32767 |                    75.71 |                   50.13 |                       75.83 |                47.36 |
+|     19 | 2015-11-14 04:00:00 |                           481 |                                0 |                             16 |                               7 |                             3 |                              6 |                             0 |                              123 |                        32767 |                              64 |                                0 |                            32767 |                                  32767 |                                   0 |                                  32767 |                                   0 |                                 206 |                           481 |                                   32767 |                                   32767 |                    81.32 |                             157018 |                             55 |                             58653 |                             1 |                           32767 |                    75.66 |                   50.38 |                       75.83 |                48.07 |
+|     19 | 2015-11-14 05:00:00 |                           456 |                                0 |                             16 |                               7 |                             3 |                              6 |                             0 |                               72 |                        32767 |                              64 |                                0 |                            32767 |                                  32767 |                                   0 |                                  32767 |                                   0 |                                 232 |                           456 |                                   32767 |                                   32767 |                    81.32 |                             157073 |                             55 |                             58654 |                             1 |                           32767 |                    75.6  |                   50.79 |                       75.83 |                48.42 |
+|     35 | 2016-05-17 06:00:00 |                         32767 |                            32767 |                              8 |                             791 |                             0 |                              0 |                             1 |                                1 |                            3 |                               0 |                            32767 |                            32767 |                                  32767 |                               32767 |                                  32767 |                                   0 |                               32767 |                         32767 |                                   32767 |                                   32767 |                    34.88 |                              32767 |                          32767 |                             32767 |                         32767 |                           32767 |                 32767    |                32767    |                    32767    |             32767    |
+|     35 | 2016-05-17 07:00:00 |                         32767 |                            32767 |                             13 |                               0 |                             0 |                              0 |                             1 |                                1 |                            3 |                               0 |                            32767 |                            32767 |                                  32767 |                               32767 |                                  32767 |                                   0 |                               32767 |                         32767 |                                   32767 |                                   32767 |                    34.52 |                              32767 |                          32767 |                             32767 |                         32767 |                           32767 |                 32767    |                32767    |                    32767    |             32767    |
+|     35 | 2016-05-17 08:00:00 |                         32767 |                            32767 |                             13 |                               0 |                             0 |                              0 |                             1 |                                1 |                            3 |                               0 |                            32767 |                            32767 |                                  32767 |                               32767 |                                  32767 |                                   0 |                               32767 |                         32767 |                                   32767 |                                   32767 |                    34.88 |                              32767 |                          32767 |                             32767 |                         32767 |                           32767 |                 32767    |                32767    |                    32767    |             32767    |
+|     35 | 2016-05-17 09:00:00 |                         32767 |                            32767 |                              7 |                               0 |                             0 |                              0 |                             1 |                                1 |                            5 |                               0 |                            32767 |                            32767 |                                      0 |                               32767 |                                  32767 |                                   0 |                               32767 |                         32767 |                                   32767 |                                   32767 |                    35.06 |                              32767 |                          32767 |                             32767 |                         32767 |                           32767 |                 32767    |                32767    |                    32767    |             32767    |
+
+### Desired Target Table Sample (target.csv):
+| season   |   hour |   hvac |   water_heating |   refrigerator |   clothes_washer |   clothes_dryer |   dishwasher |   cooking_range |   pool_spa_pumps |   interior_lighting |   exterior_lighting |   lighting |   plug |   pool_spa_heater |
+|:---------|-------:|-------:|----------------:|---------------:|-----------------:|----------------:|-------------:|----------------:|-----------------:|--------------------:|--------------------:|-----------:|-------:|------------------:|
+| Summer   |     16 |  98301 |           32767 |          65534 |                0 |           65534 |        32767 |           32767 |            32767 |                   0 |                   0 |          0 |      0 |                 0 |
+| Summer   |     17 |  98301 |           32767 |          65534 |                0 |           65534 |        32767 |           32767 |            32767 |                   0 |                   0 |          0 |      0 |                 0 |
+| Summer   |     18 |  98301 |           32767 |          65534 |                0 |           65534 |        32767 |           32767 |            32767 |                   0 |                   0 |          0 |      0 |                 0 |
+| Summer   |     19 |  98301 |           32767 |          65534 |                0 |           65534 |        32767 |           32767 |            32767 |                   0 |                   0 |          0 |      0 |                 0 |
+| Fall     |     22 |  33878 |               6 |          32824 |                0 |            2590 |            0 |               6 |            32767 |                   0 |                   0 |          0 |      0 |                 0 |
+| Fall     |     23 |  34121 |               6 |          32844 |                0 |             948 |            0 |               6 |            32767 |                   0 |                   0 |          0 |      0 |                 0 |
+| Fall     |      0 |  32783 |               7 |          32865 |                0 |               0 |            0 |               6 |            32767 |                   0 |                   0 |          0 |      0 |                 0 |
+| Fall     |      1 |  32782 |               7 |          32837 |                0 |               2 |            0 |               6 |            32767 |                   0 |                   0 |          0 |      0 |                 0 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

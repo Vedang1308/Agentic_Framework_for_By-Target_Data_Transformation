@@ -1,0 +1,106 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains raw energy monitoring data with columns like `timestamp`, `AC COMPRESSOR WHS`, `AIR HANDLER WHS`, `WATER HEATER WHS`, `Primary Fridge WHS`, `2nd Fridge WHS`, `DRYER WHS`, `RANGE WHS`, `DISH WASHER WHS`, `POOL PUMP WHS`, etc. It also contains "Spare" channels and calculated fields.
+    *   **Target**: Contains aggregated or mapped columns: `datetime`, `hvac`, `water_heating`, `refrigerator`, `clothes_washer`, `clothes_dryer`, `dishwasher`, `cooking_range`, `pool_spa_pumps`, `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater`.
+
+2.  **Map Source Columns to Target Columns**:
+    *   `datetime`: Derived from source `timestamp`. The format is already `%Y-%m-%d %H:%M:%S`, so we just need to rename it.
+    *   `hvac`: Likely the sum of HVAC-related components. Source has `AC COMPRESSOR WHS [emon ch3,4]` and `AIR HANDLER WHS [emon ch5,6]`. Looking at the sample data, `hvac` values are large (e.g., 98301, 33878). Let's check if it's a sum. In the source sample, AC Compressor is 0 and Air Handler is 16 for the first few rows. This doesn't match the target `hvac` values directly for those rows. However, looking at the target sample rows (2015-11-13/14), `hvac` is ~33000-34000. The source `TOTAL BLDG WHS` is ~400-500. This suggests the target `hvac` might not be a simple sum of the visible source columns for the *same* rows, OR there is a specific mapping.
+    *   *Correction/Refinement*: Let's look closer at the target values vs source values for the overlapping dates (2015-11-14).
+        *   Source `2015-11-14 02:00:00`: AC Comp=0, Air Handler=16. Total=386.
+        *   Target `2015-11-14 00:00:00` (closest): hvac=32783.
+        *   Wait, the target sample has rows for `2012-08-22` which are not in the source sample. The source sample starts at `2015-11-14`. The target sample includes `2015-11-13 22:00:00` with `hvac=33878`.
+        *   Let's look at the "32767" values. In the source, many columns have `32767`. This is often a "null" or "out of range" value in 16-bit signed integer systems (max 32767). In the target, `water_heating` is `32767`, `refrigerator` is `65534` (2 * 32767 + 2?), `clothes_dryer` is `65534`.
+        *   Let's look at `refrigerator` in target: `65534`. Source has `Primary Fridge` and `2nd Fridge`. If both are `32767`, sum is `65534`. This matches!
+        *   Let's look at `clothes_dryer` in target: `65534`. Source has `DRYER WHS (1-CT)` and `Dryer WHS (2-CTs)`. In the source sample, `DRYER WHS (1-CT)` is 3, `Dryer WHS (2-CTs)` is 0. Sum is 3. This doesn't match 65534.
+        *   However, look at the target rows for `2012-08-22`. These are likely "bad data" or "null" rows represented by the max integer values.
+        *   Let's look at the target rows for `2015-11-13`. `hvac=33878`. `water_heating=6`. `refrigerator=32824`. `clothes_dryer=2590`.
+        *   Let's try to find the source rows for `2015-11-13`. They are not in the provided source sample (which starts at 2015-11-14). But we can infer the logic from the column names and the `32767` pattern.
+        *   **Hypothesis**: The transformation involves summing specific source columns to create target columns.
+            *   `hvac`: Sum of `AC COMPRESSOR WHS [emon ch3,4]` and `AIR HANDLER WHS [emon ch5,6]`.
+            *   `water_heating`: `WATER HEATER WHS [emon ch7,8]`.
+            *   `refrigerator`: Sum of `Primary Fridge WHS [emon ch12]` and `2nd Fridge WHS [emon ch13]`.
+            *   `clothes_washer`: This is tricky. Source has `Wattsup Energy Washer (WHS)` or `SPARE1/2/3/4`. Often washers are on spare channels or specific wattsup channels. In many similar datasets, `clothes_washer` is mapped to a specific spare channel or calculated. Let's look at `clothes_washer` in target: it is `0` in all sample rows.
+            *   `clothes_dryer`: Sum of `DRYER WHS (1-CT) [emon ch9]` and `Dryer WHS (2-CTs) [xpod chA-9,10]`.
+            *   `dishwasher`: `DISH WASHER WHS [emon ch11]`.
+            *   `cooking_range`: `RANGE WHS (1-CT) [emon ch10]`.
+            *   `pool_spa_pumps`: `POOL PUMP WHS (2-CTs) [xpod chA-3,4]`.
+            *   `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater`: These are often derived from "Spare" channels or calculated residuals.
+                *   `pool_spa_heater`: Often `SPARE4` or similar. In target sample, it is `0`.
+                *   `lighting`: Often `SPARE1` or `SPARE2`.
+                *   `plug`: Often `SPARE3`.
+
+    *   **Re-evaluating based on "32767" as a null/max value**:
+        The target schema has `int64` for `clothes_washer`, `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater`. The source has `float64`.
+        The value `32767` appears frequently. In the target, `refrigerator` is `65534` (which is 2*32767 + 2? No, 2*32767 = 65534). If `Primary Fridge` is 32767 and `2nd Fridge` is 32767, sum is 65534. This confirms `refrigerator` = `Primary Fridge` + `2nd Fridge`.
+        
+        Let's check `clothes_dryer` = `DRYER (1-CT)` + `Dryer (2-CTs)`.
+        In target sample `2012-08-22`, `clothes_dryer` is `65534`. This implies both dryer channels were 32767.
+        
+        Let's check `hvac`. Target `2012-08-22` has `hvac=98301`.
+        Source `AC COMPRESSOR` and `AIR HANDLER` are likely the components. If `AC COMPRESSOR` is ~65534 (2*32767?) and `AIR HANDLER` is ~32767?
+        Actually, 98301 / 32767 ≈ 3. This suggests `hvac` might be the sum of 3 channels? Or maybe `AC COMPRESSOR` (2 channels internally?) + `AIR HANDLER` (2 channels internally?).
+        The source column names say `[emon ch3,4]` and `[emon ch5,6]`. These are likely already summed or paired.
+        If `AC COMPRESSOR` is 32767 and `AIR HANDLER` is 32767, sum is 65534. Not 98301.
+        If `AC COMPRESSOR` is 65534 (maybe it's 2*32767 because it's 2 channels?) and `AIR HANDLER` is 32767? Sum = 98301.
+        This implies that for some columns, the "32767" represents the max value of a *single* 16-bit channel, and if the column represents 2 channels (like `[emon ch3,4]`), the max value might be 65534?
+        Let's look at the source sample again.
+        `AC COMPRESSOR WHS [emon ch3,4]` is 0.
+        `AIR HANDLER WHS [emon ch5,6]` is 16.
+        `POOL PUMP WHS (2-CTs) [xpod chA-3,4]` is 32767.
+        
+        Let's look at the target `pool_spa_pumps` for `2012-08-22`. It is `32767`.
+        Source `POOL PUMP` is `32767`.
+        So `pool_spa_pumps` = `POOL PUMP WHS`.
+        
+        Let's look at `hvac` again. Target `98301`.
+        If `AC COMPRESSOR` (2 CTs) maxes at 65534 and `AIR HANDLER` (2 CTs) maxes at 32767? No, that's inconsistent.
+        Maybe `hvac` = `AC COMPRESSOR` + `AIR HANDLER` + `Minisplit`?
+        Source `Minisplit WHS (2-CTs) [xpod chA-7,8]` is 32767 in the sample.
+        If `AC COMPRESSOR` is 32767 (max for 2 CTs? No, usually 2 CTs means higher capacity).
+        
+        Let's assume the standard mapping for this specific benchmark (likely from the "Smart* Energy" or similar dataset):
+        1. `hvac` = `AC COMPRESSOR WHS [emon ch3,4]` + `AIR HANDLER WHS [emon ch5,6]`
+        2. `water_heating` = `WATER HEATER WHS [emon ch7,8]`
+        3. `refrigerator` = `Primary Fridge WHS [emon ch12]` + `2nd Fridge WHS [emon ch13]`
+        4. `clothes_washer` = `Wattsup Energy Washer (WHS)`? Or `SPARE1`? In the target sample, it's 0. In source, `Wattsup Energy Washer` is 2, 1, 1... `SPARE1` is 64.
+           Usually, `clothes_washer` is not present or is 0 if not measured. Given the target has `int64` and 0s, and source `Wattsup Energy Washer` is small, it might be mapped there. BUT, looking at the distinct values, `Future use` columns have 32767.
+           Let's look at `plug`. Target is 0. Source `SPARE2` is 0. `SPARE3` is 32767.
+           
+        Let's look at the columns that are `int64` in target: `clothes_washer`, `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater`.
+        These are likely "Spare" or "Unmeasured" categories that are often 0 or null.
+        
+        Let's try to map the `32767` logic.
+        If a source column is `32767`, it might be a "bad" value.
+        However, the target preserves these values (e.g., `water_heating` is `32767`).
+        
+        **Proposed Mappings:**
+        *   `datetime` <- `timestamp`
+        *   `hvac` <- `AC COMPRESSOR WHS [emon ch3,4]` + `AIR HANDLER WHS [emon ch5,6]`
+        *   `water_heating` <- `WATER HEATER WHS [emon ch7,8]`
+        *   `refrigerator` <- `Primary Fridge WHS [emon ch12]` + `2nd Fridge WHS [emon ch13]`
+        *   `clothes_washer` <- `Wattsup Energy Washer (WHS)` (Cast to int) OR `SPARE1`? Let's check `SPARE1`. Source `SPARE1` is 64. Target `clothes_washer` is 0. Unlikely. `Wattsup Energy Washer` is 2. Target is 0. Unlikely.
+            *   Wait, look at `clothes_washer` in target sample: it is **0** for all rows.
+            *   Look at `interior_lighting`: **0**.
+            *   Look at `exterior_lighting`: **0**.
+            *   Look at `lighting`: **0**.
+            *   Look at `plug`: **0**.
+            *   Look at `pool_spa_heater`: **0**.
+            *   This suggests these columns might be **constant 0** or derived from columns that are 0 in the valid data range, OR they are mapped to columns that are effectively 0 or NaN->0.
+            *   However, `pool_spa_pumps` is `32767` in target. Source `POOL PUMP` is `32767`.
+            *   `clothes_dryer` is `65534` in target. Source `DRYER (1-CT)` is 3, `Dryer (2-CTs)` is 0. Sum = 3. This does NOT match 65534.
+            *   **CRITICAL INSIGHT**: The target sample rows for `2012-08-22` are likely **different data** than the source sample rows for `2015-11-14`. The transformation must be general.
+            *   The value `65534` is `2 * 32767`. This strongly implies that `clothes_dryer` is the sum of two channels, each capped at 32767.
+            *   The value `98301` for `hvac` is `3 * 32767`. This implies `hvac` is the sum of 3 channels? Or 2 channels where one is double?
+                *   `AC COMPRESSOR` (2 CTs) + `AIR HANDLER` (2 CTs). If each CT is 16-bit, max is 32767. 2 CTs = 65534.
+                *   If `AC COMPRESSOR` is 65534 and `AIR HANDLER` is 32767, sum is 98301.
+                *   This implies `AC COMPRESSOR` column in source might represent 2 CTs but stored as a single float? No, the source column is `AC COMPRESSOR WHS [emon ch3,4]`.
+                *   If the source data for `2012-08-22` had `AC COMPRESSOR` = 65534 and `AIR HANDLER` = 32767, then the sum is 98301.
+                *   Therefore, `hvac` = `AC COMPRESSOR` + `AIR HANDLER`.
+        
+        *   `clothes_washer`: Target is 0. Source `Wattsup Energy Washer` is small. Source `SPARE1` is 64.
+            *   Maybe `clothes_washer` is mapped to `SPARE1`? But 64 != 0.
+            *   Maybe `clothes_washer` is mapped to `Wattsup Cumulative Washer`? No.
+            *   Let's look at `plug`. Target 0. Source `SPARE2` is 0. `SPARE3` is 32767.
+            *   Let's look at `lighting`. Target 0. Source `SP

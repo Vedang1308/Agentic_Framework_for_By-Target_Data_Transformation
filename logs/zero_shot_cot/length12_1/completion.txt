@@ -1,0 +1,185 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Time and Extract Features**:
+    *   The `time` column contains timestamps. We need to parse this into a datetime object to extract the `hour` and determine the `season`.
+    *   `hour`: Extract the hour component (0-23) from the timestamp.
+    *   `season`: Determine the season based on the month. Standard meteorological seasons are often used in energy data:
+        *   Winter: Dec, Jan, Feb
+        *   Spring: Mar, Apr, May
+        *   Summer: Jun, Jul, Aug
+        *   Fall: Sep, Oct, Nov
+        *   *Self-Correction/Verification*: Looking at the target sample, we see "Summer", "Winter", "Spring". We need to map months to these strings.
+
+2.  **Map Source Columns to Target Columns**:
+    *   Analyze the source schema and target schema to identify direct mappings and aggregations.
+    *   `hvac`: This likely aggregates heating and cooling components. Looking at source columns: `electricity_heating_kwh`, `electricity_cooling_kwh`, `electricity_fans_heating_kwh`, `electricity_fans_cooling_kwh`, `electricity_pumps_heating_kwh`, `electricity_pumps_cooling_kwh`, `electricity_central_system_heating_kwh`, `electricity_central_system_cooling_kwh`, `electricity_central_system_pumps_heating_kwh`, `electricity_central_system_pumps_cooling_kwh`.
+        *   *Hypothesis*: `hvac` is the sum of all heating, cooling, and associated fan/pump electricity. Let's look at the magnitudes. The target `hvac` values are very large (e.g., 9.5e7). The source values are also large (e.g., 406631). Since we are aggregating 15-minute intervals into hourly bins, and potentially across multiple days/years, we need to sum.
+        *   Let's check the aggregation logic first.
+    *   `water_heating`: Maps to `electricity_water_systems_kwh`.
+    *   `refrigerator`: Maps to `electricity_refrigerator_kwh`.
+    *   `clothes_washer`: Maps to `electricity_clothes_washer_kwh`.
+    *   `clothes_dryer`: Maps to `electricity_clothes_dryer_kwh`.
+    *   `dishwasher`: Maps to `electricity_dishwasher_kwh`.
+    *   `cooking_range`: Maps to `electricity_cooking_range_kwh`.
+    *   `pool_spa_pumps`: Maps to `electricity_pool_pump_kwh` + `electricity_hot_tub_pump_kwh`.
+    *   `interior_lighting`: Maps to `electricity_interior_lighting_kwh`.
+    *   `exterior_lighting`: Maps to `electricity_exterior_lighting_kwh`.
+    *   `lighting`: Likely the sum of `interior_lighting` and `exterior_lighting`.
+    *   `plug`: Maps to `electricity_plug_loads_kwh`.
+    *   `pool_spa_heaters`: Maps to `electricity_pool_heater_kwh` + `electricity_hot_tub_heater_kwh`.
+
+3.  **Determine Aggregation Strategy**:
+    *   Source has 17,568 rows. Target has 72 rows.
+    *   Target columns are `season` and `hour`.
+    *   There are 4 seasons and 24 hours. $4 \times 24 = 96$ possible combinations. The target has 72 rows, implying some combinations might be missing or the data doesn't cover all seasons/hours uniformly, or perhaps "Fall" is missing from the sample but present in the full target? Or maybe the aggregation is just `groupby(['season', 'hour']).sum()`.
+    *   The source data is at 15-minute intervals. To get hourly data, we should group by the extracted `hour` and `season` and sum the energy values.
+    *   Wait, does "hour" mean the clock hour (0-23)? Yes.
+    *   Does "season" mean the meteorological season? Yes.
+    *   So, the transformation is:
+        1.  Parse `time`.
+        2.  Extract `hour`.
+        3.  Derive `season` from month.
+        4.  Create intermediate columns for the target metrics by summing relevant source columns.
+        5.  Group by `season` and `hour`.
+        6.  Sum the values.
+        7.  Reset index.
+        8.  Select and rename columns to match target verbatim.
+
+4.  **Refining HVAC Calculation**:
+    *   Let's look at the source columns again.
+    *   Heating: `electricity_heating_kwh`, `electricity_central_system_heating_kwh`, `electricity_fans_heating_kwh`, `electricity_pumps_heating_kwh`, `electricity_central_system_pumps_heating_kwh`.
+    *   Cooling: `electricity_cooling_kwh`, `electricity_central_system_cooling_kwh`, `electricity_fans_cooling_kwh`, `electricity_pumps_cooling_kwh`, `electricity_central_system_pumps_cooling_kwh`.
+    *   It is standard in these datasets (like EIA CBED) that `hvac` is the sum of all these components.
+
+5.  **Refining Lighting Calculation**:
+    *   `lighting` = `interior_lighting` + `exterior_lighting`.
+
+6.  **Refining Pool/Spa Calculations**:
+    *   `pool_spa_pumps` = `electricity_pool_pump_kwh` + `electricity_hot_tub_pump_kwh`.
+    *   `pool_spa_heaters` = `electricity_pool_heater_kwh` + `electricity_hot_tub_heater_kwh`.
+
+7.  **Implementation Details**:
+    *   Use `pd.to_datetime` for parsing.
+    *   Use `.dt.hour` for hour.
+    *   Use `.dt.month` to map to season.
+    *   Define a mapping function for season.
+    *   Perform column arithmetic.
+    *   GroupBy and Sum.
+    *   Ensure final column order and names match exactly.
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source electricity usage DataFrame into a aggregated 
+    seasonal hourly summary DataFrame.
+    """
+    df = source.copy()
+    
+    # 1. Parse time and extract features
+    df['time_dt'] = pd.to_datetime(df['time'])
+    df['hour'] = df['time_dt'].dt.hour
+    df['month'] = df['time_dt'].dt.month
+    
+    # 2. Determine Season
+    # Meteorological seasons:
+    # Winter: Dec (12), Jan (1), Feb (2)
+    # Spring: Mar (3), Apr (4), May (5)
+    # Summer: Jun (6), Jul (7), Aug (8)
+    # Fall: Sep (9), Oct (10), Nov (11)
+    def get_season(month):
+        if month in [12, 1, 2]:
+            return 'Winter'
+        elif month in [3, 4, 5]:
+            return 'Spring'
+        elif month in [6, 7, 8]:
+            return 'Summer'
+        else:
+            return 'Fall'
+            
+    df['season'] = df['month'].apply(get_season)
+    
+    # 3. Construct Target Columns from Source Columns
+    
+    # HVAC: Sum of all heating, cooling, and associated fans/pumps
+    hvac_cols = [
+        'electricity_heating_kwh',
+        'electricity_central_system_heating_kwh',
+        'electricity_cooling_kwh',
+        'electricity_central_system_cooling_kwh',
+        'electricity_fans_heating_kwh',
+        'electricity_fans_cooling_kwh',
+        'electricity_pumps_heating_kwh',
+        'electricity_central_system_pumps_heating_kwh',
+        'electricity_pumps_cooling_kwh',
+        'electricity_central_system_pumps_cooling_kwh'
+    ]
+    df['hvac'] = df[hvac_cols].sum(axis=1)
+    
+    # Water Heating
+    df['water_heating'] = df['electricity_water_systems_kwh']
+    
+    # Refrigerator
+    df['refrigerator'] = df['electricity_refrigerator_kwh']
+    
+    # Clothes Washer
+    df['clothes_washer'] = df['electricity_clothes_washer_kwh']
+    
+    # Clothes Dryer
+    df['clothes_dryer'] = df['electricity_clothes_dryer_kwh']
+    
+    # Dishwasher
+    df['dishwasher'] = df['electricity_dishwasher_kwh']
+    
+    # Cooking Range
+    df['cooking_range'] = df['electricity_cooking_range_kwh']
+    
+    # Pool/Spa Pumps
+    df['pool_spa_pumps'] = df['electricity_pool_pump_kwh'] + df['electricity_hot_tub_pump_kwh']
+    
+    # Interior Lighting
+    df['interior_lighting'] = df['electricity_interior_lighting_kwh']
+    
+    # Exterior Lighting
+    df['exterior_lighting'] = df['electricity_exterior_lighting_kwh']
+    
+    # Total Lighting
+    df['lighting'] = df['interior_lighting'] + df['exterior_lighting']
+    
+    # Plug Loads
+    df['plug'] = df['electricity_plug_loads_kwh']
+    
+    # Pool/Spa Heaters
+    df['pool_spa_heaters'] = df['electricity_pool_heater_kwh'] + df['electricity_hot_tub_heater_kwh']
+    
+    # 4. Aggregate by Season and Hour
+    # The target has one row per (season, hour) combination.
+    # We sum the energy values for all 15-min intervals falling into that bucket.
+    
+    agg_cols = [
+        'hvac', 'water_heating', 'refrigerator', 'clothes_washer', 
+        'clothes_dryer', 'dishwasher', 'cooking_range', 'pool_spa_pumps', 
+        'interior_lighting', 'exterior_lighting', 'lighting', 'plug', 
+        'pool_spa_heaters'
+    ]
+    
+    df_agg = df.groupby(['season', 'hour'], as_index=False)[agg_cols].sum()
+    
+    # 5. Format Output
+    # Ensure column order matches target exactly
+    target_columns = [
+        'season', 'hour', 'hvac', 'water_heating', 'refrigerator', 
+        'clothes_washer', 'clothes_dryer', 'dishwasher', 'cooking_range', 
+        'pool_spa_pumps', 'interior_lighting', 'exterior_lighting', 
+        'lighting', 'plug', 'pool_spa_heaters'
+    ]
+    
+    # Sort for consistency (optional, but good practice)
+    df_agg = df_agg.sort_values(['season', 'hour']).reset_index(drop=True)
+    
+    return df_agg[target_columns]
+```

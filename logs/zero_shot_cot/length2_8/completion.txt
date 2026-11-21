@@ -1,0 +1,162 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Datetime**: The source column `date` is a string in the format `%m/%d/%Y %H:%M`. We need to convert this to a pandas datetime object to extract temporal features.
+2.  **Extract Temporal Features**:
+    *   **`dt_strata`**: The target shows dates like `01/14/19`. This corresponds to the format `%m/%d/%y` (month/day/2-digit year). We will format the parsed datetime to match this.
+    *   **`dow`**: The target column `dow` contains integers. Looking at the sample:
+        *   `01/14/19` is a Monday. Target `dow` is `1`.
+        *   `01/18/19` is a Friday. Target `dow` is `5`.
+        *   `06/17/19` is a Monday. Target `dow` is `1`.
+        *   This mapping corresponds to `Monday=1, ..., Sunday=7`. Pandas `dt.dayofweek` returns `Monday=0, ..., Sunday=6`. So, `dow = dt.dayofweek + 1`.
+    *   **`hour`**: We need to group by hour to calculate hourly statistics. We extract the hour from the datetime.
+3.  **Grouping and Aggregation**:
+    *   The target has one row per unique `dt_strata` (date).
+    *   The target columns `pct_hourly_0100` through `pct_hourly_2400` suggest an aggregation of the `cerc_logger_1` values for each hour of the day.
+    *   The values in the target (e.g., `136.872`) are significantly larger than the source values (e.g., `24.562`). This suggests an aggregation like `sum` or `mean` multiplied by a factor, or perhaps the source data has multiple entries per hour that sum up.
+    *   Let's look at the source sample: `7/28/2019 4:50`, `5:00`, `5:10`, `5:20`. These are 10-minute intervals. There are 6 entries per hour.
+    *   If we sum 6 entries of ~24.5, we get ~147. The target values are around 130-145. This is close.
+    *   Let's check the aggregation type. Usually, "pct_hourly" might imply a percentage, but the values are absolute. Given the name `cerc_logger_1` (likely a sensor reading), and the output being a single value per hour per day, it's likely a **sum** or **mean** of the readings within that hour.
+    *   Let's test the hypothesis: **Sum**.
+        *   Source: ~24.5 per 10 mins. 6 readings/hour. Sum ≈ 147.
+        *   Target: ~136.
+        *   Maybe it's not a simple sum. Let's look closer.
+        *   Wait, the target column names are `pct_hourly_0100` to `pct_hourly_2400`. This implies 24 hours.
+        *   The last column `pct_hourly_2500` is always `0` in the sample. This is likely a placeholder or a specific bucket for "missing" or "other", but since it's always 0, we can just fill it with 0.
+    *   Let's re-evaluate the aggregation. Is it possible the source data has missing hours? Or is it an average?
+    *   If it were an average, the value would be ~24.5. The target is ~136.
+    *   If it were a sum, the value would be ~147.
+    *   Let's look at the specific values.
+        *   Target `01/14/19`, `pct_hourly_0100` = 136.872.
+        *   If we assume the source has 10-minute intervals, there are 6 data points per hour.
+        *   136.872 / 6 = 22.812.
+        *   The source sample shows values around 22-24. This is consistent.
+        *   Therefore, the operation is likely **Sum** of `cerc_logger_1` grouped by `dt_strata` and `hour`.
+4.  **Pivoting**:
+    *   After grouping by `dt_strata` and `hour` and summing `cerc_logger_1`, we will have a DataFrame with columns `dt_strata`, `hour`, and `sum_val`.
+    *   We need to pivot this so that `hour` becomes columns.
+    *   The target columns are named `pct_hourly_0100`, `pct_hourly_0200`, ..., `pct_hourly_2400`.
+    *   Note the naming convention: `0100` corresponds to hour 0 (midnight), `0200` to hour 1, ..., `2400` to hour 23.
+    *   So, hour `h` maps to column `pct_hourly_{h+1:02d}00`.
+    *   We need to ensure all 24 hours are present for each date, filling missing hours with 0 (or NaN, then fillna(0)).
+5.  **Handling `pct_hourly_2500`**:
+    *   This column is always 0 in the sample. We will add it as a constant 0 column.
+6.  **Final Assembly**:
+    *   Create the `dow` column based on the date.
+    *   Ensure the column order matches the target exactly.
+    *   Return the DataFrame.
+
+### Refinement on Aggregation
+Let's double-check if it's Sum or Mean.
+If the source data is irregular, Sum is safer if the frequency is constant. If the frequency varies, Mean might be more appropriate, but the values are too high for Mean.
+Given the 10-minute interval in the sample, Sum is the most likely candidate.
+However, sometimes "pct" implies a percentage of a daily total?
+If `pct_hourly_0100` is 136.872, and the daily sum is roughly 24 * 136 ≈ 3264.
+If it were a percentage, the values would sum to 100. They don't.
+So it's an absolute value.
+Why "pct"? Maybe it's a misnomer in the dataset name, or it stands for "piece count" or similar. Given the magnitude, **Sum** is the correct aggregation.
+
+### Mapping Hours to Columns
+Target: `pct_hourly_0100` -> Hour 0
+Target: `pct_hourly_0200` -> Hour 1
+...
+Target: `pct_hourly_2400` -> Hour 23
+
+We will create a mapping dictionary or format the column names accordingly.
+
+### Code Structure
+1. Parse `date`.
+2. Create `dt_strata` (format `%m/%d/%y`).
+3. Create `dow` (`dayofweek + 1`).
+4. Create `hour` bucket.
+5. Group by `dt_strata` and `hour`, sum `cerc_logger_1`.
+6. Unstack/Pivot to get hours as columns.
+7. Rename columns to `pct_hourly_XX00`.
+8. Fill missing hours with 0.
+9. Add `pct_hourly_2500` as 0.
+10. Sort/Select columns to match target.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # 1. Parse the date column
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract dt_strata (MM/DD/YY)
+    df['dt_strata'] = df['datetime'].dt.strftime('%m/%d/%y')
+    
+    # 3. Extract dow (Monday=1, ..., Sunday=7)
+    # pandas dayofweek: Monday=0, ..., Sunday=6
+    df['dow'] = df['datetime'].dt.dayofweek + 1
+    
+    # 4. Extract hour for grouping
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 5. Aggregate: Sum cerc_logger_1 for each dt_strata and hour
+    # We group by dt_strata and hour, then sum the values
+    agg_df = df.groupby(['dt_strata', 'hour'])['cerc_logger_1'].sum().reset_index()
+    
+    # 6. Pivot the data so hours become columns
+    # The index will be dt_strata, columns will be hour, values will be the sum
+    pivot_df = agg_df.pivot_table(index='dt_strata', columns='hour', values='cerc_logger_1', fill_value=0)
+    
+    # 7. Rename columns to match target format: pct_hourly_0100, ..., pct_hourly_2400
+    # Hour 0 -> pct_hourly_0100
+    # Hour 1 -> pct_hourly_0200
+    # ...
+    # Hour 23 -> pct_hourly_2400
+    new_columns = {}
+    for h in range(24):
+        col_name = f'pct_hourly_{h+1:02d}00'
+        new_columns[h] = col_name
+    
+    pivot_df.rename(columns=new_columns, inplace=True)
+    
+    # 8. Ensure all 24 hour columns exist, even if no data for that hour
+    expected_hour_cols = [f'pct_hourly_{h+1:02d}00' for h in range(24)]
+    for col in expected_hour_cols:
+        if col not in pivot_df.columns:
+            pivot_df[col] = 0
+            
+    # 9. Add pct_hourly_2500 column with 0
+    pivot_df['pct_hourly_2500'] = 0
+    
+    # 10. Reset index to make dt_strata a column
+    pivot_df.reset_index(inplace=True)
+    
+    # 11. Merge dow back into the pivot_df
+    # We need to get the dow for each dt_strata. Since dt_strata is unique per day, 
+    # we can just take the first occurrence or map it.
+    # Create a mapping from dt_strata to dow
+    dow_map = df[['dt_strata', 'dow']].drop_duplicates().set_index('dt_strata')['dow']
+    pivot_df['dow'] = pivot_df['dt_strata'].map(dow_map)
+    
+    # 12. Define target columns
+    target_columns = [
+        'dt_strata', 'dow', 
+        'pct_hourly_0100', 'pct_hourly_0200', 'pct_hourly_0300', 'pct_hourly_0400', 
+        'pct_hourly_0500', 'pct_hourly_0600', 'pct_hourly_0700', 'pct_hourly_0800', 
+        'pct_hourly_0900', 'pct_hourly_1000', 'pct_hourly_1100', 'pct_hourly_1200', 
+        'pct_hourly_1300', 'pct_hourly_1400', 'pct_hourly_1500', 'pct_hourly_1600', 
+        'pct_hourly_1700', 'pct_hourly_1800', 'pct_hourly_1900', 'pct_hourly_2000', 
+        'pct_hourly_2100', 'pct_hourly_2200', 'pct_hourly_2300', 'pct_hourly_2400', 
+        'pct_hourly_2500'
+    ]
+    
+    # 13. Select and order columns
+    result_df = pivot_df[target_columns]
+    
+    # 14. Ensure correct dtypes
+    result_df['dow'] = result_df['dow'].astype(int)
+    result_df['pct_hourly_2500'] = result_df['pct_hourly_2500'].astype(int)
+    
+    # Convert hourly columns to float
+    for col in target_columns[2:26]: # Exclude dt_strata, dow, and pct_hourly_2500
+        result_df[col] = result_df[col].astype(float)
+        
+    return result_df
+```

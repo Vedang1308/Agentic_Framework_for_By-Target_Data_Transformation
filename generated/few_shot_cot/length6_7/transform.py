@@ -1,0 +1,22 @@
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # Create a mapping for renaming hourly columns
+    # Source: '1:00'...'23:00' and '24:00:00'
+    # Target: 'Hr 1'...'Hr 24'
+    rename_dict = {}
+    for i in range(1, 24):
+        rename_dict[f'{i}:00'] = f'Hr {i}'
+    rename_dict['24:00:00'] = 'Hr 24'
+    
+    # Apply renaming
+    df = df.rename(columns=rename_dict)
+    
+    # Define target columns in the exact order required
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # Select and return the target columns
+    return df[target_columns]

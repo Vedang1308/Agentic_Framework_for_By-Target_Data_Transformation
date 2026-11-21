@@ -1,0 +1,97 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Date Transformation**:
+    *   Source column `date` contains dates in format `M/D/YYYY` (e.g., '7/3/2014').
+    *   Target column `cst` requires format `%a %m/%d/%Y` (e.g., 'Wed 01/01/2014').
+    *   Action: Parse `date` to datetime using `pd.to_datetime`, then format using `.dt.strftime('%a %m/%d/%Y')`.
+
+2.  **Analyze Hourly Column Mapping**:
+    *   Source has 24 hourly columns with AM/PM notation: `1:00 AM` through `12:00 PM`, `1:00 PM` through `11:00 PM`. Note that `12:00 AM` is present (midnight) and `12:00 PM` is present (noon).
+    *   Target has 24 hourly columns in 24-hour format: `1:00` through `24:00`.
+    *   Mapping Logic:
+        *   `1:00 AM` -> `1:00`
+        *   `2:00 AM` -> `2:00`
+        *   ...
+        *   `11:00 AM` -> `11:00`
+        *   `12:00 PM` -> `12:00` (Noon)
+        *   `1:00 PM` -> `13:00`
+        *   `2:00 PM` -> `14:00`
+        *   ...
+        *   `11:00 PM` -> `23:00`
+        *   `12:00 AM` -> `24:00` (Midnight/End of day)
+    *   Action: Create a dictionary mapping source column names to target column names based on this logic.
+
+3.  **Handle Row Count Discrepancy**:
+    *   Source has 182 rows, Target has 183 rows.
+    *   Looking at the sample data, the source starts at `7/3/2014` but the target starts at `Wed 01/01/2014`. This suggests the source table provided in the prompt is a *subset* or *sample* of the full data, or the transformation involves generating missing dates.
+    *   However, the instruction says "The function must compute its result SOLELY from the `source` argument." and "Do NOT hardcode target rows".
+    *   Let's re-read carefully: "Source sample rows: 182 rows... Target rows: 183 rows".
+    *   Usually, in these TbT tasks, if the row count changes significantly (like adding a header or a summary row), it might be an aggregation. But here, the target rows look like daily data just like the source.
+    *   Let's look at the dates. Source sample: `7/3/2014` to `12/31/2014`. Target sample: `01/01/2014` to `07/02/2014`.
+    *   The samples are disjoint in time. This implies the transformation is purely structural (renaming/formatting) and the row count difference in the *description* might refer to the full dataset vs the sample, or potentially a single row is added (e.g., a total row?).
+    *   Wait, looking at Example 1 and 2, they are simple row-wise transformations.
+    *   Let's check if there's a pattern in the values. The values in the target sample for `Wed 01/01/2014` are distinct.
+    *   If the source only contains specific rows, and the target contains *all* rows for a year, we cannot generate missing rows from the source alone without a date range generator. But we are forbidden from hardcoding.
+    *   Hypothesis: The "182 vs 183" note might be a distractor or refers to a specific edge case in the full test set (e.g., a leap year or a specific aggregation). However, standard TbT tasks usually map 1-to-1 unless specified (like "group by").
+    *   Let's look closer at the source columns. There is a `DSL` column. The target does not have `DSL`.
+    *   Is it possible the target includes a summary row? The target sample shows 8 rows. The source sample shows 8 rows. The mapping seems 1-to-1 for the samples provided.
+    *   Let's assume the transformation is 1-to-1 row mapping. The row count difference in the problem description (182 vs 183) might be due to the source missing one day (e.g., Feb 29 in a non-leap year? No, 2014 is not a leap year. 365 days. 182 is half a year. 183 is half a year + 1).
+    *   Actually, 2014 has 365 days. 182 rows is exactly half. 183 is half + 1.
+    *   If the source is just a subset, the function should just transform what is given. The "Target rows: 183" might imply the *full* target has 183, but if the source only has 182, we can only output 182.
+    *   However, if the task implies *generating* the missing row, we can't do that without knowing the date range.
+    *   Let's look at the "Distinct values for DSL". It has 0.0 and 0.119509.
+    *   Let's stick to the most robust interpretation: Transform the existing rows. If the test case expects a specific row count, it usually provides the source with that count. The discrepancy in the prompt description might be an artifact of how the sample was extracted vs the full file.
+    *   Wait, is it possible `DSL` is used to filter? No, target has same number of rows as source in the sample (8 vs 8).
+    *   I will proceed with a 1-to-1 transformation.
+
+4.  **Constructing the Rename Map**:
+    *   AM hours: `1:00 AM` to `11:00 AM` map to `1:00` to `11:00`.
+    *   `12:00 PM` maps to `12:00`.
+    *   PM hours: `1:00 PM` to `11:00 PM` map to `13:00` to `23:00`.
+    *   `12:00 AM` maps to `24:00`.
+
+5.  **Final Selection**:
+    *   Create `cst` column.
+    *   Rename hourly columns.
+    *   Drop `DSL` and original `date`.
+    *   Select columns in order: `cst`, `1:00` ... `24:00`.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse and format the date column
+    # Source 'date' is M/D/YYYY, Target 'cst' is '%a %m/%d/%Y'
+    dt = pd.to_datetime(df['date'])
+    df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+    
+    # 2. Map source hourly columns to target hourly columns
+    # Source: 1:00 AM ... 11:00 AM, 12:00 PM, 1:00 PM ... 11:00 PM, 12:00 AM
+    # Target: 1:00 ... 11:00, 12:00, 13:00 ... 23:00, 24:00
+    
+    rename_dict = {}
+    
+    # 1:00 AM to 11:00 AM -> 1:00 to 11:00
+    for h in range(1, 12):
+        rename_dict[f'{h}:00 AM'] = f'{h}:00'
+        
+    # 12:00 PM -> 12:00
+    rename_dict['12:00 PM'] = '12:00'
+    
+    # 1:00 PM to 11:00 PM -> 13:00 to 23:00
+    for h in range(1, 12):
+        rename_dict[f'{h}:00 PM'] = f'{h + 12}:00'
+        
+    # 12:00 AM -> 24:00
+    rename_dict['12:00 AM'] = '24:00'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define target columns in the correct order
+    target_cols = ['cst'] + [f'{h}:00' for h in range(1, 25)]
+    
+    # 4. Return the transformed dataframe with only the target columns
+    return df[target_cols]
+```

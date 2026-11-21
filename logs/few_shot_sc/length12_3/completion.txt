@@ -1,0 +1,207 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Source and Target Schemas**:
+   - Source has columns for various energy loads (HVS, Water Heater, Dryer, Range, Dishwasher, Fridges, Pool Pump, etc.) and metadata (`site`, `timestamp`).
+   - Target requires specific aggregated/renamed columns: `season`, `hour`, `hvac`, `water_heating`, `refrigerator`, `clothes_washer`, `clothes_dryer`, `dishwasher`, `cooking_range`, `pool_spa_pumps`, `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, `pool_spa_heater`.
+
+2. **Extract Time Components**:
+   - Parse the `timestamp` column (format `%Y-%m-%d %H:%M:%S`) into a datetime object.
+   - Extract the `hour` (0-23) from the timestamp.
+   - Determine the `season` based on the month. Standard meteorological seasons are often used in energy data:
+     - Winter: Dec, Jan, Feb
+     - Spring: Mar, Apr, May
+     - Summer: Jun, Jul, Aug
+     - Fall: Sep, Oct, Nov
+   - Looking at the sample: `2015-11-14` (Nov) -> Fall. `2016-05-17` (May) -> Spring? Wait, let's check the target sample values.
+     - Target sample shows "Summer" for hours 16-19 and "Fall" for hours 22-1.
+     - The source sample rows provided don't explicitly map to the target sample rows directly in terms of dates, but we can infer the season logic.
+     - Let's look at standard definitions.
+       - Summer: Jun, Jul, Aug
+       - Fall: Sep, Oct, Nov
+       - Winter: Dec, Jan, Feb
+       - Spring: Mar, Apr, May
+     - Let's verify with the source data if possible. The source has `2015-11-14` (Nov). Nov is typically Fall. The target sample has "Fall". This matches.
+     - The source has `2016-05-17` (May). May is typically Spring.
+     - We need to map months to seasons.
+
+3. **Map Source Columns to Target Columns**:
+   - `hvac`: Likely the sum of `AC COMPRESSOR WHS [emon ch3,4]` and `AIR HANDLER WHS [emon ch5,6]`.
+   - `water_heating`: Maps to `WATER HEATER WHS [emon ch7,8]`.
+   - `refrigerator`: Likely the sum of `Primary Fridge WHS [emon ch12]` and `2nd Fridge WHS [emon ch13]`. Note: `32767` is a common "null" or "maxed out" value in this dataset (seen in distinct values). We should probably keep it as is or handle it? The target sample shows `65534` for refrigerator. `32767 + 32767 = 65534`. This confirms `refrigerator` is the sum of the two fridge columns.
+   - `clothes_washer`: Maps to `Wattsup Energy Washer (WHS)`? Or is there a dedicated column? There is `Wattsup Cumulative Washer` and `Wattsup Energy Washer`. The target column is `clothes_washer`. In the source, there isn't a direct "Washer" channel like the others. However, `Wattsup Energy Washer (WHS)` seems the most likely candidate for instantaneous power/energy use. Let's look at the target sample value: `0`. The source sample for `Wattsup Energy Washer (WHS)` is `2`, `1`, `1`, `1`. This doesn't match `0`.
+   - Let's re-examine the source columns.
+     - `DRYER WHS (1-CT) [emon ch9]` -> `clothes_dryer`? Target sample `clothes_dryer` is `65534`. Source `DRYER WHS (1-CT)` is `3`. `Dryer WHS (2-CTs)` is `0`. This doesn't match `65534`.
+     - Wait, the target sample values are very specific: `98301`, `32767`, `65534`.
+     - `32767` is the max value for a 16-bit signed integer. `65534` is `2 * 32767`.
+     - This suggests that if a channel is "bad" or "maxed out" (32767), the target might reflect that.
+     - Let's look at `hvac`. Target: `98301`. Source `AC COMPRESSOR`: `0`. Source `AIR HANDLER`: `16`. Sum: `16`. This doesn't match.
+     - Let's look at another row. Target `hvac`: `33878`. Source `AC`: `0`, `AIR`: `16`. Sum `16`.
+     - There is a disconnect between the provided *Source Sample* and *Target Sample* rows. The instruction says "Source sample rows: 1323516 rows... Target rows: 1323516 rows". The samples provided in the prompt are just snippets. The target sample snippet likely corresponds to *different* rows than the source snippet provided, or the transformation involves more than simple addition.
+     - HOWEVER, looking at the column names:
+       - `hvac`: `AC COMPRESSOR WHS` + `AIR HANDLER WHS`?
+       - `water_heating`: `WATER HEATER WHS`?
+       - `refrigerator`: `Primary Fridge` + `2nd Fridge`?
+       - `clothes_washer`: `Wattsup Energy Washer`?
+       - `clothes_dryer`: `DRYER WHS (1-CT)` + `Dryer WHS (2-CTs)`?
+       - `dishwasher`: `DISH WASHER WHS`?
+       - `cooking_range`: `RANGE WHS`?
+       - `pool_spa_pumps`: `POOL PUMP WHS`?
+       - `pool_spa_heater`: `Minisplit WHS`? Or `SPARE`? There is no explicit "Pool Spa Heater" column. `Minisplit` is often HVAC.
+       - `interior_lighting`, `exterior_lighting`, `lighting`, `plug`: These are aggregated categories.
+         - `lighting`: Sum of interior and exterior? Or a specific column? There is no "Lighting" column.
+         - `plug`: Sum of miscellaneous plugs?
+   
+   - Let's look closer at the "Distinct values" hint. `32767` appears frequently. This is likely a placeholder for missing/bad data.
+   - Let's look at the target column `pool_spa_heater`. Source has `Minisplit WHS`. Minisplits are often used for pool heating in some contexts, or it might be a spare channel.
+   - Let's look at `interior_lighting`, `exterior_lighting`. There are no specific lighting columns.
+   - Let's look at `plug`.
+   
+   - **Alternative Hypothesis**: The target columns might be derived from specific source columns by renaming, and some are sums.
+     - `hvac` = `AC COMPRESSOR WHS [emon ch3,4]` + `AIR HANDLER WHS [emon ch5,6]`
+     - `water_heating` = `WATER HEATER WHS [emon ch7,8]`
+     - `refrigerator` = `Primary Fridge WHS [emon ch12]` + `2nd Fridge WHS [emon ch13]`
+     - `clothes_washer` = `Wattsup Energy Washer (WHS)`
+     - `clothes_dryer` = `DRYER WHS (1-CT) [emon ch9]` + `Dryer WHS (2-CTs) [xpod chA-9,10]`
+     - `dishwasher` = `DISH WASHER WHS [emon ch11]`
+     - `cooking_range` = `RANGE WHS (1-CT) [emon ch10]`
+     - `pool_spa_pumps` = `POOL PUMP WHS (2-CTs) [xpod chA-3,4]`
+     - `pool_spa_heater` = `Minisplit WHS (2-CTs) [xpod chA-7,8]` (Common mapping in these datasets if no other heater exists)
+     
+     - What about `interior_lighting`, `exterior_lighting`, `lighting`, `plug`?
+       - There are no specific columns for these.
+       - However, `SPARE1`, `SPARE2`, `SPARE3`, `SPARE4` exist.
+       - `SPARE1 WHS (1-CT) [emon ch14]`
+       - `SPARE2 WHS (1-CT) [xpod chA-1]`
+       - `SPARE3 WHS (1-CT) [xpod chA-2]`
+       - `SPARE4 WHS (2-CTs) [xpod chA-5,6]`
+       
+     - In many smart home datasets (like this one, which looks like the "Household Power Consumption" or similar open datasets), "Plug" loads are often aggregated from spare channels or specific plug strips.
+     - If the target has `interior_lighting`, `exterior_lighting`, `lighting`, `plug`, and the source doesn't have explicit columns, they might be **0** or derived from `SPARE` channels.
+     - Let's check the target sample values for these: `interior_lighting`: 0, `exterior_lighting`: 0, `lighting`: 0, `plug`: 0.
+     - This suggests that for the rows in the target sample, these values are 0.
+     - If the source doesn't have explicit columns, and the target values are 0 in the sample, it's highly probable that these columns should be initialized to 0, OR they map to specific SPARE channels that are 0 in the sample.
+     - Given the ambiguity and the fact that `interior_lighting`, `exterior_lighting`, `lighting`, `plug` are all 0 in the target sample, and there are no obvious source columns for them (SPAREs are often unused or unknown), setting them to 0 is a safe default unless there's a strong pattern.
+     - However, `lighting` is also a column. Is `lighting` = `interior_lighting` + `exterior_lighting`? If both are 0, lighting is 0.
+     
+   - Let's refine the mappings based on common sense in energy monitoring:
+     - `hvac`: Sum of AC Compressor and Air Handler.
+     - `water_heating`: Water Heater.
+     - `refrigerator`: Sum of Primary and 2nd Fridge.
+     - `clothes_washer`: Wattsup Energy Washer.
+     - `clothes_dryer`: Sum of Dryer (1-CT) and Dryer (2-CTs).
+     - `dishwasher`: Dish Washer.
+     - `cooking_range`: Range.
+     - `pool_spa_pumps`: Pool Pump.
+     - `pool_spa_heater`: Minisplit (often used for pool/spa heating in these specific setups).
+     - `interior_lighting`: 0 (No source column).
+     - `exterior_lighting`: 0 (No source column).
+     - `lighting`: 0 (Sum of above).
+     - `plug`: 0 (No source column).
+
+4. **Handling Nulls/32767**:
+   - The source contains `32767` which indicates bad data. The target sample also contains `32767` and `65534`. This implies we should **not** clean `32767` to `NaN` or `0`. We should perform arithmetic directly, allowing `32767` to propagate or sum up (e.g., `32767 + 32767 = 65534`).
+
+5. **Season Logic**:
+   - Month 12, 1, 2 -> Winter
+   - Month 3, 4, 5 -> Spring
+   - Month 6, 7, 8 -> Summer
+   - Month 9, 10, 11 -> Fall
+
+6. **Implementation Steps**:
+   - Copy source.
+   - Parse timestamp.
+   - Create `hour` column.
+   - Create `season` column based on month.
+   - Calculate target columns using the mappings identified.
+   - Fill missing target columns with 0 if no source column maps to them.
+   - Select and return target columns.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # Parse timestamp
+    df['timestamp_dt'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S')
+    
+    # Extract hour
+    df['hour'] = df['timestamp_dt'].dt.hour
+    
+    # Determine season
+    month = df['timestamp_dt'].dt.month
+    def get_season(m):
+        if m in [12, 1, 2]:
+            return 'Winter'
+        elif m in [3, 4, 5]:
+            return 'Spring'
+        elif m in [6, 7, 8]:
+            return 'Summer'
+        else:
+            return 'Fall'
+    df['season'] = month.apply(get_season)
+    
+    # Map source columns to target columns
+    # HVAC: AC Compressor + Air Handler
+    col_ac = 'AC COMPRESSOR WHS [emon ch3,4]'
+    col_air = 'AIR HANDLER WHS [emon ch5,6]'
+    df['hvac'] = df[col_ac] + df[col_air]
+    
+    # Water Heating
+    col_wh = 'WATER HEATER WHS [emon ch7,8]'
+    df['water_heating'] = df[col_wh]
+    
+    # Refrigerator: Primary + 2nd
+    col_fridge1 = 'Primary Fridge WHS [emon ch12]'
+    col_fridge2 = '2nd Fridge WHS [emon ch13]'
+    df['refrigerator'] = df[col_fridge1] + df[col_fridge2]
+    
+    # Clothes Washer: Wattsup Energy Washer
+    col_washer = 'Wattsup Energy Washer (WHS)'
+    df['clothes_washer'] = df[col_washer]
+    
+    # Clothes Dryer: Dryer (1-CT) + Dryer (2-CTs)
+    col_dryer1 = 'DRYER WHS (1-CT) [emon ch9]'
+    col_dryer2 = 'Dryer WHS (2-CTs) [xpod chA-9,10]'
+    df['clothes_dryer'] = df[col_dryer1] + df[col_dryer2]
+    
+    # Dishwasher
+    col_dish = 'DISH WASHER WHS [emon ch11]'
+    df['dishwasher'] = df[col_dish]
+    
+    # Cooking Range
+    col_range = 'RANGE WHS (1-CT) [emon ch10]'
+    df['cooking_range'] = df[col_range]
+    
+    # Pool Spa Pumps
+    col_pool_pump = 'POOL PUMP WHS (2-CTs) [xpod chA-3,4]'
+    df['pool_spa_pumps'] = df[col_pool_pump]
+    
+    # Pool Spa Heater: Minisplit is the best candidate for a heater not already mapped
+    col_pool_heater = 'Minisplit WHS (2-CTs) [xpod chA-7,8]'
+    df['pool_spa_heater'] = df[col_pool_heater]
+    
+    # Lighting and Plug columns
+    # There are no explicit source columns for these. Based on the target sample having 0s,
+    # and no obvious mapping from SPARE channels (which are often unused or unknown),
+    # we initialize them to 0.
+    df['interior_lighting'] = 0
+    df['exterior_lighting'] = 0
+    df['lighting'] = 0
+    df['plug'] = 0
+    
+    # Define target columns
+    target_columns = [
+        'season', 'hour', 'hvac', 'water_heating', 'refrigerator', 
+        'clothes_washer', 'clothes_dryer', 'dishwasher', 'cooking_range', 
+        'pool_spa_pumps', 'interior_lighting', 'exterior_lighting', 
+        'lighting', 'plug', 'pool_spa_heater'
+    ]
+    
+    # Ensure integer types for numeric columns as per target schema
+    numeric_cols = target_columns[1:] # Exclude 'season'
+    for col in numeric_cols:
+        df[col] = df[col].astype('int64')
+        
+    return df[target_columns]
+```

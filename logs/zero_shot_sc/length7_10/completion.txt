@@ -1,0 +1,95 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Date/Time**:
+    - The source column `date` is in string format `'%m/%d/%Y %H:%M'`.
+    - Convert `date` to a pandas datetime object using `pd.to_datetime`.
+    - Extract relevant components:
+        - `month`: The full name of the month (e.g., "August", "April") using `.dt.strftime('%B')`.
+        - `dayofweek`: To determine if it's a weekday or weekend. `.dt.dayofweek` returns 0-6 (Mon-Sun).
+        - `hour`: The hour of the day (0-23).
+
+2.  **Derive `daytype`**:
+    - Create a new column `daytype`.
+    - If `dayofweek` is 0-4 (Monday-Friday), set `daytype` to `'weekday'`.
+    - If `dayofweek` is 5-6 (Saturday-Sunday), set `daytype` to `'weekend'`.
+
+3.  **Prepare for Pivoting**:
+    - The target table has columns `hr1` through `hr24`. This implies the data needs to be aggregated by `month`, `daytype`, and `hour`.
+    - Create a column representing the hour in 1-based indexing (1-24) to match the target column names `hr1`...`hr24`. Let's call this `hr_index`.
+    - `hr_index = hour + 1`.
+
+4.  **Aggregation**:
+    - Group the data by `['month', 'daytype', 'hr_index']`.
+    - Aggregate the `cerc_logger_1` values. Looking at the sample data, the values in the target table seem to be averages (means) of the values falling into that specific hour bucket for that month/daytype combination. For instance, multiple rows in the source fall into the same hour.
+    - Calculate the mean of `cerc_logger_1` for each group.
+
+5.  **Pivot/Reshape**:
+    - After aggregation, we have a DataFrame with columns `month`, `daytype`, `hr_index`, and the aggregated value (let's say `value`).
+    - Pivot this DataFrame so that:
+        - Index: `['month', 'daytype']`
+        - Columns: `hr_index`
+        - Values: `value`
+    - This will result in columns 1 through 24.
+
+6.  **Rename Columns**:
+    - Rename the pivot columns from integers (1, 2, ..., 24) to strings (`'hr1'`, `'hr2'`, ..., `'hr24'`).
+
+7.  **Reset Index and Clean Up**:
+    - Reset the index so `month` and `daytype` become regular columns.
+    - Ensure the column order matches the target: `month`, `daytype`, then `hr1` to `hr24`.
+
+8.  **Handle Missing Data**:
+    - Some month/daytype combinations might not have data for all hours (though unlikely given the density, it's good practice). Fill NaNs if necessary, but typically pivoting handles this by creating NaNs which might need filling or leaving as is depending on strictness. Given the target sample has full data, we assume complete coverage or standard NaN handling.
+
+9.  **Final Output Construction**:
+    - Define the target columns list verbatim.
+    - Return the dataframe selected by these columns.
+
+### Python Code Implementation
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # 1. Parse the date column
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract features
+    df['month'] = df['datetime'].dt.strftime('%B')
+    df['hour'] = df['datetime'].dt.hour
+    df['dayofweek'] = df['datetime'].dt.dayofweek
+    
+    # 3. Determine daytype
+    # 0-4: Weekday, 5-6: Weekend
+    df['daytype'] = df['dayofweek'].apply(lambda x: 'weekday' if x < 5 else 'weekend')
+    
+    # 4. Create 1-based hour index for pivoting
+    df['hr_index'] = df['hour'] + 1
+    
+    # 5. Aggregate by month, daytype, and hour
+    # We take the mean of cerc_logger_1 for each group
+    agg_df = df.groupby(['month', 'daytype', 'hr_index'])['cerc_logger_1'].mean().reset_index()
+    
+    # 6. Pivot the table
+    # Index: month, daytype
+    # Columns: hr_index (1-24)
+    # Values: cerc_logger_1
+    pivot_df = agg_df.pivot_table(index=['month', 'daytype'], columns='hr_index', values='cerc_logger_1')
+    
+    # 7. Rename columns to hr1, hr2, ..., hr24
+    pivot_df.columns = [f'hr{col}' for col in pivot_df.columns]
+    
+    # 8. Reset index to bring month and daytype back as columns
+    result_df = pivot_df.reset_index()
+    
+    # 9. Ensure column order matches target exactly
+    target_columns = ['month', 'daytype', 'hr1', 'hr2', 'hr3', 'hr4', 'hr5', 'hr6', 'hr7', 'hr8', 'hr9', 'hr10', 'hr11', 'hr12', 'hr13', 'hr14', 'hr15', 'hr16', 'hr17', 'hr18', 'hr19', 'hr20', 'hr21', 'hr22', 'hr23', 'hr24']
+    
+    # Fill any potential NaNs if necessary, though pivot_table usually handles existing groups.
+    # The target sample shows no NaNs, so we assume complete data or leave as is.
+    
+    return result_df[target_columns]
+```

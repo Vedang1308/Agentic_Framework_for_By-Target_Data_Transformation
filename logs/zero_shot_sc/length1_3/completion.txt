@@ -1,0 +1,144 @@
+### Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a `date` column (string format `%m/%d/%Y`) and 24 time-series columns labeled `1:00 AM` through `12:00 PM` and `1:00 PM` through `12:00 AM` (note the specific ordering in the schema description vs typical chronological order). It also has a `DSL` column which seems irrelevant to the target values.
+    *   **Target**: Contains a `cst` column (string format `%a %m/%d/%Y`) and 24 time-series columns labeled `1:00` through `24:00`.
+    *   **Row Count Change**: The source has 182 rows, target has 183. This suggests that the transformation might involve sorting or re-indexing, but more likely, the sample provided in the prompt is just a subset or the target includes a header or an extra row due to a specific date range expansion. However, looking at the data, it's a direct row-to-row mapping where each source row becomes one target row. The row count difference in the prompt description ("182 to 183") might be a red herring or due to a specific test case having an extra day. The core transformation is per-row. Let's look at the columns.
+
+2.  **Map Time Columns**:
+    *   The source columns are: `1:00 AM`, `2:00 AM`, ..., `12:00 AM` (which is midnight start of day?), `1:00 PM`, ..., `12:00 PM`.
+    *   Let's clarify the source column semantics. Usually, `12:00 AM` is midnight (start of the day), `12:00 PM` is noon.
+    *   Source columns listed: `1:00 AM`, `2:00 AM`, `3:00 AM`, `4:00 AM`, `5:00 AM`, `6:00 AM`, `7:00 AM`, `8:00 AM`, `9:00 AM`, `10:00 AM`, `11:00 AM`, `12:00 AM`, `1:00 PM`, `2:00 PM`, `3:00 PM`, `4:00 PM`, `5:00 PM`, `6:00 PM`, `7:00 PM`, `8:00 PM`, `9:00 PM`, `10:00 PM`, `11:00 PM`, `12:00 PM`.
+    *   Wait, the list in the schema description is: `1:00 AM`, `2:00 AM`, `3:00 AM`, `4:00 AM`, `5:00 AM`, `6:00 AM`, `7:00 AM`, `8:00 AM`, `9:00 AM`, `10:00 AM`, `11:00 AM`, `12:00 AM`, `1:00 PM`, `2:00 PM`, `3:00 PM`, `4:00 PM`, `5:00 PM`, `6:00 PM`, `7:00 PM`, `8:00 PM`, `9:00 PM`, `10:00 PM`, `11:00 PM`, `12:00 PM`.
+    *   This ordering is weird. `12:00 AM` appears after `11:00 AM`. `12:00 PM` appears at the end.
+    *   Target columns: `1:00`, `2:00`, ..., `24:00`.
+    *   Target `1:00` usually corresponds to 1:00 AM. Target `12:00` corresponds to 12:00 PM (Noon). Target `13:00` corresponds to 1:00 PM. Target `24:00` corresponds to 12:00 AM (Midnight end of day / start of next).
+    *   Let's check the values to confirm the mapping.
+        *   Source `7/3/2014`: `1:00 AM` = 1.03593. Target `Wed 07/02/2014` (which is 7/2/2014) `1:00` = 0.816822. Wait, the target sample starts with `Wed 01/01/2014`. The source sample starts with `7/3/2014`. The samples are not aligned row-by-row in the prompt display.
+        *   Let's look at `Wed 07/02/2014` in Target. Source has `7/3/2014` as the first row. `7/2/2014` is not in the source sample snippet provided.
+        *   Let's look at `Tue 07/01/2014` in Target. Source doesn't show it.
+        *   Let's look at `7/3/2014` in Source. It is a Thursday. Target has `Thu 01/02/2014`... wait, `7/3/2014` is a Thursday.
+        *   Let's find a matching date. Source `7/3/2014`. Target should have `Thu 07/03/2014`. The target sample provided only shows dates in Jan 2014 and Jun/Jul 2014.
+        *   Let's assume standard 24-hour mapping:
+            *   Target `1:00` <- Source `1:00 AM`
+            *   Target `2:00` <- Source `2:00 AM`
+            *   ...
+            *   Target `11:00` <- Source `11:00 AM`
+            *   Target `12:00` <- Source `12:00 PM` (Noon)
+            *   Target `13:00` <- Source `1:00 PM`
+            *   ...
+            *   Target `23:00` <- Source `11:00 PM`
+            *   Target `24:00` <- Source `12:00 AM` (Midnight)
+
+    *   Let's verify this mapping logic with the column names provided in the source schema:
+        Source: `1:00 AM`, `2:00 AM`, `3:00 AM`, `4:00 AM`, `5:00 AM`, `6:00 AM`, `7:00 AM`, `8:00 AM`, `9:00 AM`, `10:00 AM`, `11:00 AM`, `12:00 AM`, `1:00 PM`, `2:00 PM`, `3:00 PM`, `4:00 PM`, `5:00 PM`, `6:00 PM`, `7:00 PM`, `8:00 PM`, `9:00 PM`, `10:00 PM`, `11:00 PM`, `12:00 PM`.
+        
+        This list is not chronological. `12:00 AM` is at index 11 (0-indexed). `12:00 PM` is at index 23.
+        
+        Let's create a mapping dictionary based on standard time interpretation:
+        - `1:00 AM` -> `1:00`
+        - `2:00 AM` -> `2:00`
+        - `3:00 AM` -> `3:00`
+        - `4:00 AM` -> `4:00`
+        - `5:00 AM` -> `5:00`
+        - `6:00 AM` -> `6:00`
+        - `7:00 AM` -> `7:00`
+        - `8:00 AM` -> `8:00`
+        - `9:00 AM` -> `9:00`
+        - `10:00 AM` -> `10:00`
+        - `11:00 AM` -> `11:00`
+        - `12:00 PM` -> `12:00`  (Noon)
+        - `1:00 PM` -> `13:00`
+        - `2:00 PM` -> `14:00`
+        - `3:00 PM` -> `15:00`
+        - `4:00 PM` -> `16:00`
+        - `5:00 PM` -> `17:00`
+        - `6:00 PM` -> `18:00`
+        - `7:00 PM` -> `19:00`
+        - `8:00 PM` -> `20:00`
+        - `9:00 PM` -> `21:00`
+        - `10:00 PM` -> `22:00`
+        - `11:00 PM` -> `23:00`
+        - `12:00 AM` -> `24:00` (Midnight)
+
+3.  **Process Date Column**:
+    *   Parse `date` from `%m/%d/%Y` to datetime.
+    *   Format to `%a %m/%d/%Y` for the `cst` column.
+
+4.  **Construct Target DataFrame**:
+    *   Rename columns according to the mapping.
+    *   Select only the relevant columns (drop `DSL`).
+    *   Reorder columns to match target schema: `cst`, then `1:00` to `24:00`.
+
+5.  **Handle Row Count/Ordering**:
+    *   The prompt mentions row count changes. Often in these benchmarks, if the source is unsorted, the target might be sorted by date. Or vice versa. The target sample shows dates in chronological order (Jan 1, Jan 2...). The source sample shows Jul 3, Jul 4... then Dec 28... This suggests the source might be unordered or grouped. The target is likely sorted by date. I will sort the source by `date` before transforming to ensure chronological order, which is standard for time-series targets.
+
+6.  **Implementation Details**:
+    *   Define the column mapping.
+    *   Parse dates.
+    *   Rename columns.
+    *   Sort by date.
+    *   Select and order final columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # Define the mapping from source time columns to target time columns
+    # Source columns are in a specific order in the schema, but we map by name.
+    col_mapping = {
+        '1:00 AM': '1:00',
+        '2:00 AM': '2:00',
+        '3:00 AM': '3:00',
+        '4:00 AM': '4:00',
+        '5:00 AM': '5:00',
+        '6:00 AM': '6:00',
+        '7:00 AM': '7:00',
+        '8:00 AM': '8:00',
+        '9:00 AM': '9:00',
+        '10:00 AM': '10:00',
+        '11:00 AM': '11:00',
+        '12:00 PM': '12:00',  # Noon
+        '1:00 PM': '13:00',
+        '2:00 PM': '14:00',
+        '3:00 PM': '15:00',
+        '4:00 PM': '16:00',
+        '5:00 PM': '17:00',
+        '6:00 PM': '18:00',
+        '7:00 PM': '19:00',
+        '8:00 PM': '20:00',
+        '9:00 PM': '21:00',
+        '10:00 PM': '22:00',
+        '11:00 PM': '23:00',
+        '12:00 AM': '24:00'   # Midnight
+    }
+    
+    # Make a copy to avoid modifying the original
+    df = source.copy()
+    
+    # Parse the date column
+    df['date_parsed'] = pd.to_datetime(df['date'], format='%m/%d/%Y')
+    
+    # Sort by date to ensure chronological order (target sample is sorted)
+    df = df.sort_values(by='date_parsed').reset_index(drop=True)
+    
+    # Format the date column to target format '%a %m/%d/%Y'
+    # %a is abbreviated weekday name (e.g., Wed)
+    df['cst'] = df['date_parsed'].dt.strftime('%a %m/%d/%Y')
+    
+    # Rename the time columns
+    df = df.rename(columns=col_mapping)
+    
+    # Define the target column order
+    # Start with 'cst', then the time columns 1:00 to 24:00
+    time_cols = [f'{h}:00' for h in range(1, 25)]
+    target_columns = ['cst'] + time_cols
+    
+    # Select only the target columns
+    # Note: We drop 'date', 'date_parsed', and 'DSL' implicitly by selection
+    df = df[target_columns]
+    
+    return df
+```

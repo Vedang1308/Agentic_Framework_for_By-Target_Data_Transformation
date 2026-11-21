@@ -1,0 +1,136 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Date Column**: The source has a `date` column in format `M/D/YYYY` (e.g., '7/3/2014'). The target requires `dt_strata` in the same format `M/D/YYYY`. We need to parse the date to extract the Day of Week (DOW).
+2.  **Compute DOW**: The target `dow` column contains integers. Looking at the sample:
+    *   Target `1/1/2014` (Wednesday) -> `dow` = 3.
+    *   Target `1/2/2014` (Thursday) -> `dow` = 4.
+    *   Target `6/29/2014` (Sunday) -> `dow` = 0.
+    *   Target `6/30/2014` (Monday) -> `dow` = 1.
+    *   This mapping corresponds to `dt.weekday()` where Monday=0, ..., Sunday=6? No, Sunday is 0 here.
+    *   Let's check `dt.dayofweek` (Mon=0, Sun=6).
+        *   Wed (1/1/2014) is index 2. Target is 3.
+        *   Thu (1/2/2014) is index 3. Target is 4.
+        *   Sun (6/29/2014) is index 6. Target is 0.
+        *   Mon (6/30/2014) is index 0. Target is 1.
+    *   It seems `dow = (dt.dayofweek + 1) % 7`.
+        *   Wed (2) -> (2+1)%7 = 3. Correct.
+        *   Sun (6) -> (6+1)%7 = 0. Correct.
+        *   Mon (0) -> (0+1)%7 = 1. Correct.
+    *   Alternatively, it might be `dt.isocalendar().weekday` (Mon=1, Sun=7) mapped differently? No, the modulo arithmetic fits perfectly.
+3.  **Map Hourly Columns**: The source has columns like `1:00 AM`, `2:00 AM`, ..., `12:00 AM`, `1:00 PM`, ..., `12:00 PM`. The target has `pct_hourly_0100` through `pct_hourly_2400`.
+    *   We need to map the 12-hour clock strings to 24-hour indices (1-24).
+    *   `1:00 AM` -> 1 -> `pct_hourly_0100`
+    *   `2:00 AM` -> 2 -> `pct_hourly_0200`
+    *   ...
+    *   `11:00 AM` -> 11 -> `pct_hourly_1100`
+    *   `12:00 PM` -> 12 -> `pct_hourly_1200` (Noon)
+    *   `1:00 PM` -> 13 -> `pct_hourly_1300`
+    *   ...
+    *   `11:00 PM` -> 23 -> `pct_hourly_2300`
+    *   `12:00 AM` -> 24 -> `pct_hourly_2400` (Midnight)
+    *   Note: The source column order in the schema description is: `1:00 AM` ... `11:00 AM`, `12:00 AM`, `1:00 PM` ... `11:00 PM`, `12:00 PM`. This is a bit jumbled in the schema list provided in the prompt, but we should rely on the column names themselves, not their position.
+    *   We will create a mapping dictionary from the specific source column names to the target column names.
+4.  **Handle `pct_hourly_2500`**: The target has a column `pct_hourly_2500` which is always 0 in the sample. We will add this column with value 0.
+5.  **Row Count Discrepancy**: The prompt notes source has 182 rows and target has 183. This often implies an aggregation or a missing row being added. However, looking at the dates:
+    *   Source sample starts at `7/3/2014`.
+    *   Target sample starts at `1/1/2014`.
+    *   The source sample provided is just a snippet. The full source likely contains all dates. If the row count differs by 1, it might be due to a specific date being present in one but not the other, or an aggregation.
+    *   However, in TbT tasks, usually the transformation is row-wise unless grouping is obvious. Given the hourly data is preserved per row, it's likely a 1-to-1 mapping. The row count difference might be an artifact of the specific sample vs full dataset or a single missing date in the source snippet. We will assume a direct row-wise transformation. If the source is missing a date that is in the target, we can't generate it without external knowledge. But typically, these tasks assume the source contains all necessary data. Let's look closer.
+    *   Actually, usually "182 to 183" might imply that the source is missing a row that needs to be inferred, OR the target has an extra row. But without a clear pattern for inference (like a total row), and given the hourly data is specific, it's most likely that the source *does* have the data and the sample is just truncated or the count note is a hint to check for duplicates/aggregations.
+    *   Wait, look at the source schema: `DSL` column. Distinct values: 0.0 and 0.119509.
+    *   Look at target: No `DSL` column.
+    *   Is it possible that rows with `DSL > 0` are aggregated or handled differently?
+    *   In the source sample, all `DSL` are 0.
+    *   Let's check if the row count change is due to `DSL`. If `DSL` indicates a special row (like a holiday or weekend adjustment), maybe it's merged?
+    *   However, the simplest explanation for TbT is often just column renaming and formatting. The row count difference might be a red herring or due to the specific test set having an extra day (e.g., leap year or different month range). Given the strict instruction "compute its result SOLELY from the source", we cannot invent rows. We will perform the row-wise transformation. If the source has 182 rows, the output will have 182 rows. If the target has 183, there might be a mismatch in the problem statement's sample vs full data, or I am missing a subtle aggregation.
+    *   Let's re-read carefully: "Source sample rows: 182... Target rows: 183".
+    *   If I look at Example 2, it added a column `pct_hourly_2500` with 0.
+    *   Let's stick to the row-wise mapping. The most robust approach is to map columns and format dates.
+
+6.  **Construct Mapping**:
+    *   `1:00 AM` -> `pct_hourly_0100`
+    *   `2:00 AM` -> `pct_hourly_0200`
+    *   `3:00 AM` -> `pct_hourly_0300`
+    *   `4:00 AM` -> `pct_hourly_0400`
+    *   `5:00 AM` -> `pct_hourly_0500`
+    *   `6:00 AM` -> `pct_hourly_0600`
+    *   `7:00 AM` -> `pct_hourly_0700`
+    *   `8:00 AM` -> `pct_hourly_0800`
+    *   `9:00 AM` -> `pct_hourly_0900`
+    *   `10:00 AM` -> `pct_hourly_1000`
+    *   `11:00 AM` -> `pct_hourly_1100`
+    *   `12:00 PM` -> `pct_hourly_1200`
+    *   `1:00 PM` -> `pct_hourly_1300`
+    *   `2:00 PM` -> `pct_hourly_1400`
+    *   `3:00 PM` -> `pct_hourly_1500`
+    *   `4:00 PM` -> `pct_hourly_1600`
+    *   `5:00 PM` -> `pct_hourly_1700`
+    *   `6:00 PM` -> `pct_hourly_1800`
+    *   `7:00 PM` -> `pct_hourly_1900`
+    *   `8:00 PM` -> `pct_hourly_2000`
+    *   `9:00 PM` -> `pct_hourly_2100`
+    *   `10:00 PM` -> `pct_hourly_2200`
+    *   `11:00 PM` -> `pct_hourly_2300`
+    *   `12:00 AM` -> `pct_hourly_2400`
+
+7.  **Final Selection**: Select `dt_strata`, `dow`, and the 24 hourly columns, plus `pct_hourly_2500` (set to 0).
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse date and compute dt_strata and dow
+    # Source date format is M/D/YYYY
+    dt = pd.to_datetime(df['date'])
+    
+    # Target dt_strata format is M/D/YYYY (same as source, but ensure consistency)
+    df['dt_strata'] = dt.dt.strftime('%m/%d/%Y')
+    
+    # Compute dow: Wed=3, Thu=4, Sun=0, Mon=1
+    # pandas dayofweek: Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+    # Mapping: (dayofweek + 1) % 7
+    # Wed(2) -> 3, Thu(3) -> 4, Sun(6) -> 0, Mon(0) -> 1
+    df['dow'] = (dt.dt.dayofweek + 1) % 7
+    
+    # 2. Map hourly columns
+    # Define the mapping from source 12-hour format to target 24-hour format
+    rename_dict = {
+        '1:00 AM': 'pct_hourly_0100',
+        '2:00 AM': 'pct_hourly_0200',
+        '3:00 AM': 'pct_hourly_0300',
+        '4:00 AM': 'pct_hourly_0400',
+        '5:00 AM': 'pct_hourly_0500',
+        '6:00 AM': 'pct_hourly_0600',
+        '7:00 AM': 'pct_hourly_0700',
+        '8:00 AM': 'pct_hourly_0800',
+        '9:00 AM': 'pct_hourly_0900',
+        '10:00 AM': 'pct_hourly_1000',
+        '11:00 AM': 'pct_hourly_1100',
+        '12:00 PM': 'pct_hourly_1200',
+        '1:00 PM': 'pct_hourly_1300',
+        '2:00 PM': 'pct_hourly_1400',
+        '3:00 PM': 'pct_hourly_1500',
+        '4:00 PM': 'pct_hourly_1600',
+        '5:00 PM': 'pct_hourly_1700',
+        '6:00 PM': 'pct_hourly_1800',
+        '7:00 PM': 'pct_hourly_1900',
+        '8:00 PM': 'pct_hourly_2000',
+        '9:00 PM': 'pct_hourly_2100',
+        '10:00 PM': 'pct_hourly_2200',
+        '11:00 PM': 'pct_hourly_2300',
+        '12:00 AM': 'pct_hourly_2400'
+    }
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Add pct_hourly_2500 column with 0
+    df['pct_hourly_2500'] = 0
+    
+    # 4. Define target columns in order
+    target_columns = ['dt_strata', 'dow'] + [f'pct_hourly_{i:02d}00' for i in range(1, 26)]
+    
+    # 5. Return the transformed dataframe
+    return df[target_columns]
+```

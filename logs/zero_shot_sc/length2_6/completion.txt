@@ -1,0 +1,145 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Company`, `Rate`, `Rate Code`, `Date`, and `Hr 1` through `Hr 24`.
+    *   **Target**: Contains columns `dt_strata`, `dow`, `pct_hourly_0100` through `pct_hourly_2400`, and `pct_hourly_2500`.
+    *   **Mapping**:
+        *   `Date` -> `dt_strata` (format preserved as string).
+        *   `Date` -> `dow` (Day of Week, integer).
+        *   `Hr 1`...`Hr 24` -> `pct_hourly_0100`...`pct_hourly_2400`.
+        *   `pct_hourly_2500` is a new column with constant value 0 (int64).
+
+2.  **Determine Transformation Logic for `pct_hourly` Columns**:
+    *   The target columns `pct_hourly_XXXX` represent normalized percentages or ratios relative to the daily average.
+    *   Let's verify this hypothesis with the first row of sample data:
+        *   Source `Hr 1` = 2.43675. Target `pct_hourly_0100` = 0.9188.
+        *   Source `Hr 2` = 2.33199. Target `pct_hourly_0200` = 0.90204.
+        *   ...
+        *   Source `Hr 12` = 2.4108. Target `pct_hourly_1200` = 0.93132.
+    *   Calculate the mean of the 24 hourly values for the first row:
+        *   Sum of `Hr 1` to `Hr 24` for row 1 ≈ 56.78 (estimated).
+        *   Mean = Sum / 24.
+        *   Let's check: `2.43675 / Mean`. If Mean ≈ 2.65, then 2.43675 / 2.65 ≈ 0.919. This matches 0.9188 closely.
+    *   Let's calculate the exact mean for row 1:
+        *   Values: 2.43675, 2.33199, 2.16983, 2.0864, 2.07239, 2.06611, 2.27757, 2.25103, 2.21152, 2.43571, 2.51535, 2.4108, 2.25086, 2.35865, 2.33324, 2.51342, 2.75259, 3.16814, 3.30072, 3.27019, 3.09113, 3.22998, 2.98897, 2.60843.
+        *   Sum = 56.78039.
+        *   Mean = 56.78039 / 24 = 2.36584958.
+        *   Ratio for Hr 1: 2.43675 / 2.36584958 ≈ 1.0299. Wait, this doesn't match 0.9188.
+    *   Let's re-evaluate. Is it `Hr / Sum`?
+        *   2.43675 / 56.78039 ≈ 0.0429. No.
+    *   Is it `Hr / Max`?
+        *   Max is ~3.748. 2.43675 / 3.748 ≈ 0.65. No.
+    *   Let's look at the target values again. They range from ~0.8 to ~1.3. This suggests normalization against the mean. Why did my previous calculation fail?
+    *   Let's re-calculate the mean carefully.
+        *   Sum = 56.78039.
+        *   Mean = 2.36585.
+        *   Hr 1 / Mean = 2.43675 / 2.36585 = 1.0299.
+        *   Target is 0.9188.
+    *   Maybe the denominator is not the mean of that row?
+    *   Let's look at `pct_hourly_2500`. It is always 0. This might be a placeholder or a specific flag.
+    *   Let's look at the relationship between `Hr 1` (2.43675) and `pct_hourly_0100` (0.9188).
+        *   2.43675 * X = 0.9188 => X = 0.377.
+        *   2.33199 * X = 0.90204 => X = 0.386.
+    *   Let's try `Hr / (Sum of all hours for that date across all companies?)`. No, the problem states "generalize to any unseen test table", implying row-wise or group-wise operations. The source has multiple companies/rates. The target has the same number of rows as the source (2190). This implies a row-wise transformation.
+    *   Let's look at the second row.
+        *   Hr 1 = 2.19078. Target = 0.87892.
+        *   Hr 2 = 2.08118. Target = 0.88134.
+    *   Let's check the ratio `Target / Source`:
+        *   Row 1, Hr 1: 0.9188 / 2.43675 = 0.37705
+        *   Row 1, Hr 2: 0.90204 / 2.33199 = 0.38681
+        *   Row 1, Hr 12: 0.93132 / 2.4108 = 0.38631
+    *   The ratios are not constant.
+    *   Let's check `Source / Target`:
+        *   Row 1, Hr 1: 2.43675 / 0.9188 = 2.6521
+        *   Row 1, Hr 2: 2.33199 / 0.90204 = 2.5852
+    *   Let's look at the mean of the source row again: 2.36585.
+    *   Let's look at the mean of the target row.
+        *   Sum of target row 1?
+        *   If `pct` means percentage of daily total, sum should be 1 (or 100).
+        *   Sum of first few targets: 0.9188 + 0.90204 + ...
+        *   If the targets are normalized such that the mean is 1, then `Target = Source / Mean`.
+        *   My previous calculation `2.43675 / 2.36585 = 1.0299` did not match `0.9188`.
+        *   Is it possible the target values are `Source / Mean` but the Mean is calculated differently?
+        *   Or is it `Source / (Mean of all sources)`? No, that would be global.
+    *   Let's look at the values again.
+        *   Row 1 Source Mean: 2.36585.
+        *   Row 1 Target Mean: Let's estimate. If `Target = Source / K`, then `Mean(Target) = Mean(Source) / K`.
+        *   If `Mean(Target)` is roughly 1 (standard for "pct_hourly" profiles), then `K = Mean(Source)`.
+        *   So `Target = Source / Mean(Source)`.
+        *   Why did `2.43675 / 2.36585` not equal `0.9188`?
+        *   Let's re-read the first row source data.
+        *   `Hr 1`: 2.43675. `Hr 2`: 2.33199.
+        *   Target `pct_hourly_0100`: 0.9188.
+        *   Target `pct_hourly_0200`: 0.90204.
+        *   Maybe the divisor is not the mean of the 24 hours?
+        *   What if the divisor is the **median**?
+        *   Sorted Source Row 1: 2.06611, 2.07239, 2.0864, 2.16983, 2.21152, 2.25086, 2.25103, 2.27757, 2.33199, 2.33324, 2.35865, 2.4108, 2.43571, 2.43675, 2.51342, 2.51535, 2.60843, 2.75259, 2.98897, 3.09113, 3.16814, 3.22998, 3.27019, 3.30072.
+        *   Median = (2.4108 + 2.43571) / 2 = 2.423255.
+        *   Hr 1 / Median = 2.43675 / 2.423255 = 1.0055. Still not 0.9188.
+    *   Let's try **Min**.
+        *   Min = 2.06611.
+        *   Hr 1 / Min = 2.43675 / 2.06611 = 1.179. No.
+    *   Let's try **Max**.
+        *   Max = 3.30072.
+        *   Hr 1 / Max = 2.43675 / 3.30072 = 0.738. No.
+
+    *   Wait, look at the last column `pct_hourly_2500`. It is 0.
+    *   Look at the column names: `pct_hourly_0100` to `pct_hourly_2400`.
+    *   Is it possible the values are `Hr / (Sum of Hr)` * 100? No, values are < 1.
+    *   Is it possible the values are `Hr / (Sum of Hr)` * 24?
+        *   Sum = 56.78.
+        *   Hr 1 / Sum = 0.0429.
+        *   0.0429 * 24 = 1.0299.
+        *   This is `Source / Mean`.
+        *   Why did I think it didn't match?
+        *   Target `pct_hourly_0100` is 0.9188.
+        *   Calculated `Source / Mean` is 1.0299.
+        *   There is a discrepancy.
+
+    *   Let's look at another row. Row 2 (1/2/2014).
+        *   Hr 1: 2.19078. Target: 0.87892.
+        *   Hr 2: 2.08118. Target: 0.88134.
+        *   Sum of Row 2:
+            *   2.19078+2.08118+1.96431+1.978+2.04272+2.25191+2.39035+2.79028+2.6168+2.6905+2.48367+2.61766+2.64522+2.71546+2.73807+2.79427+3.07892+3.52052+3.73454+3.53316+3.65832+3.74846+3.51544+3.10933
+            *   Sum ≈ 65.84.
+            *   Mean ≈ 2.743.
+            *   Hr 1 / Mean = 2.19078 / 2.743 = 0.798.
+            *   Target is 0.87892.
+    
+    *   Let's look at Row 5 (12/28/2014).
+        *   Hr 1: 105.69. Target: 1.15562.
+        *   Hr 2: 104.251. Target: 1.00789.
+        *   Sum ≈ 2800?
+        *   Mean ≈ 116.6?
+        *   Hr 1 / Mean = 105.69 / 116.6 = 0.906.
+        *   Target is 1.15562.
+
+    *   There seems to be an inverse relationship or a different baseline.
+    *   Let's check `Mean / Source`.
+        *   Row 1: 2.36585 / 2.43675 = 0.9708. Target 0.9188.
+        *   Row 2: 2.743 / 2.19078 = 1.25. Target 0.878.
+
+    *   Let's look at the column `pct_hourly_2500`. It is 0.
+    *   What if the normalization is against the **average of all days** for that specific hour? (i.e., load profile).
+    *   Or against the **peak** of the day?
+    *   Or against the **average of the peak hours**?
+
+    *   Let's try: `Hr / (Mean of Hr 1..Hr 24 for that row)`.
+        *   We established this gives ~1.03 for Row 1 Hr 1. Target is 0.9188.
+        *   Note that 0.9188 is *lower* than 1.
+        *   In Row 1, Hr 1 (2.43) is *higher* than the mean (2.36). So `Hr/Mean` > 1.
+        *   But Target < 1.
+        *   This implies `Target = Mean / Hr`?
+        *   Row 1 Hr 1: 2.36585 / 2.43675 = 0.9708. Target 0.9188. Close, but not exact.
+        *   Row 1 Hr 12 (2.4108): 2.36585 / 2.4108 = 0.9813. Target 0.93132.
+        *   Row 1 Hr 20 (3.53316): 2.36585 / 3.53316 = 0.669. Target 0.99935.
+        *   So it's not `Mean/Hr`.
+
+    *   Let's look at the targets again.
+        *   Row 1:
+            *   Hr 1 (2.436) -> 0.9188
+            *   Hr 2 (2.331) -> 0.9020
+            *   Hr 3 (2.169) -> 0.9095
+            *   Hr 4 (2.086) -> 0.8974
+            *   Hr 5 (2.072) -> 0.9078
+            *   Hr 6 (2.066) -> 0.9135

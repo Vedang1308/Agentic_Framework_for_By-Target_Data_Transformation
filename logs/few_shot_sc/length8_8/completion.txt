@@ -1,0 +1,160 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source: Contains a `date` column (string format '%m/%d/%Y') and 24 hourly columns (`Hour 1` to `Hour 24`).
+    *   Target: Contains an `hour` column (integer 1-24) and 12 monthly columns (`january` to `december`).
+    *   Transformation Goal: Pivot the data from "long" (daily records with hours as columns) to a summary table where rows are hours and columns are months. The values in the target cells appear to be aggregated values (likely means or sums) of the hourly values for that specific hour across all days in that month. Given the small values and potential zeros, `mean` is a safe default aggregation if multiple days exist, but looking at the sample, the values seem consistent per hour/month or zero. Let's check the aggregation logic.
+    *   Source rows: 182 days. Target rows: 24 hours.
+    *   The target has `NaN` for months not present in the source data (e.g., August-December are NaN in the sample because the source only contains July and December 2015 data? Wait, let's look closer. Source sample shows July 2015 and December 2015. Target sample shows values for Jan-July and NaN for Aug-Dec. This implies that for months with no data, the result is NaN. For months with data, it aggregates.
+
+2.  **Determine Aggregation Logic**:
+    *   We need to group by `Month` and `Hour`.
+    *   For each group, calculate the mean (or sum) of the values.
+    *   Let's verify with the sample.
+        *   Source `Hour 1` for July 2015 (7/3, 7/4, 7/5, 7/6) is `0.000239866`.
+        *   Target `hour` 1, `july` is `0.000239866`.
+        *   Source `Hour 1` for December 2015 (12/28-31) is `0.000239866`.
+        *   Target `hour` 1, `december` is `nan` in the provided snippet? Wait. The snippet shows `december` as `nan`. Why?
+        *   Let's re-read the target sample carefully.
+            *   Row `hour` 1: `january`..`july` have values. `august`..`december` are `nan`.
+            *   But the source has December data!
+            *   Ah, look at the target sample again.
+            *   `hour` 1: `july` is `0.000239866`. `december` is `nan`.
+            *   This is strange. If the source has December data, why is December NaN?
+            *   Maybe the target sample provided is truncated or specific to a subset? Or maybe the aggregation is different?
+            *   Let's look at `hour` 6. `july` is `0.000119933`. Source `Hour 6` for July is `0.000119933`.
+            *   Let's look at `hour` 7. `july` is `0`. Source `Hour 7` for July is `0`.
+            *   Let's look at `hour` 8. `july` is `0`. Source `Hour 8` for July is `0`.
+            *   The values match exactly.
+            *   Why is December NaN?
+            *   Perhaps the target sample provided in the prompt is just an excerpt and doesn't show the December columns populated because of formatting or it's a specific test case artifact?
+            *   Actually, look at the columns in the target sample: `january`, `february`, ..., `december`.
+            *   In the row for `hour` 1, `december` is `nan`.
+            *   However, usually, if data exists, it shouldn't be NaN.
+            *   Let's consider the possibility that the "Target Sample" provided in the prompt text might have `nan` for December because the *specific* rows shown in the target sample excerpt might correspond to a query or view that excludes December, OR (more likely) I should just implement the standard pivot aggregation. If the source has December data, the target *should* have December data. The `nan` in the sample might be due to the sample rows shown being from a part of the table where December wasn't calculated or displayed, OR the sample target table is incomplete.
+            *   Wait, let's look at the source dates again. `7/3/2015` to `7/6/2015` and `12/28/2015` to `12/31/2015`.
+            *   If I aggregate `Hour 1` for December, I get `0.000239866`.
+            *   If the target says `nan`, there is a discrepancy.
+            *   However, in TbT tasks, usually "generalize" means performing the logical transformation. The logical transformation is: Group by Month and Hour, Aggregate (Mean).
+            *   Let's check if there's a reason December would be NaN. Maybe the year matters? No, target columns are just month names.
+            *   Maybe the target sample is wrong/incomplete in the prompt description? I will proceed with the standard aggregation: Group by Month and Hour, take the mean. This is the most robust generalization. If the test case expects NaN for some reason, it would be very specific. But given "January" through "July" have values, and the source has July data, and "December" has source data, it is highly probable that December *should* have values in the full target. The `nan` in the sample might be an artifact of how the sample was copied (e.g., maybe the sample rows shown are just the first few rows of the target, and the December column values are further down or the sample is truncated).
+            *   Actually, look at the target sample rows again.
+                *   Row `hour` 1
+                *   Row `hour` 10
+                *   Row `hour` 11
+                *   Row `hour` 12
+                *   Row `hour` 6
+                *   Row `hour` 7
+                *   Row `hour` 8
+                *   Row `hour` 9
+            *   The rows are not sorted by hour.
+            *   The values for Jan-July are populated. Aug-Dec are NaN.
+            *   This strongly suggests that for this specific target sample, December data is missing.
+            *   Is it possible the source data *doesn't* have December data in the *test* case? The prompt says "Source sample rows: 182 rows". The sample shows July and Dec.
+            *   Let's assume the standard operation: **Melt** the hourly columns into long format, **Extract** Month from Date, **GroupBy** Month and Hour, **Aggregate** (Mean), **Pivot** back to wide format with Months as columns and Hours as index.
+
+3.  **Implementation Steps**:
+    *   Parse `date` column to datetime.
+    *   Extract `month` number (1-12) and map to month names (lowercase).
+    *   Melt the DataFrame: `id_vars=['date', 'month_name']`, `value_vars=['Hour 1', ... 'Hour 24']`.
+    *   Extract `hour` number from the `variable` column (e.g., 'Hour 1' -> 1).
+    *   Group by `month_name` and `hour`.
+    *   Aggregate the `value` column using `mean` (or `sum`? The values are small percentages/fractions. `mean` is typical for "typical profile" generation. `sum` would accumulate. Given the values are identical across days in the sample, mean=sum/count. If count > 1, mean is safer for "average profile". Let's use `mean`).
+    *   Pivot/Unstack: Index=`hour`, Columns=`month_name`, Values=`value`.
+    *   Ensure all months are present in columns (fill NaN for missing months).
+    *   Rename columns to match target: `january`, `february`, etc.
+    *   Add `hour` column as index reset.
+    *   Sort by `hour` (optional, but good for consistency).
+    *   Select final columns verbatim.
+
+4.  **Refining the Month Mapping**:
+    *   Month 1 -> 'january'
+    *   Month 2 -> 'february'
+    *   ...
+    *   Month 12 -> 'december'
+
+5.  **Handling the "NaN" Discrepancy**:
+    *   If I implement the standard logic, December will have values if source has December.
+    *   If the target *strictly* requires NaN for December in this specific case, there might be a filter I'm missing.
+    *   However, looking at the source sample, it has December.
+    *   Looking at the target sample, it has NaN for December.
+    *   This is a contradiction unless the target sample provided is *incomplete* or *incorrect* regarding December, OR the transformation involves a specific year filter (e.g., only 2015 Jan-July?). But the source has Dec 2015.
+    *   Let's look at the source sample again.
+        *   `7/3/2015` ... `7/6/2015`
+        *   `12/28/2015` ... `12/31/2015`
+    *   If the target is a "typical monthly profile", usually you average over all years.
+    *   I will stick to the standard aggregation. The `nan` in the sample is likely an artifact of the sample generation (e.g., maybe the sample target rows were taken from a version where December was dropped, or it's just a bad sample). The instruction says "generalize to any unseen test table". A general table-to-table transformation for this schema is clearly a pivot/aggregate. I cannot hardcode "drop December". I must compute from source.
+
+6.  **Code Structure**:
+    *   `df = source.copy()`
+    *   `df['date_dt'] = pd.to_datetime(df['date'])`
+    *   `df['month_num'] = df['date_dt'].dt.month`
+    *   Map month_num to name.
+    *   Melt columns `Hour 1` to `Hour 24`.
+    *   Extract hour int.
+    *   GroupBy `month_name`, `hour`. Mean `value`.
+    *   Unstack `month_name`.
+    *   Fill missing months with NaN (default in pivot).
+    *   Rename columns.
+    *   Reset index.
+    *   Sort by hour.
+    *   Return.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse date and extract month
+    df['date_dt'] = pd.to_datetime(df['date'])
+    df['month_num'] = df['date_dt'].dt.month
+    
+    # Map month numbers to lowercase names
+    month_map = {
+        1: 'january', 2: 'february', 3: 'march', 4: 'april',
+        5: 'may', 6: 'june', 7: 'july', 8: 'august',
+        9: 'september', 10: 'october', 11: 'november', 12: 'december'
+    }
+    df['month_name'] = df['month_num'].map(month_map)
+    
+    # 2. Melt the hourly columns
+    # Identify hourly columns
+    hour_cols = [f'Hour {i}' for i in range(1, 25)]
+    
+    # Melt
+    df_melted = df.melt(
+        id_vars=['month_name'],
+        value_vars=hour_cols,
+        var_name='hour_col',
+        value_name='value'
+    )
+    
+    # Extract hour number from 'Hour 1' -> 1
+    df_melted['hour'] = df_melted['hour_col'].str.extract(r'(\d+)').astype(int)
+    
+    # 3. Aggregate
+    # Group by month and hour, calculate mean
+    # Using mean to handle multiple days in the same month/hour
+    agg_df = df_melted.groupby(['month_name', 'hour'])['value'].mean().reset_index()
+    
+    # 4. Pivot to wide format
+    # Rows: hour, Columns: month_name, Values: value
+    pivot_df = agg_df.pivot(index='hour', columns='month_name', values='value')
+    
+    # 5. Ensure all months are present in columns, even if NaN
+    all_months = [month_map[i] for i in range(1, 13)]
+    pivot_df = pivot_df.reindex(columns=all_months)
+    
+    # 6. Reset index and rename
+    pivot_df = pivot_df.reset_index()
+    pivot_df.columns.name = None # Clear column name
+    
+    # 7. Sort by hour
+    pivot_df = pivot_df.sort_values('hour').reset_index(drop=True)
+    
+    # 8. Select target columns verbatim
+    target_columns = ['hour', 'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+    
+    return pivot_df[target_columns]
+```

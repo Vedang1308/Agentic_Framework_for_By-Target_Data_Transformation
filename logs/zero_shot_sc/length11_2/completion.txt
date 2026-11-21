@@ -1,0 +1,146 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Understand the Goal**: Transform a high-frequency (15-minute interval) source table of household energy usage into an hourly aggregated target table. The row count increases slightly (137706 -> 137707), likely due to the addition of a "zero" or "NaN" row for a specific time bucket (e.g., 23:00) that might be missing or partially filled in the source, or simply the result of how `resample` or `groupby` handles edge cases. However, looking at the target sample, we see `month=12, hour=23` with all `NaN` values. This suggests we need to ensure all hours in the month are represented, possibly by reindexing.
+
+2.  **Parse Datetime**: The source column `local_15min` is a string. We need to parse it into a `datetime` object to extract `month` and `hour` and to allow for time-based grouping.
+    *   Format: `%m/%d/%Y %H:%M`.
+
+3.  **Extract Time Features**:
+    *   Create a `month` column from the datetime.
+    *   Create an `hour` column from the datetime.
+    *   Note: The target has `month` and `hour` as integers.
+
+4.  **Map Source Columns to Target Categories**: The source has many specific appliance columns (e.g., `air1_sum`, `furnace1_sum`). The target groups these into broader categories (e.g., `hvac`, `water_heating`). We need to define a mapping strategy.
+    *   **hvac**: Likely sums of `air*`, `furnace*`, `heater*`, `housefan*`, `venthood*`, `circpump*`. Looking at typical disaggregation datasets (like REDD or similar), HVAC usually includes central AC (`air1`, `air2`, `air3`), furnaces (`furnace1`, `furnace2`), and sometimes space heaters. Let's look at the magnitude. In the sample, `air1_sum` is ~6-8, `furnace1_sum` is ~20-28. The target `hvac` for hour 16 is 31.282. This is a sum of 4 quarters.
+    *   **water_heating**: `waterheater1_sum`, `waterheater2_sum`.
+    *   **refrigerator**: `refrigerator1_sum`, `refrigerator2_sum`, `freezer1_sum`, `icemaker1_sum`, `winecooler1_sum`.
+    *   **clothes_washer**: `clotheswasher1_sum`, `clotheswasher_dryg1_sum` (if this is a washer/dryer combo or separate). Usually `clotheswasher1`.
+    *   **clothes_dryer**: `drye1_sum`, `dryg1_sum`.
+    *   **dishwasher**: `dishwasher1_sum`.
+    *   **cooking_range**: `oven1_sum`, `oven2_sum`, `range1_sum`, `microwave1_sum`, `disposal1_sum` (sometimes), `venthood1_sum` (sometimes).
+    *   **pool_spa_pumps**: `poolpump1_sum`, `pump1_sum` (if pool related), `sprinkler1_sum` (maybe not).
+    *   **interior_lighting**: Sum of room lights (`bedroom*`, `kitchen*`, `livingroom*`, `bathroom*`, `diningroom*`, `office*`, `utilityroom*`, `garage*`).
+    *   **exterior_lighting**: `outsidelights_plugs1_sum`, `poollight1_sum`.
+    *   **lighting**: Sum of interior and exterior? Or just a specific subset? The target has `interior_lighting`, `exterior_lighting`, AND `lighting`. Usually `lighting` is the sum of interior + exterior.
+    *   **plug**: `lights_plugs*` columns (1-6), `car1_sum`, `car2_sum`, `battery1_sum`, `security1_sum`, `aquarium1_sum` (maybe), `shed1_sum`.
+    *   **pool_spa_heater**: `pool1_sum`, `pool2_sum`, `jacuzzi1_sum`.
+
+    *Refining the Mapping based on common datasets (likely REDD or UK-DALE variant)*:
+    Let's look at the columns again.
+    *   `hvac`: `air1_sum`, `air2_sum`, `air3_sum`, `airwindowunit1_sum`, `furnace1_sum`, `furnace2_sum`, `heater1_sum`, `heater2_sum`, `heater3_sum`, `housefan1_sum`, `venthood1_sum`.
+    *   `water_heating`: `waterheater1_sum`, `waterheater2_sum`.
+    *   `refrigerator`: `refrigerator1_sum`, `refrigerator2_sum`, `freezer1_sum`, `icemaker1_sum`, `winecooler1_sum`.
+    *   `clothes_washer`: `clotheswasher1_sum`.
+    *   `clothes_dryer`: `drye1_sum`, `dryg1_sum`.
+    *   `dishwasher`: `dishwasher1_sum`.
+    *   `cooking_range`: `oven1_sum`, `oven2_sum`, `range1_sum`, `microwave1_sum`.
+    *   `pool_spa_pumps`: `poolpump1_sum`, `pump1_sum` (likely pool pump), `sprinkler1_sum` (often grouped with outdoor pumps).
+    *   `interior_lighting`: `bedroom1_sum`...`bedroom5_sum`, `bathroom1_sum`, `bathroom2_sum`, `kitchen1_sum`, `kitchen2_sum`, `livingroom1_sum`, `livingroom2_sum`, `diningroom1_sum`, `office1_sum`, `utilityroom1_sum`, `garage1_sum`, `garage2_sum`.
+    *   `exterior_lighting`: `outsidelights_plugs1_sum`, `poollight1_sum`.
+    *   `lighting`: `interior_lighting` + `exterior_lighting`.
+    *   `plug`: `lights_plugs1_sum`...`lights_plugs6_sum`, `car1_sum`, `car2_sum`, `battery1_sum`, `security1_sum`, `aquarium1_sum`, `shed1_sum`, `disposal1_sum` (sometimes plug load), `circpump1_sum` (sometimes HVAC, sometimes plug). Let's assume standard plug loads are the `lights_plugs` and electronics.
+    *   `pool_spa_heater`: `pool1_sum`, `pool2_sum`, `jacuzzi1_sum`.
+
+    *Self-Correction/Verification*:
+    Let's check the values in the target sample for Hour 16 (Dec 5).
+    Target `hvac` = 31.282.
+    Source rows for Dec 5 16:00-16:45 (4 rows).
+    Row 1 (16:00): `air1`=6.007, `furnace1`=20.258. Sum ~26.
+    Row 2 (16:15): `air1`=7.868, `furnace1`=23.139. Sum ~31.
+    Row 3 (16:30): `air1`=6.592, `furnace1`=25.441. Sum ~32.
+    Row 4 (16:45): `air1`=8.248, `furnace1`=28.078. Sum ~36.
+    Average? No, the target is likely the **sum** of the 15-min intervals to get hourly energy (kWh).
+    Sum of `air1` for 4 rows: 6.007+7.868+6.592+8.248 = 28.715.
+    Sum of `furnace1` for 4 rows: 20.258+23.139+25.441+28.078 = 96.916.
+    Total HVAC if just air+furnace: 125. This is much higher than 31.282.
+    
+    Wait, look at the target `hvac` value: 31.282.
+    Look at source `air1_sum` values again. They are small.
+    Maybe `hvac` is just `air1`? Sum = 28.715. Close to 31.282.
+    Maybe `hvac` includes `airwindowunit1`? It is 0.
+    Maybe `hvac` is `air1` + `air2` + `air3`?
+    Air2 sum: 1.327+0.817+0.877+0.871 = 3.892.
+    Air3 sum: 0.607+0.586+0.557+0.574 = 2.324.
+    Total Air: 28.715 + 3.892 + 2.324 = 34.931. Still not 31.282.
+    
+    Let's look at `furnace1`. It's huge. If HVAC included furnace, it would be >90. It doesn't.
+    So `hvac` is likely just the cooling/AC components (`air1`, `air2`, `air3`, `airwindowunit1`).
+    Why is my sum 34.931 and target 31.282?
+    Let's check the rows again. The sample shows rows for 17:45, 18:00, 18:15, 18:30.
+    The target sample shows Month 12, Hour 16 and 17.
+    The source sample starts at 17:45.
+    I need to infer the mapping from the column names generally, as I don't have the exact source rows for Hour 16 in the snippet.
+    However, standard REDD mappings:
+    `hvac`: `air1`, `air2`, `air3`, `airwindowunit1`, `furnace1`, `furnace2`, `heater1`, `heater2`, `heater3`, `housefan1`, `venthood1`.
+    
+    Let's re-read the target `hvac` value: 31.282.
+    If I sum `air1` (28.7) + `air2` (3.9) + `air3` (2.3) = 34.9.
+    If I subtract something?
+    
+    Let's look at `water_heating` target: 12.747.
+    Source `waterheater1` sum for 4 rows: 17.109 + 10.402 + 6.927 + 3.562 = 38.0.
+    Source `waterheater2` sum: 0.005 + 0.005 + 0.005 + 0.006 = 0.021.
+    Total ~38. Target is 12.7.
+    
+    There is a discrepancy. Is the target **average** per 15 min?
+    38 / 4 = 9.5. No.
+    Is the target **sum** but I'm picking the wrong columns?
+    
+    Let's look at `refrigerator` target: 26.262.
+    Source `refrigerator1` sum: 25.021 + 23.348 + 23.182 + 24.901 = 96.45.
+    Source `refrigerator2` sum: 2.743 + 1.971 + 2.257 + 2.657 = 9.628.
+    Total ~106. Target 26.262.
+    106 / 4 = 26.5. This is very close to 26.262.
+    
+    Hypothesis: The target values are the **mean** (average) of the 15-minute intervals over the hour, NOT the sum.
+    Let's check HVAC again with Mean.
+    Sum of Air1+2+3 was 34.931. Mean = 34.931 / 4 = 8.73. Target 31.282. No.
+    
+    Let's check HVAC columns again.
+    Maybe `hvac` is just `furnace1`?
+    Sum Furnace1: 96.916. Mean: 24.22. Target 31.282.
+    
+    Maybe `hvac` is `air1` + `furnace1`?
+    Sum: 125.63. Mean: 31.40. Target 31.282. This is VERY close.
+    Difference: 31.40 - 31.282 = 0.118.
+    Let's check `airwindowunit1`. It is 0.
+    Let's check `heater1`.
+    Row 1: 0.81. Row 2: 0.827. Row 3: 0.579. Row 4: 0.549. Sum: 2.765. Mean: 0.69.
+    If we add Heater1 to the mean: 31.40 + 0.69 = 32.09. Too high.
+    
+    Let's look at the source data again.
+    Row 1 (17:45): `air1`=6.007, `furnace1`=20.258. Sum=26.265.
+    Row 2 (18:00): `air1`=7.868, `furnace1`=23.139. Sum=31.007.
+    Row 3 (18:15): `air1`=6.592, `furnace1`=25.441. Sum=32.033.
+    Row 4 (18:30): `air1`=8.248, `furnace1`=28.078. Sum=36.326.
+    
+    The target sample shows Hour 16 and 17. The source sample shows 17:45 onwards.
+    The target row for Hour 17 has `hvac` = 48.885 (first row) and 31.815 (second row).
+    Wait, the target has MULTIPLE rows for Hour 17.
+    Target Row 5: Month 12, Hour 16.
+    Target Row 6: Month 12, Hour 17.
+    Target Row 7: Month 12, Hour 17.
+    Target Row 8: Month 12, Hour 17.
+    
+    The source has 15-min intervals.
+    Hour 17 in source corresponds to 17:00, 17:15, 17:30, 17:45.
+    The target has 3 rows for Hour 17.
+    The source sample starts at 17:45.
+    The target sample has `NaN` rows for Hour 23.
+    
+    Actually, looking at the target row count (137707) vs source (137706), and the structure, it is highly likely that the transformation is:
+    1. Group by Month and Hour.
+    2. Aggregate the specific columns.
+    3. The aggregation function is likely **Sum** of the 15-min values to get Hourly Energy? Or **Mean**?
+    
+    Let's re-evaluate the "Mean" hypothesis for Refrigerator.
+    Source Ref1+Ref2 Sum ~106. Mean ~26.5. Target 26.262.
+    Source Ref1: 25.021, 23.348, 23.182, 24.901.
+    Source Ref2: 2.743, 1.971, 2.257, 2.657.
+    Sum Ref1: 96.452. Sum Ref2: 9.628. Total: 106.08.
+    Mean: 26.52.
+    Target: 26.262.
+    
+    Let's check `clothes_washer` target: 2.174.
+    Source `clotheswasher1`: 1.71, 2.434, 2.183, 1.07. Sum: 7.397. Mean: 1.849.
+    Source `clotheswasher_dryg1`: 0.955, 0.485, 0.34, 0.259. Sum: 2.0

@@ -1,0 +1,94 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `class`, `Description`, `analysis`, `date`, `value1` to `value24`, and `uom`. The `date` column is in string format `'%m/%d/%Y'`. The `value` columns represent hourly data for that date.
+    *   **Target**: Contains columns `date` and `Hour 1` to `Hour 24`. The `date` column is in datetime format `'%Y-%m-%d %H:%M:%S'` (specifically midnight). The `Hour` columns correspond directly to the `value` columns in the source.
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the source data might be missing a row present in the target, or more likely, the target includes a generated row or the source sample provided is incomplete. However, looking at the data, it seems to be a direct mapping. The extra row in the target might be due to a specific date range generation (e.g., inclusive end date) or simply that the sample source provided is a subset. Since we must generalize, we assume the transformation is a direct column rename and format change for existing rows. If the target has an extra row not in source, it implies a generation step, but usually, in these TbT tasks, if the mapping is 1-to-1, we just transform what's there. Let's look closer. The source dates in the sample are scattered (July, Dec). The target dates are sequential (Jan 1, Jan 2... July). This implies the source table *contains* all the data, but the sample shown is just a few rows. The transformation itself is likely just renaming and formatting. The row count difference (182 vs 183) is suspicious. Let's re-read the prompt. "Source sample rows: 182 rows... Target rows: 183 rows". This often happens if the target includes a header or an index, but the prompt says "Target rows: 183". If the source is 182 distinct days and target is 183, maybe there's an aggregation? No, the values look like direct copies.
+    *   Wait, let's look at the target sample dates: `2011-01-01`, `2011-01-02`, ..., `2011-07-02`. This is a continuous range. The source sample shows `7/3/2011` etc. It is highly probable that the source DataFrame contains *all* the rows needed, and the "sample" provided in the prompt text is just a snippet. The transformation logic should be:
+        1.  Parse the `date` column.
+        2.  Rename `value1` -> `Hour 1`, ..., `value24` -> `Hour 24`.
+        3.  Format the `date` column.
+        4.  Sort by date (optional but good practice if order matters).
+        5.  Return the specific columns.
+
+    *   Why the row count difference? If the source has 182 rows and target has 183, and it's a 1-to-1 mapping, there might be a missing day in the source or an extra day generated. However, without a clear rule for *generating* a new row (like filling NaNs or interpolating), and given the values in the target match the style of the source, it's safest to assume the source contains the data and the "182 vs 183" might be a red herring or due to the specific sample files (e.g., one file has a header counted differently, or one date is missing in the source sample but present in the full dataset). Actually, looking at standard energy data, 365 days is common. 182 is roughly half a year. 183 is half a year + 1.
+    *   Let's check if any aggregation is needed. The source has `class`, `Description`, etc. The target does not. This implies we drop those columns.
+    *   The values in `Hour 1` of target for `2011-01-01` is `1.3683`. In the source sample, I don't see `1/1/2011`. I see `7/3/2011`. This confirms the source sample provided in the prompt is *not* the full source. The function must handle the full source.
+    *   Conclusion: The transformation is a structural reshape:
+        1.  Select `date` and `value1`-`value24`.
+        2.  Rename `value{i}` to `Hour {i}`.
+        3.  Convert `date` from `'%m/%d/%Y'` to `datetime` and then format to `'%Y-%m-%d %H:%M:%S'`.
+        4.  Ensure the column order matches the target.
+
+2.  **Implementation Details**:
+    *   **Date Parsing**: Use `pd.to_datetime(df['date'], format='%m/%d/%Y')`.
+    *   **Date Formatting**: Convert to string with `dt.strftime('%Y-%m-%d %H:%M:%S')`. Note: The target sample shows `2011-01-01 00:00:00`.
+    *   **Renaming**: Create a mapping dictionary for `value1`...`value24` to `Hour 1`...`Hour 24`.
+    *   **Column Selection**: Define the target column list.
+    *   **Sorting**: It is good practice to sort by date to match the target sample order, although not strictly required by schema.
+
+3.  **Refining the Row Count Issue**:
+    *   If the target has more rows, could it be that the source has multiple entries per day that need aggregation?
+    *   Source columns: `class`, `Description`, `analysis`, `uom`. Distinct values: `RES`, `RES01`, `HourlyLoad`, `kW`. These are constant.
+    *   If there were multiple rows per day, we would see duplicate dates. The problem statement says "Source sample rows: 182". If these are unique days, and target is 183, maybe one day is added? Or maybe the source has duplicates?
+    *   Let's look at the source schema again. It looks like a standard wide format for time series. Usually, there is one row per timestamp.
+    *   If I assume 1-to-1 mapping, and the code fails because of row count, I might need to check for duplicates. However, standard TbT tasks usually involve cleaning/reshaping existing data. The most robust approach is to group by date if there are duplicates, taking the mean or first value. Given the distinct values are singletons, it's likely one row per date.
+    *   Let's stick to the direct mapping. If the source has 182 unique dates and target has 183, the missing one might be a boundary condition (e.g., start/end of year). But without a rule to *create* data, we can only transform existing data.
+    *   *Self-Correction*: Is it possible `value1` corresponds to `Hour 1`? Yes.
+    *   Let's write the code to rename and format.
+
+4.  **Final Code Structure**:
+    *   Import pandas.
+    *   Define function `transform`.
+    *   Parse dates.
+    *   Rename columns.
+    *   Format dates.
+    *   Select and return columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Parse the date column from '%m/%d/%Y' to datetime
+    df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y')
+    
+    # 2. Define the mapping for value columns to Hour columns
+    rename_map = {}
+    for i in range(1, 25):
+        rename_map[f'value{i}'] = f'Hour {i}'
+    
+    # 3. Rename the columns
+    df = df.rename(columns=rename_map)
+    
+    # 4. Format the date column to '%Y-%m-%d %H:%M:%S'
+    # The target sample shows '2011-01-01 00:00:00'
+    df['date'] = df['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 5. Define the target column names
+    target_columns = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    
+    # 6. Select only the required columns
+    # Note: If there are duplicate dates in source, we might need to aggregate.
+    # However, based on the schema and typical TbT tasks, it's usually 1-to-1.
+    # If duplicates exist, taking the first or mean is a common strategy.
+    # Given the "182 vs 183" discrepancy, let's check if we need to handle duplicates.
+    # If the source has multiple rows for the same date, groupby is needed.
+    # Let's assume standard unique dates for now, but add a groupby just in case 
+    # to ensure deterministic output if duplicates exist (using mean).
+    
+    # Check for duplicates in date
+    if df['date'].duplicated().any():
+        # Group by date and take the mean of numeric columns
+        df = df.groupby('date', as_index=False).mean()
+        
+    # Sort by date to ensure consistent ordering
+    df = df.sort_values('date').reset_index(drop=True)
+    
+    # Return the dataframe with exact target columns
+    return df[target_columns]
+```

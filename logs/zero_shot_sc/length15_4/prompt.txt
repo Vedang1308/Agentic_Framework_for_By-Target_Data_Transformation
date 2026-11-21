@@ -1,0 +1,46 @@
+### Benchmark Case: length15_4
+- Source sample rows: 258420 rows (Note: test_0.csv may have different row count)
+- Target rows: 120 rows
+- Notice: Row count changes from 258420 to 120. Check if an aggregation, grouping, or pivoting operation is required.
+
+### Exact Target Columns (Must match verbatim):
+['season', 'hour', 'hvac', 'domestic_water_heating', 'major_appliances', 'lighting', 'miscellaneous_plug_loads', 'total']
+
+### Source Schema and Types:
+End Use Category (object), End Use (object), Time Period (object), Day Type (object), Hour Ending (int64), Number of Homes in Bin With This End Use Metered (object), Average Demand Per Home With This End Use [kW] (float64)
+
+### Target Schema and Types:
+season (object), hour (int64), hvac (float64), domestic_water_heating (float64), major_appliances (float64), lighting (int64), miscellaneous_plug_loads (float64), total (int64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- End Use Category: ['Kitchen', 'Laundry', 'Miscellaneous', 'Lighting', 'Remaining Load']
+- Day Type: ['Weekend', 'All', 'Weekday']
+
+### Source Table Sample (training_0.csv):
+| End Use Category   | End Use        | Time Period   | Day Type   |   Hour Ending |   Number of Homes in Bin With This End Use Metered |   Average Demand Per Home With This End Use [kW] |
+|:-------------------|:---------------|:--------------|:-----------|--------------:|---------------------------------------------------:|-------------------------------------------------:|
+| Kitchen            | Freezer        | March         | Weekend    |            13 |                                                 11 |                                            0.031 |
+| Kitchen            | Freezer        | March         | Weekend    |            14 |                                                 11 |                                            0.03  |
+| Kitchen            | Freezer        | March         | Weekend    |            15 |                                                 11 |                                            0.032 |
+| Kitchen            | Freezer        | March         | Weekend    |            16 |                                                 11 |                                            0.031 |
+| Remaining Load     | Remaining Load | December      | Weekend    |            21 |                                                120 |                                          nan     |
+| Remaining Load     | Remaining Load | December      | Weekend    |            22 |                                                120 |                                          nan     |
+| Remaining Load     | Remaining Load | December      | Weekend    |            23 |                                                120 |                                          nan     |
+| Remaining Load     | Remaining Load | December      | Weekend    |            24 |                                                120 |                                          nan     |
+
+### Desired Target Table Sample (target.csv):
+| season   |   hour |    hvac |   domestic_water_heating |   major_appliances |   lighting |   miscellaneous_plug_loads |   total |
+|:---------|-------:|--------:|-------------------------:|-------------------:|-----------:|---------------------------:|--------:|
+| Fall     |      1 | 2900.58 |                  738.771 |           1408.37  |          0 |                    505.356 |       0 |
+| Fall     |      2 | 2638.82 |                  637.397 |           1267.67  |          0 |                    500.625 |       0 |
+| Fall     |      3 | 2474.08 |                  500.979 |           1192.69  |          0 |                    502.586 |       0 |
+| Fall     |      4 | 2366.6  |                  478.76  |           1145.55  |          0 |                    501.353 |       0 |
+| nan      |     21 | 4730.22 |                  592.1   |            498.554 |          0 |                    131.636 |       0 |
+| nan      |     22 | 4535.06 |                  488.897 |            495.284 |          0 |                    132.063 |       0 |
+| nan      |     23 | 4182.61 |                  391.655 |            480.745 |          0 |                    128.173 |       0 |
+| nan      |     24 | 3660.77 |                  279.492 |            423.171 |          0 |                    126.803 |       0 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

@@ -1,0 +1,163 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Date Transformation**:
+    *   Source column `date` contains dates in format `M/D/YYYY` (e.g., '7/3/2014').
+    *   Target column `Date` requires format `YYYY-MM-DD 00:00:00`.
+    *   Action: Parse `date` using `pd.to_datetime`, then format using `dt.strftime('%Y-%m-%d %H:%M:%S')`.
+
+2.  **Analyze Hour Column Mapping**:
+    *   Source has 24 columns representing hours, but the naming is irregular:
+        *   AM hours: '1:00 AM' through '11:00 AM', '12:00 AM'.
+        *   PM hours: '12:00 PM' through '11:00 PM'.
+        *   Note the order in the source schema provided: `1:00 AM`...`11:00 AM`, `12:00 AM`, `1:00 PM`...`11:00 PM`, `12:00 PM`. Wait, looking at the sample data headers:
+            `1:00 AM`, `2:00 AM`, ..., `11:00 AM`, `12:00 AM`, `1:00 PM`, ..., `11:00 PM`, `12:00 PM`.
+            Actually, let's look closer at the provided source schema list:
+            `1:00 AM`, `2:00 AM`, `3:00 AM`, `4:00 AM`, `5:00 AM`, `6:00 AM`, `7:00 AM`, `8:00 AM`, `9:00 AM`, `10:00 AM`, `11:00 AM`, `12:00 AM`, `1:00 PM`, `2:00 PM`, `3:00 PM`, `4:00 PM`, `5:00 PM`, `6:00 PM`, `7:00 PM`, `8:00 PM`, `9:00 PM`, `10:00 PM`, `11:00 PM`, `12:00 PM`.
+            
+            Standard 24-hour clock mapping:
+            *   1:00 AM -> Hr 1
+            *   2:00 AM -> Hr 2
+            *   ...
+            *   11:00 AM -> Hr 11
+            *   12:00 AM -> Hr 12 (Midnight usually starts the day or ends it. In 24h format, 00:00 is Hr 0/24? Or is 12:00 AM Hr 12? Let's check standard conventions. Usually 12:00 AM is 00:00. However, looking at the target columns `Hr 1` to `Hr 24`, we need to map carefully.
+            
+            Let's look at the target sample values vs source sample values to deduce the mapping.
+            Source Row 1 (7/3/2014):
+            `1:00 AM`: 1.03593
+            `12:00 AM`: 0.153621
+            `12:00 PM`: 0.306257
+            
+            Target Row 1 (2014-01-01... wait, the dates don't match directly in the sample provided in the prompt description vs the table. The prompt says "Source sample rows: 182... Target rows: 183". The samples shown are just illustrative. Let's look at the structure.
+            
+            Standard interpretation of "Hr 1" to "Hr 24":
+            Usually, Hr 1 corresponds to 01:00, Hr 12 to 12:00, Hr 13 to 13:00 (1 PM), etc.
+            Or does Hr 1 correspond to the first hour of the day (00:00-01:00)?
+            
+            Let's look at the column names again.
+            Source: `1:00 AM` ... `11:00 AM`, `12:00 AM`, `1:00 PM` ... `11:00 PM`, `12:00 PM`.
+            
+            If we assume standard 24-hour indexing where:
+            12:00 AM = 00:00 (Hour 0 or Hour 24?)
+            1:00 AM = 01:00 (Hour 1)
+            ...
+            12:00 PM = 12:00 (Hour 12)
+            1:00 PM = 13:00 (Hour 13)
+            
+            Let's check the target columns: `Hr 1` ... `Hr 24`.
+            If `Hr 1` maps to `1:00 AM` (01:00), then what maps to `12:00 AM` (00:00)? It would likely be `Hr 24` or `Hr 0`. Since `Hr 0` isn't there, `Hr 24` is a candidate for 00:00.
+            
+            Let's try this mapping:
+            `1:00 AM` -> `Hr 1`
+            `2:00 AM` -> `Hr 2`
+            ...
+            `11:00 AM` -> `Hr 11`
+            `12:00 PM` -> `Hr 12`
+            `1:00 PM` -> `Hr 13`
+            ...
+            `11:00 PM` -> `Hr 23`
+            `12:00 AM` -> `Hr 24`
+            
+            Let's verify this hypothesis.
+            Source `12:00 AM` is often the start of the day. In many load profiles, the "24th hour" is the midnight hour ending the day or starting the next. Given the target has `Hr 1` to `Hr 24`, it's highly probable that:
+            Hours 1-11 are 1 AM - 11 AM.
+            Hour 12 is 12 PM.
+            Hours 13-23 are 1 PM - 11 PM.
+            Hour 24 is 12 AM (Midnight).
+            
+            Let's check the source column order again:
+            `1:00 AM` ... `11:00 AM` (11 cols)
+            `12:00 AM` (1 col)
+            `1:00 PM` ... `11:00 PM` (11 cols)
+            `12:00 PM` (1 col)
+            
+            Wait, the source schema list in the prompt is:
+            `1:00 AM`, `2:00 AM`, `3:00 AM`, `4:00 AM`, `5:00 AM`, `6:00 AM`, `7:00 AM`, `8:00 AM`, `9:00 AM`, `10:00 AM`, `11:00 AM`, `12:00 AM`, `1:00 PM`, `2:00 PM`, `3:00 PM`, `4:00 PM`, `5:00 PM`, `6:00 PM`, `7:00 PM`, `8:00 PM`, `9:00 PM`, `10:00 PM`, `11:00 PM`, `12:00 PM`.
+            
+            If I map:
+            `1:00 AM` -> `Hr 1`
+            ...
+            `11:00 AM` -> `Hr 11`
+            `12:00 PM` -> `Hr 12`
+            `1:00 PM` -> `Hr 13`
+            ...
+            `11:00 PM` -> `Hr 23`
+            `12:00 AM` -> `Hr 24`
+            
+            This seems the most logical semantic mapping for "Hour 1" to "Hour 24" if we consider 12:00 AM as the last hour of the cycle (or the 24th hour).
+            
+            Let's double check if `12:00 AM` could be `Hr 1`. If `12:00 AM` is `Hr 1`, then `1:00 AM` is `Hr 2`.
+            However, `1:00 AM` is literally "1". It is very common for `Hr 1` to correspond to `1:00 AM`.
+            Also, `12:00 PM` is "12". It is very common for `Hr 12` to correspond to `12:00 PM`.
+            Therefore:
+            `12:00 PM` -> `Hr 12`
+            `1:00 PM` -> `Hr 13`
+            ...
+            `11:00 PM` -> `Hr 23`
+            `12:00 AM` -> `Hr 24`
+            
+            And for AM:
+            `1:00 AM` -> `Hr 1`
+            ...
+            `11:00 AM` -> `Hr 11`
+            
+            This leaves `12:00 AM` for `Hr 24`. This fits the 1-24 range perfectly.
+
+3.  **Construct Rename Dictionary**:
+    Create a dictionary mapping the source column names to the target column names based on the logic above.
+
+4.  **Handle Extra Columns**:
+    Drop the `DSL` column as it is not in the target schema.
+
+5.  **Format Date**:
+    Convert `date` to `Date` with the specified format.
+
+6.  **Select and Return**:
+    Select the columns in the order: `Date`, `Hr 1`, ..., `Hr 24`.
+
+### Code Implementation
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame to the target schema.
+    """
+    df = source.copy()
+    
+    # 1. Transform the date column
+    # Parse the source date 'M/D/YYYY' and format to 'YYYY-MM-DD 00:00:00'
+    dt = pd.to_datetime(df['date'])
+    df['Date'] = dt.dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Map hour columns to target names 'Hr 1' ... 'Hr 24'
+    # Logic derived from semantic mapping:
+    # 1:00 AM -> Hr 1, ..., 11:00 AM -> Hr 11
+    # 12:00 PM -> Hr 12
+    # 1:00 PM -> Hr 13, ..., 11:00 PM -> Hr 23
+    # 12:00 AM -> Hr 24
+    
+    rename_map = {}
+    
+    # AM hours 1-11
+    for i in range(1, 12):
+        rename_map[f'{i}:00 AM'] = f'Hr {i}'
+        
+    # PM hours 1-11 mapped to 13-23
+    for i in range(1, 12):
+        rename_map[f'{i}:00 PM'] = f'Hr {i + 12}'
+        
+    # 12:00 PM maps to Hr 12
+    rename_map['12:00 PM'] = 'Hr 12'
+    
+    # 12:00 AM maps to Hr 24
+    rename_map['12:00 AM'] = 'Hr 24'
+    
+    df = df.rename(columns=rename_map)
+    
+    # 3. Define target columns
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # 4. Select and return
+    return df[target_columns]
+```

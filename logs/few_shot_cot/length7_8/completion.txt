@@ -1,0 +1,56 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source has columns: `Company`, `Rate`, `Rate Code`, `Date`, and `Hr 1` through `Hr 24`.
+    *   Target has columns: `month`, `daytype`, and `hr1` through `hr24`.
+    *   The row count is preserved (2190 rows in both samples), implying a row-wise transformation without aggregation or reshaping (melt/pivot).
+
+2.  **Derive `month` Column**:
+    *   The source `Date` column contains strings like '1/1/2014'.
+    *   The target `month` column contains full month names like 'January', 'December'.
+    *   Action: Parse `Date` to datetime using `pd.to_datetime`. Extract the month name using `.dt.strftime('%B')`.
+
+3.  **Derive `daytype` Column**:
+    *   The target `daytype` column contains values 'weekday' or 'weekend'.
+    *   Action: Use the parsed datetime object to determine the day of the week.
+    *   Logic: If the day is Saturday (5) or Sunday (6) (using 0-indexed Monday=0), it is a 'weekend'. Otherwise, it is a 'weekday'.
+    *   Implementation: `dt.dt.dayofweek.isin([5, 6]).map({True: 'weekend', False: 'weekday'})`.
+
+4.  **Transform Hour Columns**:
+    *   Source columns are named `Hr 1`, `Hr 2`, ..., `Hr 24` (with a space).
+    *   Target columns are named `hr1`, `hr2`, ..., `hr24` (lowercase, no space).
+    *   Action: Rename the columns. A dictionary mapping `f'Hr {i}'` to `f'hr{i}'` for `i` in 1..24 is required.
+
+5.  **Construct Final DataFrame**:
+    *   Create the new columns `month` and `daytype`.
+    *   Rename the hour columns.
+    *   Select the final columns in the exact order specified by the target schema: `['month', 'daytype', 'hr1', ..., 'hr24']`.
+    *   Return the resulting DataFrame.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse Date column to datetime
+    dt = pd.to_datetime(df['Date'])
+    
+    # 2. Create 'month' column with full month name (e.g., 'January')
+    df['month'] = dt.dt.strftime('%B')
+    
+    # 3. Create 'daytype' column ('weekday' or 'weekend')
+    # dayofweek: Monday=0, ..., Sunday=6. Weekend is 5 (Sat) or 6 (Sun).
+    is_weekend = dt.dt.dayofweek.isin([5, 6])
+    df['daytype'] = is_weekend.map({True: 'weekend', False: 'weekday'})
+    
+    # 4. Rename hour columns from 'Hr 1'...'Hr 24' to 'hr1'...'hr24'
+    rename_dict = {f'Hr {i}': f'hr{i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    
+    # 5. Define target columns in the exact required order
+    target_columns = ['month', 'daytype'] + [f'hr{i}' for i in range(1, 25)]
+    
+    # 6. Return the transformed dataframe with only the target columns
+    return df[target_columns]
+```

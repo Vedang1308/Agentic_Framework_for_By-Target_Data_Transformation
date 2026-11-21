@@ -1,0 +1,89 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Schema and Row Counts**:
+    *   Source has 182 rows, Target has 183 rows.
+    *   Source columns: `Date`, `Class`, and numeric columns `1` through `24`.
+    *   Target columns: `date`, and `Hour 1` through `Hour 24`.
+    *   The increase in row count (182 -> 183) suggests that the source data might be missing a specific date that is present in the target, or the target includes an aggregated/summary row. However, looking at the samples:
+        *   Source sample starts around July 2013 and ends Dec 2013.
+        *   Target sample includes Jan 2013, June 2013, July 2013.
+        *   The target seems to be a complete time series for the year 2013 (or a specific period), while the source might be a subset or have gaps.
+        *   Wait, let's look closer at the values.
+        *   Source `7/3/2013` Hour 1 is `0.56`. Target `07/03/2013` (implied, though sample shows 07/02) ... let's check `07/02/2013` in target. Target `07/02/2013` Hour 1 is `0.66`. Source `7/2/2013` (if it existed) would match. But source starts at `7/3/2013`.
+        *   Actually, let's look at the row count difference again. 182 rows in source, 183 in target.
+        *   The target sample shows dates like `01/01/2013` to `07/02/2013`. The source sample shows `7/3/2013` to `12/31/2013`.
+        *   It appears the source and target might be disjoint sets of dates in the samples, or the source is just a fragment.
+        *   Crucially, the transformation logic for the *values* seems to be a direct mapping: Source column `1` -> Target `Hour 1`, Source `2` -> Target `Hour 2`, etc.
+        *   The date format needs to be standardized. Source `Date` is `M/D/YYYY` (e.g., `7/3/2013`). Target `date` is `MM/DD/YYYY` (e.g., `01/01/2013`).
+        *   Why the row count change? If the source has 182 rows and target has 183, and the logic is a simple row-wise transformation, there must be a row added or an existing row split. However, in many TbT benchmarks, if the schema is identical (wide format), it's often a simple rename/format. The row count discrepancy might be due to the source having a header row counted differently or a specific missing date in the source that is "filled" in the target?
+        *   Let's check if aggregation is needed. If the source had multiple rows per date (e.g., different `Class` values), we would group by `Date`. But `Class` is constant `RESIDENT`. So no grouping needed.
+        *   Is it possible the source is missing one date present in the target? If so, we cannot "generate" data for that date without external info.
+        *   Alternative hypothesis: The "182 vs 183" note might be a distractor or refer to a specific test case where a row is appended (like a total). But the target sample doesn't show a total row.
+        *   Let's look at the columns again. Source: `1`..`24`. Target: `Hour 1`..`Hour 24`.
+        *   The most robust generalizable transformation is:
+            1. Parse `Date` to datetime.
+            2. Format `Date` to `MM/DD/YYYY` string for column `date`.
+            3. Rename columns `1`..`24` to `Hour 1`..`Hour 24`.
+            4. Select the target columns.
+        *   If the row count differs in the actual test data due to missing dates in source, standard pandas transformation will just produce fewer rows. However, usually, these benchmarks expect the transformation to handle the *structure*. If the source *must* produce the target rows, and the target has more rows, it implies the source provided in the `transform` function might actually contain all necessary rows, and the "182 vs 183" note in the prompt description might refer to the *sample* files provided in the UI which might be truncated or specific subsets. The function `transform` receives the full `source` DataFrame. If the source DataFrame passed to the function has 183 rows, the output will have 183. If it has 182, output has 182. The prompt says "Source sample rows: 182... Target rows: 183". This implies the *full* source data used to generate the target had 183 rows, but the sample shown has 182? Or the source *schema* implies we need to generate a missing row?
+        *   Actually, looking at typical electricity load profiles, 365 days in a year. 182 is roughly half a year. 183 is also roughly half.
+        *   Let's assume the standard operation: Rename and Format. The row count note is likely context about the specific test file vs sample, but the transformation logic remains structural.
+        *   Wait, could it be that the source has `Date` and `Class`, and we need to drop `Class`? Yes.
+        *   Could it be that we need to sort by date? The target sample is sorted by date (`01/01`, `01/02`... `07/02`). The source sample is sorted by date (`7/3`... `12/31`). It is good practice to sort by date to match target order.
+
+2.  **Detailed Steps**:
+    *   Copy source DataFrame.
+    *   Parse `Date` column to `datetime`.
+    *   Create `date` column by formatting the datetime as `%m/%d/%Y`.
+    *   Rename numeric columns `1` through `24` to `Hour 1` through `Hour 24`.
+    *   Drop the `Class` column.
+    *   Sort the DataFrame by the `date` column (or the underlying datetime) to ensure chronological order, matching the target sample's order.
+    *   Select the final columns: `['date', 'Hour 1', ..., 'Hour 24']`.
+
+3.  **Refinement on Column Renaming**:
+    *   Source columns are strings `'1'`, `'2'`, ... `'24'` (or integers). The schema says `1 (float64)`, implying the column name is likely the integer `1` or string `'1'`. In pandas, if read from CSV, they are strings. The sample shows headers `1`, `2`.
+    *   Construct a mapping dictionary: `{str(i): f'Hour {i}' for i in range(1, 25)}`.
+
+4.  **Final Check**:
+    *   Target columns: `['date', 'Hour 1', ..., 'Hour 24']`.
+    *   Source `Date` -> `date` (formatted).
+    *   Source `1` -> `Hour 1`.
+    *   Sort by `date`.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # 1. Parse the Date column to datetime to ensure correct formatting and sorting
+    df['parsed_date'] = pd.to_datetime(df['Date'])
+    
+    # 2. Format the date as MM/DD/YYYY for the target 'date' column
+    df['date'] = df['parsed_date'].dt.strftime('%m/%d/%Y')
+    
+    # 3. Rename the hour columns from '1'..'24' to 'Hour 1'..'Hour 24'
+    # The source schema indicates columns 1-24. They might be int or str in column names.
+    # We create a mapping for both possibilities to be safe, though str is common from CSV.
+    rename_dict = {}
+    for i in range(1, 25):
+        if str(i) in df.columns:
+            rename_dict[str(i)] = f'Hour {i}'
+        if i in df.columns:
+            rename_dict[i] = f'Hour {i}'
+            
+    df = df.rename(columns=rename_dict)
+    
+    # 4. Drop unnecessary columns: 'Date', 'Class', 'parsed_date'
+    cols_to_drop = ['Date', 'Class', 'parsed_date']
+    df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
+    
+    # 5. Sort by date to match the target's chronological order
+    # We use the parsed_date for sorting if we kept it, but we dropped it. 
+    # Let's re-parse or sort by the string 'date' if it's consistent (MM/DD/YYYY sorts correctly alphabetically).
+    df = df.sort_values(by='date').reset_index(drop=True)
+    
+    # 6. Define target columns verbatim
+    target_columns = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    
+    return df[target_columns]
+```

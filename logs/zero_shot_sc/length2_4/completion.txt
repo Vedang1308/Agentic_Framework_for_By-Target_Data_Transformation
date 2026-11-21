@@ -1,0 +1,151 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `Date` (string), `Class` (string), and 24 numeric columns named `1` through `24`. These likely represent hourly data points for each day.
+    *   **Target**: Contains `dt_strata` (date string), `dow` (day of week integer), and 25 numeric columns named `pct_hourly_0100` through `pct_hourly_2500`.
+    *   **Observation**: The target has one more hourly column (`pct_hourly_2500`) than the source has hourly columns (`1`-`24`). The sample target data shows `nan` for `pct_hourly_2500`. This suggests the 25th column is a placeholder or derived value that is empty in this specific transformation, or perhaps it's just padding. Given the source only has 24 hours, we map source columns `1`-`24` to target columns `0100`-`2400`. The `2500` column will be filled with NaN.
+
+2.  **Date Parsing and Feature Extraction**:
+    *   Parse the `Date` column from format `%m/%d/%Y` into a datetime object.
+    *   Extract the Day of Week (`dow`). Python's `dt.dayofweek` returns 0 for Monday, 1 for Tuesday, ..., 6 for Sunday.
+    *   Check the target sample:
+        *   `1/1/2013` is a Tuesday. Target `dow` is `2`.
+        *   `1/2/2013` is a Wednesday. Target `dow` is `3`.
+        *   `6/30/2013` is a Sunday. Target `dow` is `0`.
+        *   `7/1/2013` is a Monday. Target `dow` is `1`.
+        *   This mapping (Sun=0, Mon=1, ..., Sat=6) corresponds to `dt.weekday()` in Python (where Monday is 0) shifted by +1? No.
+        *   Let's check standard `datetime.weekday()`: Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6.
+        *   Target for Tue (1/1/2013) is 2. Target for Wed (1/2/2013) is 3. Target for Sun (6/30/2013) is 0.
+        *   This looks like `weekday() + 1` modulo 7?
+            *   Tue (1) + 1 = 2. Correct.
+            *   Wed (2) + 1 = 3. Correct.
+            *   Sun (6) + 1 = 7 -> 0. Correct.
+            *   Mon (0) + 1 = 1. Correct.
+        *   So, `dow = (dt.weekday() + 1) % 7`.
+
+3.  **Column Renaming and Mapping**:
+    *   Source columns are integers `1` to `24`.
+    *   Target columns are `pct_hourly_0100` to `pct_hourly_2400`.
+    *   We need to rename source column `1` to `pct_hourly_0100`, `2` to `pct_hourly_0200`, ..., `24` to `pct_hourly_2400`.
+    *   Format: `pct_hourly_{hour:04d}00`. Note the 4-digit hour with leading zeros.
+
+4.  **Handling the Extra Column (`pct_hourly_2500`)**:
+    *   The target schema includes `pct_hourly_2500`. The sample shows `nan`.
+    *   We will create this column and fill it with `NaN` (or `None`) since there is no source data for a 25th hour.
+
+5.  **Constructing the Result DataFrame**:
+    *   Create `dt_strata` by formatting the parsed date back to `%m/%d/%Y`.
+    *   Create `dow` using the logic derived above.
+    *   Select and rename the hourly columns.
+    *   Add the empty `pct_hourly_2500` column.
+    *   Concatenate/Combine these into a single DataFrame.
+    *   Ensure the final column order matches the target schema exactly.
+
+6.  **Verification of Row Count Change**:
+    *   Source: 182 rows. Target: 183 rows.
+    *   The problem statement notes "Row count changes from 182 to 183".
+    *   Looking at the sample, the source starts at `7/3/2013` but the target starts at `1/1/2013`. This implies the source provided in the prompt is just a *sample* of the full dataset, or the transformation involves generating dates not present in the source?
+    *   **Correction**: The prompt says "The function must compute its result SOLELY from the `source` argument." and "Do NOT hardcode target rows".
+    *   If the source has 182 rows and target has 183, and we are not generating new rows, there might be a grouping or an aggregation that produces a summary row?
+    *   However, looking at the target sample, every row corresponds to a specific date. The dates in the target sample (`1/1/2013` to `7/2/2013`) are *not* in the source sample (`7/3/2013` onwards). This suggests the source sample provided is disjoint from the target sample provided.
+    *   The "Row count changes" notice is likely a hint about the *full* dataset vs the *sample*, or potentially that one row is an aggregate?
+    *   Let's look closer. If the source has one row per day, and the target has one row per day, the row count should be identical unless there's a "Total" or "Average" row added.
+    *   But the target columns are specific hourly percentages. An average row would make sense.
+    *   Let's check if the last row of the target sample is an aggregate. The sample ends at `7/2/2013`.
+    *   Actually, usually in these benchmarks, if the row count increases by 1, it's often a summary row. But where?
+    *   Let's re-read carefully: "Source sample rows: 182... Target rows: 183".
+    *   If I simply transform row-by-row, I get 182 rows.
+    *   Is it possible the source has multiple entries per day that need aggregating? The source sample shows unique dates.
+    *   Is it possible the target includes a "Grand Total" or "Average" row at the end?
+    *   Let's look at the target schema again. `dt_strata` is a date string. A summary row would have a non-date string or a specific marker.
+    *   Alternatively, maybe the source *should* have had 183 rows and the note is just informational about the test set?
+    *   Wait, look at the target sample `dt_strata`. It is sorted chronologically.
+    *   If I assume the transformation is 1-to-1, I will fail the row count check if the test case expects an extra row.
+    *   However, without a clear indicator of *what* the extra row is (e.g., a "All" category, or a specific date), adding a hardcoded row is forbidden.
+    *   Let's consider the possibility that the "183" vs "182" difference is due to the test set having a different number of days than the training set sample, and the note is just saying "be aware row counts might differ between source and target in general scenarios" or specifically that for this benchmark case, the test input might have 182 and output 183?
+    *   Actually, a common pattern in energy/load data is to have a "25th" hour which is the total load for the day? No, the columns are `pct_hourly`.
+    *   Let's stick to the 1-to-1 mapping. If there is an aggregation required, the target schema would likely have fewer columns or different keys. Here, the keys are dates.
+    *   Hypothesis: The source data might contain a row that is a duplicate or a special marker that gets removed? No, row count increases.
+    *   Hypothesis: The transformation generates a row for a missing date? No, "solely from source".
+    *   Most likely explanation: The note "Row count changes from 182 to 183" is a generic warning for the benchmark suite, or specific to a case where a summary row is appended. Given the strict constraint "Do NOT hardcode... literal values", I cannot invent a summary row. I will implement the 1-to-1 transformation. If a summary row is required, it usually involves an empty `dt_strata` or specific label. Since I can't infer that label, I will proceed with the direct mapping.
+    *   *Self-Correction*: What if `Class` is involved? Source has `RESIDENT`. Target doesn't have `Class`.
+    *   Let's assume the standard 1-to-1 row transformation. The row count difference in the prompt description might refer to the full file vs the sample shown, or a specific test artifact not inferable from schema alone without seeing the extra row. Given the constraints, the most robust "general" function is the row-wise transformation.
+
+7.  **Final Code Structure**:
+    *   Parse dates.
+    *   Calculate `dow`.
+    *   Rename hourly columns.
+    *   Add `pct_hourly_2500` as NaN.
+    *   Reorder columns.
+    *   Return.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame format.
+    - Parses dates and extracts day of week.
+    - Renames hourly columns 1-24 to pct_hourly_0100 - pct_hourly_2400.
+    - Adds a pct_hourly_2500 column filled with NaN.
+    """
+    # 1. Parse the Date column
+    # Source format is '%m/%d/%Y'
+    df = source.copy()
+    df['parsed_date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y')
+    
+    # 2. Create dt_strata (formatted back to string)
+    df['dt_strata'] = df['parsed_date'].dt.strftime('%m/%d/%Y')
+    
+    # 3. Calculate dow
+    # Mapping observed:
+    # Tue (1/1/2013) -> 2
+    # Wed (1/2/2013) -> 3
+    # Sun (6/30/2013) -> 0
+    # Mon (7/1/2013) -> 1
+    # Python weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+    # Formula: (weekday() + 1) % 7
+    df['dow'] = (df['parsed_date'].dt.weekday + 1) % 7
+    
+    # 4. Rename hourly columns
+    # Source columns are integers 1 through 24 (as strings or ints in header)
+    # Target columns are pct_hourly_0100 through pct_hourly_2400
+    
+    # Identify numeric columns
+    numeric_cols = [str(i) for i in range(1, 25)]
+    
+    # Create mapping dict
+    rename_map = {}
+    for col in numeric_cols:
+        if col in df.columns:
+            hour_num = int(col)
+            # Format: pct_hourly_HHMM where HH is 2 digits, MM is 00
+            # e.g., 1 -> pct_hourly_0100
+            new_col_name = f"pct_hourly_{hour_num:02d}00"
+            rename_map[col] = new_col_name
+            
+    df.rename(columns=rename_map, inplace=True)
+    
+    # 5. Add the 25th hour column with NaN
+    df['pct_hourly_2500'] = np.nan
+    
+    # 6. Define the target columns in the exact order
+    target_columns = [
+        'dt_strata', 'dow',
+        'pct_hourly_0100', 'pct_hourly_0200', 'pct_hourly_0300', 'pct_hourly_0400',
+        'pct_hourly_0500', 'pct_hourly_0600', 'pct_hourly_0700', 'pct_hourly_0800',
+        'pct_hourly_0900', 'pct_hourly_1000', 'pct_hourly_1100', 'pct_hourly_1200',
+        'pct_hourly_1300', 'pct_hourly_1400', 'pct_hourly_1500', 'pct_hourly_1600',
+        'pct_hourly_1700', 'pct_hourly_1800', 'pct_hourly_1900', 'pct_hourly_2000',
+        'pct_hourly_2100', 'pct_hourly_2200', 'pct_hourly_2300', 'pct_hourly_2400',
+        'pct_hourly_2500'
+    ]
+    
+    # 7. Select and return only the target columns
+    # Ensure types are correct if necessary, but pandas usually handles float/int conversion
+    # The target dow is int64.
+    df['dow'] = df['dow'].astype('int64')
+    
+    return df[target_columns]
+```

@@ -1,0 +1,45 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Segment`, `Date`, and hourly columns `1:00` through `23:00` and `24:00:00`. The `Date` column is in format `%a %m/%d/%Y` (e.g., 'Thu 10/01/2009').
+    *   **Target**: Contains columns `cst` and hourly columns `1:00` through `24:00`. The `cst` column is in format `%a %m/%d/%Y`.
+2.  **Date Transformation**:
+    *   The source `Date` column already matches the target `cst` format visually. However, to ensure robustness and correct typing, we should parse it into a datetime object and then format it back to string using `strftime('%a %m/%d/%Y')`. This handles any potential whitespace inconsistencies or ensures the weekday abbreviation is correctly derived from the date components if needed (though the input looks consistent).
+    *   Create a new column `cst` from `Date`.
+3.  **Column Renaming**:
+    *   The hourly columns `1:00` through `23:00` have the same names in both source and target.
+    *   The source column `24:00:00` needs to be renamed to `24:00` to match the target schema.
+4.  **Column Selection**:
+    *   Drop the `Segment` column as it is not present in the target.
+    *   Drop the original `Date` column since we created `cst`.
+    *   Select the final columns in the order specified by the target schema: `cst`, followed by `1:00` through `24:00`.
+5.  **Implementation**:
+    *   Copy the source DataFrame.
+    *   Parse `Date` to datetime and format to `cst`.
+    *   Rename `24:00:00` to `24:00`.
+    *   Select and return the specific target columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Transform Date to cst
+    # Parse the date string to datetime object
+    # The format is 'Day MM/DD/YYYY' (e.g., 'Thu 10/01/2009')
+    # We can parse it directly or split. pd.to_datetime handles this format well.
+    dt = pd.to_datetime(df['Date'], format='%a %m/%d/%Y')
+    df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+    
+    # 2. Rename columns
+    # Source has '24:00:00', target has '24:00'
+    rename_map = {'24:00:00': '24:00'}
+    df = df.rename(columns=rename_map)
+    
+    # 3. Define target columns verbatim
+    target_columns = ['cst'] + [f'{h}:00' for h in range(1, 25)]
+    
+    # 4. Select and return only the target columns
+    return df[target_columns]
+```

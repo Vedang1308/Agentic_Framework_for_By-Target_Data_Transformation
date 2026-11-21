@@ -1,0 +1,130 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Dates and Extract Components**:
+    *   The source column `date` is in the format `%m/%d/%Y %H:%M`. We need to parse this into a datetime object to extract the date part and the hour part.
+    *   The target column `cst` requires the format `%a %m/%d/%Y` (e.g., 'Mon 01/01/2018'). This suggests grouping by the calendar date.
+    *   The target columns `1:00` through `24:00` suggest grouping by hour. Note that standard hours are 0-23. The column `24:00` likely corresponds to hour 0 of the *next* day, or it represents the 24th hour of the current day (which is technically 00:00 of the next day). Let's look at the sample data.
+        *   Source sample has `1/2/2018 0:11`.
+        *   Target sample has `Tue 01/02/2018` with values mostly 0, but `24:00` has `746.9`.
+        *   Target sample has `Mon 01/01/2018` with non-zero values for all hours.
+    *   Let's analyze the hour mapping. The target columns are `1:00` to `24:00`.
+        *   Usually, `1:00` corresponds to hour 1 (1:00 AM - 1:59 AM).
+        *   `24:00` is a non-standard label for hour 0 (12:00 AM - 12:59 AM) of the *same* day in some contexts, or hour 0 of the *next* day.
+        *   Let's check the source data for `1/2/2018`. The sample shows `0:11`, `0:12` etc. These are hour 0.
+        *   In the target, for `Tue 01/02/2018`, the value `746.9` is in column `24:00`. The other columns `1:00` to `23:00` are 0. This implies that the data points with hour `0` on `1/2/2018` are aggregated into the `24:00` column for the date `01/02/2018`.
+        *   Therefore, the mapping is:
+            *   Hour 1 -> Column `1:00`
+            *   ...
+            *   Hour 23 -> Column `23:00`
+            *   Hour 0 -> Column `24:00` (associated with the same date)
+
+2.  **Grouping and Aggregation**:
+    *   We need to group the data by the date (to form the `cst` column) and by the hour (to form the wide columns).
+    *   Since there are multiple rows per minute/hour, we need an aggregation function. The target values look like sums or averages. Let's look at the magnitude.
+        *   Source `zone_016` values are around 60-70.
+        *   Target values are around 4000.
+        *   If we sum up ~60 minutes * ~60-70 value, we get ~3600-4200. This matches the magnitude of the target values (e.g., 4073.5).
+        *   Therefore, the aggregation function is likely `sum`.
+
+3.  **Handling Missing Values**:
+    *   The source has `nan` values. The `sum` aggregation in pandas ignores NaNs by default (`skipna=True`), which is desirable. If a group has only NaNs, the sum will be 0 (or NaN, depending on implementation, but usually 0 if no valid numbers). The target shows `0` for empty hours, so we should fill NaNs with 0 after aggregation.
+
+4.  **Constructing the Target DataFrame**:
+    *   Extract `date` and `hour` from the parsed datetime.
+    *   Create a column for the target date string `cst` formatted as `%a %m/%d/%Y`.
+    *   Create a column for the target hour label. Map hour 0 to `'24:00'` and hours 1-23 to `'1:00'`...`'23:00'`.
+    *   Group by `cst` and the hour label.
+    *   Sum the `zone_016` values.
+    *   Pivot/Unstack the result so that the hour labels become columns and `cst` becomes the index.
+    *   Reset the index to make `cst` a column.
+    *   Ensure all expected hour columns (`1:00` to `24:00`) exist, filling missing ones with 0.
+    *   Sort the index or columns if necessary (though the order is determined by the column list).
+    *   Format the `cst` column if not already done during grouping.
+
+5.  **Refining the Hour Mapping**:
+    *   Standard `dt.hour` gives 0-23.
+    *   We need a mapping: `0 -> '24:00'`, `1 -> '1:00'`, ..., `23 -> '23:00'`.
+    *   Let's create a helper function or use `replace`/`map`.
+
+6.  **Final Output Formatting**:
+    *   The target columns are `['cst', '1:00', ..., '24:00']`.
+    *   We must ensure the final DataFrame has these exact columns.
+
+### Implementation Details
+
+1.  Parse `source['date']` to datetime.
+2.  Extract `date` (for grouping key) and `hour` (0-23).
+3.  Create `cst` string: `dt.strftime('%a %m/%d/%Y')`.
+4.  Create `hour_label`:
+    *   If `hour == 0`, label is `'24:00'`.
+    *   Else, label is `f'{hour}:00'`.
+5.  Group by `cst` and `hour_label`.
+6.  Sum `zone_016`.
+7.  Unstack `hour_label` to columns.
+8.  Fill NaNs with 0.
+9.  Ensure all columns 1:00 to 24:00 exist.
+10. Sort index by date (optional but good for consistency).
+11. Select and return columns in the specified order.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # 1. Parse the date column
+    df = source.copy()
+    df['parsed_date'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract components for grouping
+    # The target 'cst' format is '%a %m/%d/%Y'
+    df['cst'] = df['parsed_date'].dt.strftime('%a %m/%d/%Y')
+    
+    # Extract hour (0-23)
+    df['hour'] = df['parsed_date'].dt.hour
+    
+    # 3. Map hours to target column labels
+    # Hour 0 maps to '24:00', Hours 1-23 map to '1:00'-'23:00'
+    def get_hour_label(h):
+        if h == 0:
+            return '24:00'
+        else:
+            return f'{h}:00'
+            
+    df['hour_label'] = df['hour'].apply(get_hour_label)
+    
+    # 4. Group by 'cst' and 'hour_label' and sum the values
+    # Using sum() to aggregate the zone_016 values
+    grouped = df.groupby(['cst', 'hour_label'])['zone_016'].sum().reset_index()
+    
+    # 5. Pivot the data to wide format
+    # Index: cst, Columns: hour_label, Values: zone_016
+    pivoted = grouped.pivot(index='cst', columns='hour_label', values='zone_016')
+    
+    # 6. Handle missing combinations (fill with 0)
+    pivoted = pivoted.fillna(0)
+    
+    # 7. Ensure all required columns exist and are in the correct order
+    target_columns = ['cst', '1:00', '2:00', '3:00', '4:00', '5:00', '6:00', '7:00', '8:00', '9:00', 
+                      '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', 
+                      '19:00', '20:00', '21:00', '22:00', '23:00', '24:00']
+    
+    # Extract the hour columns from the target list (excluding 'cst')
+    hour_cols = target_columns[1:]
+    
+    # Ensure all hour columns exist in the pivoted dataframe, adding missing ones with 0
+    for col in hour_cols:
+        if col not in pivoted.columns:
+            pivoted[col] = 0
+            
+    # Reset index to make 'cst' a column
+    pivoted = pivoted.reset_index()
+    
+    # 8. Sort by date (optional but ensures consistent ordering)
+    # Parse cst back to datetime for sorting, then drop the helper
+    pivoted['sort_key'] = pd.to_datetime(pivoted['cst'], format='%a %m/%d/%Y')
+    pivoted = pivoted.sort_values('sort_key').drop('sort_key', axis=1)
+    
+    # 9. Select and return only the required columns in the exact order
+    return pivoted[target_columns]
+```

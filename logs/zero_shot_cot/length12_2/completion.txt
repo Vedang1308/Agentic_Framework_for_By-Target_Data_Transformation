@@ -1,0 +1,228 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Understand the Goal**: The objective is to transform a high-frequency (15-minute interval) source table containing detailed appliance-level energy consumption data into a lower-frequency (hourly) aggregated table grouped by season. The target table has 96 rows, which corresponds to 4 seasons × 24 hours.
+
+2.  **Analyze Source Data**:
+    *   **Time Column**: `local_15min` is a string in format `%m/%d/%Y %H:%M`. This needs to be parsed into a datetime object to extract the hour and determine the season.
+    *   **Appliance Columns**: There are many columns ending in `_sum` (energy consumption) and `_count` (number of active devices/instances). The target columns represent aggregated energy consumption for specific categories. We primarily need the `_sum` columns.
+    *   **Categories**: The target columns (`hvac`, `water_heating`, etc.) are aggregations of specific source appliance columns. We need to map source columns to these target categories.
+
+3.  **Define Category Mappings**:
+    Based on standard home energy monitoring datasets (like the one this appears to be derived from, likely the "Smart* Meter" or similar dataset), we can infer the mappings:
+    *   **hvac**: `air1_sum`, `air2_sum`, `air3_sum`, `airwindowunit1_sum`, `furnace1_sum`, `furnace2_sum`, `heater1_sum`, `heater2_sum`, `heater3_sum`, `housefan1_sum`. (Note: `circpump1` might be HVAC related but often separate; let's look at the magnitude. HVAC is usually the largest. Let's include central air and furnaces).
+    *   **water_heating**: `waterheater1_sum`, `waterheater2_sum`.
+    *   **refrigerator**: `refrigerator1_sum`, `refrigerator2_sum`, `freezer1_sum`, `icemaker1_sum`, `winecooler1_sum`.
+    *   **clothes_washer**: `clotheswasher1_sum`, `clotheswasher_dryg1_sum` (sometimes washer/dryer are combined or separate, but `clotheswasher` is explicit).
+    *   **clothes_dryer**: `drye1_sum`, `dryg1_sum`.
+    *   **dishwasher**: `dishwasher1_sum`.
+    *   **cooking_range**: `oven1_sum`, `oven2_sum`, `range1_sum`, `microwave1_sum`, `disposal1_sum` (garbage disposal is often grouped with kitchen/cooking).
+    *   **pool_spa_pumps**: `poolpump1_sum`, `pump1_sum`, `jacuzzi1_sum` (pumps for spa/pool).
+    *   **interior_lighting**: This is tricky. It likely sums up lighting from various rooms. `bathroom1_sum`, `bathroom2_sum`, `bedroom1_sum`...`bedroom5_sum`, `diningroom1_sum`, `diningroom2_sum`, `kitchen1_sum`, `kitchen2_sum`, `livingroom1_sum`, `livingroom2_sum`, `office1_sum`, `utilityroom1_sum`, `garage1_sum`, `garage2_sum`, `shed1_sum`. Note: The target has `interior_lighting`, `exterior_lighting`, and `lighting`. Often `lighting` is the sum of interior and exterior. Let's look at the target values. `interior_lighting` == `exterior_lighting` == `lighting` in the sample? No, wait. In the sample:
+        *   Row 1: interior=17255.8, exterior=17255.8, lighting=17255.8. They are identical.
+        *   Row 2: interior=6023.85, exterior=6023.85, lighting=6023.85.
+        *   This suggests `lighting` is just a copy of one of them, or they are calculated identically. Let's assume `interior_lighting` sums indoor room lights and `exterior_lighting` sums outdoor lights.
+        *   Indoor rooms: `bathroom1`, `bathroom2`, `bedroom1`-`5`, `diningroom1`-`2`, `kitchen1`-`2`, `livingroom1`-`2`, `office1`, `utilityroom1`, `garage1`-`2`, `shed1`.
+        *   Outdoor lights: `poollight1`, `outsidelights_plugs1`, `outsidelights_plugs2`, `sprinkler1` (maybe?), `security1` (maybe?).
+        *   Let's check `plug`. `plug` usually includes `lights_plugs1`-`6`, `kitchenapp1`-`2`, `battery1`, `car1`-`2`, `aquarium1`, `security1`, `sumppump1`, `wellpump1`, `sewerpump1`.
+        *   Let's refine `interior_lighting`. It likely refers to dedicated lighting circuits in rooms.
+        *   Let's refine `exterior_lighting`. `poollight1`, `outsidelights_plugs1`, `outsidelights_plugs2`.
+        *   Let's refine `lighting`. If `interior` and `exterior` are equal in the sample, maybe the dataset doesn't distinguish well, or `lighting` is just `interior_lighting`. Or perhaps `lighting` = `interior` + `exterior`? If they are equal, then `exterior` is 0? No, the values are large.
+        *   Let's look at `pool_spa_heaters`. `pool1_sum`, `pool2_sum`.
+        *   Let's look at `plug`. This is a catch-all for miscellaneous plugs. `lights_plugs1`-`6`, `kitchenapp1`-`2`, `battery1`, `car1`, `car2`, `aquarium1`, `security1`, `sumppump1`, `wellpump1`, `sewerpump1`, `sprinkler1`.
+
+    *   **Re-evaluating Lighting**:
+        In many such datasets, `interior_lighting` is the sum of all room-specific lighting columns. `exterior_lighting` is the sum of outdoor lighting columns. `lighting` is often the total.
+        However, in the sample, `interior_lighting` == `exterior_lighting` == `lighting`. This is suspicious. It might mean that for this specific aggregation, the values happen to be the same, or the definition is `lighting` = `interior_lighting` and `exterior_lighting` is also set to that? Or maybe `exterior_lighting` is 0 and `interior` is the total? No, the values are non-zero.
+        Let's assume:
+        `interior_lighting` = Sum of `bathroom1_sum`, `bathroom2_sum`, `bedroom1_sum`...`bedroom5_sum`, `diningroom1_sum`, `diningroom2_sum`, `kitchen1_sum`, `kitchen2_sum`, `livingroom1_sum`, `livingroom2_sum`, `office1_sum`, `utilityroom1_sum`, `garage1_sum`, `garage2_sum`, `shed1_sum`.
+        `exterior_lighting` = Sum of `poollight1_sum`, `outsidelights_plugs1_sum`, `outsidelights_plugs2_sum`.
+        `lighting` = `interior_lighting` + `exterior_lighting`.
+        If the sample shows them equal, it might be a coincidence or a specific property of the test data. I will implement the logical sum.
+
+    *   **Re-evaluating HVAC**:
+        `air1_sum`, `air2_sum`, `air3_sum`, `airwindowunit1_sum`, `furnace1_sum`, `furnace2_sum`, `heater1_sum`, `heater2_sum`, `heater3_sum`, `housefan1_sum`.
+
+    *   **Re-evaluating Plug**:
+        `lights_plugs1_sum`...`lights_plugs6_sum`, `kitchenapp1_sum`, `kitchenapp2_sum`, `battery1_sum`, `car1_sum`, `car2_sum`, `aquarium1_sum`, `security1_sum`, `sumppump1_sum`, `wellpump1_sum`, `sewerpump1_sum`, `sprinkler1_sum`.
+
+4.  **Season Calculation**:
+    *   Parse `local_15min` to datetime.
+    *   Extract month.
+    *   Map months to seasons:
+        *   Winter: Dec, Jan, Feb
+        *   Spring: Mar, Apr, May
+        *   Summer: Jun, Jul, Aug
+        *   Fall: Sep, Oct, Nov
+    *   *Self-Correction*: The target sample has "Summer", "Winter", "Spring". It does not show "Fall". This is likely because the sample is truncated. I must include Fall.
+
+5.  **Aggregation**:
+    *   Group by `season` and `hour`.
+    *   Sum the mapped columns for each group.
+    *   Since the source is 15-min data, summing 4 rows gives the hourly total.
+
+6.  **Final Formatting**:
+    *   Ensure column names match exactly.
+    *   Sort by season and hour if necessary (though not strictly required, it's good practice). The target sample is not sorted by hour, it seems random or by season then hour? The sample shows Summer 19, Winter 4, Winter 6... It's not sorted. I will just return the grouped result.
+
+7.  **Implementation Details**:
+    *   Create a mapping dictionary for clarity.
+    *   Use `pd.Grouper` or `groupby` with `sum()`.
+    *   Handle potential NaNs in source data (sum ignores NaNs by default).
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame with 15-minute interval appliance data
+    into an hourly aggregated DataFrame grouped by season.
+    """
+    # 1. Parse the datetime column
+    df = source.copy()
+    df['local_15min'] = pd.to_datetime(df['local_15min'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract hour and determine season
+    df['hour'] = df['local_15min'].dt.hour
+    
+    # Define season based on month
+    # Winter: Dec (12), Jan (1), Feb (2)
+    # Spring: Mar (3), Apr (4), May (5)
+    # Summer: Jun (6), Jul (7), Aug (8)
+    # Fall: Sep (9), Oct (10), Nov (11)
+    def get_season(month):
+        if month in [12, 1, 2]:
+            return 'Winter'
+        elif month in [3, 4, 5]:
+            return 'Spring'
+        elif month in [6, 7, 8]:
+            return 'Summer'
+        else:
+            return 'Fall'
+            
+    df['season'] = df['local_15min'].dt.month.apply(get_season)
+
+    # 3. Define column mappings for aggregation
+    # We sum the '_sum' columns for each category
+    
+    hvac_cols = [
+        'air1_sum', 'air2_sum', 'air3_sum', 'airwindowunit1_sum',
+        'furnace1_sum', 'furnace2_sum',
+        'heater1_sum', 'heater2_sum', 'heater3_sum',
+        'housefan1_sum'
+    ]
+    
+    water_heating_cols = [
+        'waterheater1_sum', 'waterheater2_sum'
+    ]
+    
+    refrigerator_cols = [
+        'refrigerator1_sum', 'refrigerator2_sum',
+        'freezer1_sum', 'icemaker1_sum', 'winecooler1_sum'
+    ]
+    
+    clothes_washer_cols = [
+        'clotheswasher1_sum', 'clotheswasher_dryg1_sum'
+    ]
+    
+    clothes_dryer_cols = [
+        'drye1_sum', 'dryg1_sum'
+    ]
+    
+    dishwasher_cols = [
+        'dishwasher1_sum'
+    ]
+    
+    cooking_range_cols = [
+        'oven1_sum', 'oven2_sum', 'range1_sum',
+        'microwave1_sum', 'disposal1_sum'
+    ]
+    
+    pool_spa_pumps_cols = [
+        'poolpump1_sum', 'pump1_sum', 'jacuzzi1_sum'
+    ]
+    
+    # Interior lighting: Sum of lighting in specific rooms
+    interior_lighting_cols = [
+        'bathroom1_sum', 'bathroom2_sum',
+        'bedroom1_sum', 'bedroom2_sum', 'bedroom3_sum', 'bedroom4_sum', 'bedroom5_sum',
+        'diningroom1_sum', 'diningroom2_sum',
+        'kitchen1_sum', 'kitchen2_sum',
+        'livingroom1_sum', 'livingroom2_sum',
+        'office1_sum', 'utilityroom1_sum',
+        'garage1_sum', 'garage2_sum', 'shed1_sum'
+    ]
+    
+    # Exterior lighting: Outdoor lights
+    exterior_lighting_cols = [
+        'poollight1_sum', 'outsidelights_plugs1_sum', 'outsidelights_plugs2_sum'
+    ]
+    
+    # Plug loads: Miscellaneous plugs
+    plug_cols = [
+        'lights_plugs1_sum', 'lights_plugs2_sum', 'lights_plugs3_sum',
+        'lights_plugs4_sum', 'lights_plugs5_sum', 'lights_plugs6_sum',
+        'kitchenapp1_sum', 'kitchenapp2_sum',
+        'battery1_sum', 'car1_sum', 'car2_sum',
+        'aquarium1_sum', 'security1_sum',
+        'sumppump1_sum', 'wellpump1_sum', 'sewerpump1_sum', 'sprinkler1_sum'
+    ]
+    
+    pool_spa_heaters_cols = [
+        'pool1_sum', 'pool2_sum'
+    ]
+
+    # 4. Perform Aggregation
+    # Group by season and hour, then sum the relevant columns
+    grouped = df.groupby(['season', 'hour'])
+    
+    agg_dict = {
+        'hvac': (hvac_cols, 'sum'),
+        'water_heating': (water_heating_cols, 'sum'),
+        'refrigerator': (refrigerator_cols, 'sum'),
+        'clothes_washer': (clothes_washer_cols, 'sum'),
+        'clothes_dryer': (clothes_dryer_cols, 'sum'),
+        'dishwasher': (dishwasher_cols, 'sum'),
+        'cooking_range': (cooking_range_cols, 'sum'),
+        'pool_spa_pumps': (pool_spa_pumps_cols, 'sum'),
+        'interior_lighting': (interior_lighting_cols, 'sum'),
+        'exterior_lighting': (exterior_lighting_cols, 'sum'),
+        'plug': (plug_cols, 'sum'),
+        'pool_spa_heaters': (pool_spa_heaters_cols, 'sum')
+    }
+    
+    # Initialize result dataframe
+    result = grouped.sum()
+    
+    # Construct the new columns by summing the lists of columns
+    for col_name, (src_cols, agg_func) in agg_dict.items():
+        # Select only existing columns to avoid KeyError if some appliances are missing in some datasets
+        existing_cols = [c for c in src_cols if c in df.columns]
+        if existing_cols:
+            result[col_name] = result[existing_cols].sum(axis=1)
+        else:
+            result[col_name] = 0.0
+            
+    # Calculate 'lighting' as sum of interior and exterior
+    result['lighting'] = result['interior_lighting'] + result['exterior_lighting']
+    
+    # Reset index to make season and hour regular columns
+    result = result.reset_index()
+    
+    # Select and order the target columns
+    target_columns = [
+        'season', 'hour', 'hvac', 'water_heating', 'refrigerator', 
+        'clothes_washer', 'clothes_dryer', 'dishwasher', 'cooking_range', 
+        'pool_spa_pumps', 'interior_lighting', 'exterior_lighting', 
+        'lighting', 'plug', 'pool_spa_heaters'
+    ]
+    
+    # Ensure all target columns exist
+    for col in target_columns:
+        if col not in result.columns:
+            result[col] = 0.0
+            
+    return result[target_columns]
+```

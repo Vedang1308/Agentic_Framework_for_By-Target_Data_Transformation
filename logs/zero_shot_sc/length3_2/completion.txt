@@ -1,0 +1,104 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Dates**: The source `date` column is a string in the format `%m/%d/%Y %H:%M`. We need to parse this into a proper datetime object to extract the date and hour components.
+2.  **Extract Date and Hour**:
+    *   Extract the calendar date (year, month, day) to group records by day. This will become the new `date` column in the target.
+    *   Extract the hour of the day (0-23). This will determine which "Hour X" column the data belongs to. Note that the target columns are labeled "Hour 1" through "Hour 24", corresponding to hours 0-23 (where Hour 1 is 0:00-0:59, Hour 2 is 1:00-1:59, etc.).
+3.  **Aggregate Data**: The source has multiple readings per hour (e.g., every 10 minutes). The target has one value per hour per day. We need to aggregate these readings. Looking at the sample data, the values in the target (e.g., 24.25) appear to be the **mean** (average) of the readings for that hour. For instance, if we had readings 24.562, 24.625, etc., averaging them yields a specific float. Let's verify with a mental check: if the data is dense, `mean` is the standard aggregation for sensor data like this unless `sum` or `max` is specified. Given the smooth nature of the target values, `mean` is the most likely candidate.
+4.  **Pivot/Reshape**:
+    *   Group by the extracted date and the extracted hour.
+    *   Calculate the mean of `cerc_logger_1` for each group.
+    *   Pivot the data so that the unique hours (0-23) become columns.
+    *   Rename the hour columns to match the target schema: "Hour 1", "Hour 2", ..., "Hour 24".
+5.  **Format Date Column**: The target `date` column is a string in the format `%m/%d/%Y`. We need to format the date index/column accordingly.
+6.  **Handle Missing Data**: If a specific hour has no data for a day, it will result in NaN. The target table might handle this, but typically we just let pandas handle it or fill with NaN. The problem doesn't specify filling, so we keep NaNs if they exist, but usually, sensor data is complete.
+7.  **Sort and Index**: The target sample shows dates in descending order (05/08/2019, then 05/07/2019...). However, standard transformations usually preserve the natural order or sort ascending. Let's look at the target sample again.
+    *   Row 1: 05/08/2019
+    *   Row 2: 05/07/2019
+    *   Row 3: 03/10/2018 (Wait, this is not strictly descending by day from the previous row? 05/07 -> 03/10 is a big jump. It looks like the sample rows are just random samples from the target file, not necessarily contiguous or sorted in a specific way in the *display*. However, standard practice is to sort by date ascending. Let's check the source: source is sorted by date ascending. The target sample rows are:
+        *   05/08/2019
+        *   05/07/2019
+        *   03/10/2018
+        *   04/16/2019
+        *   10/08/2018
+        *   03/20/2019
+        *   07/12/2019
+        *   07/06/2019
+    *   These are clearly just random rows selected for display. The actual target file likely has a specific order. Usually, TbT targets are sorted by the primary key (date) ascending. I will sort by date ascending to be safe, as is standard for time-series aggregation. If the evaluation expects a specific order, ascending is the most robust assumption unless "descending" is explicitly hinted. Given the source is ascending, keeping it ascending is the most logical "general" transformation.
+
+8.  **Construct Final DataFrame**:
+    *   Create columns `['date', 'Hour 1', ..., 'Hour 24']`.
+    *   Ensure the `date` column is formatted as `MM/DD/YYYY`.
+
+### Implementation Details
+
+*   **Parsing**: `pd.to_datetime(source['date'], format='%m/%d/%Y %H:%M')`
+*   **Grouping**: `df.groupby(['date_only', 'hour'])['cerc_logger_1'].mean()`
+*   **Pivoting**: Use `unstack` on the hour level.
+*   **Renaming**: Map hour 0 -> 'Hour 1', hour 1 -> 'Hour 2', ..., hour 23 -> 'Hour 24'.
+
+Let's write the code.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame (sensor readings every 10 mins) into a daily hourly average DataFrame.
+    """
+    # 1. Parse the date column
+    # The source format is '%m/%d/%Y %H:%M'
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract date and hour
+    # We need the calendar date for grouping and the hour for pivoting
+    df['date_only'] = df['datetime'].dt.date
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 3. Aggregate
+    # Group by date and hour, then calculate the mean of cerc_logger_1
+    # This reduces the ~144 readings per day (24*6) to 24 readings per day
+    daily_hourly_avg = df.groupby(['date_only', 'hour'])['cerc_logger_1'].mean()
+    
+    # 4. Pivot
+    # Unstack the hour level to create columns for each hour
+    # daily_hourly_avg is a Series with MultiIndex (date_only, hour)
+    # unstack() will move 'hour' to columns
+    pivoted = daily_hourly_avg.unstack(level='hour')
+    
+    # 5. Rename Columns
+    # The target columns are 'Hour 1' to 'Hour 24'
+    # Our hours are 0 to 23. So Hour = hour + 1
+    new_columns = []
+    for h in range(24):
+        new_columns.append(f'Hour {h + 1}')
+    
+    # Ensure we have all 24 columns, even if some hours are missing in the data
+    # Create a full range of hours 0-23
+    full_hours = pd.RangeIndex(0, 24)
+    pivoted = pivoted.reindex(columns=full_hours)
+    
+    # Rename the columns to match the target schema
+    pivoted.columns = new_columns
+    
+    # 6. Format the Date Column
+    # The index is 'date_only' (which is a date object). We need to format it as MM/DD/YYYY string.
+    pivoted.index.name = 'date'
+    pivoted = pivoted.reset_index()
+    
+    # Convert date object to string in MM/DD/YYYY format
+    pivoted['date'] = pivoted['date'].apply(lambda x: x.strftime('%m/%d/%Y'))
+    
+    # 7. Sort by date (ascending is standard)
+    pivoted = pivoted.sort_values(by='date').reset_index(drop=True)
+    
+    # 8. Define target columns
+    target_columns = ['date', 'Hour 1', 'Hour 2', 'Hour 3', 'Hour 4', 'Hour 5', 'Hour 6', 
+                      'Hour 7', 'Hour 8', 'Hour 9', 'Hour 10', 'Hour 11', 'Hour 12', 
+                      'Hour 13', 'Hour 14', 'Hour 15', 'Hour 16', 'Hour 17', 'Hour 18', 
+                      'Hour 19', 'Hour 20', 'Hour 21', 'Hour 22', 'Hour 23', 'Hour 24']
+    
+    return pivoted[target_columns]
+```

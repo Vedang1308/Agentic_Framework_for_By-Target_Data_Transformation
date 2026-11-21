@@ -1,0 +1,78 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Segment`, `Date`, and 24 hourly columns named `1:00` through `24:00:00`. The `Date` column is in the format `%a %m/%d/%Y` (e.g., 'Thu 10/01/2009').
+    *   **Target**: Contains columns `date` and `Hour 1` through `Hour 24`. The `date` column is in the format `%m/%d/%Y` (e.g., '01/01/2003').
+    *   **Row Count**: The number of rows remains the same (2465 in sample), indicating a row-wise transformation rather than a pivot or aggregation.
+
+2.  **Date Transformation**:
+    *   The source `Date` column includes the day of the week (e.g., "Thu ").
+    *   The target `date` column requires only the month, day, and year.
+    *   Strategy: Parse the source `Date` string to extract the date part. Since the format is consistent (`%a %m/%d/%Y`), we can use `pd.to_datetime` with the specific format to parse it, then format it back to `%m/%d/%Y`. Alternatively, since the day of the week is always followed by a space, we can simply split the string and take the second part, but parsing is safer for generalization.
+
+3.  **Column Renaming**:
+    *   The source hourly columns are named `1:00`, `2:00`, ..., `23:00`, `24:00:00`.
+    *   The target hourly columns are named `Hour 1`, `Hour 2`, ..., `Hour 23`, `Hour 24`.
+    *   Strategy: Create a mapping dictionary or a list of new column names.
+        *   `1:00` -> `Hour 1`
+        *   `2:00` -> `Hour 2`
+        *   ...
+        *   `23:00` -> `Hour 23`
+        *   `24:00:00` -> `Hour 24`
+    *   Note: The last column `24:00:00` has a slightly different suffix (`:00` vs `:00:00`), so a simple regex replacement or explicit mapping is needed.
+
+4.  **Column Selection and Ordering**:
+    *   The target table does not include the `Segment` column.
+    *   The final DataFrame must have columns in the order: `date`, `Hour 1`, ..., `Hour 24`.
+
+5.  **Implementation Steps**:
+    *   Create a copy of the source DataFrame to avoid modifying the original.
+    *   Transform the `Date` column:
+        *   Parse using `pd.to_datetime(df['Date'], format='%a %m/%d/%Y')`.
+        *   Format using `.dt.strftime('%m/%d/%Y')`.
+        *   Rename the column to `date`.
+    *   Define the list of source hour columns and target hour columns.
+    *   Rename the hour columns in the DataFrame.
+    *   Select only the required columns (`date` and the renamed hour columns).
+    *   Return the resulting DataFrame.
+
+### Python Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    # Create a copy to avoid SettingWithCopyWarning and preserve original
+    df = source.copy()
+    
+    # 1. Transform the Date column
+    # Source format: '%a %m/%d/%Y' (e.g., 'Thu 10/01/2009')
+    # Target format: '%m/%d/%Y' (e.g., '01/01/2003')
+    # We parse the date and then format it to the desired string representation.
+    df['date'] = pd.to_datetime(df['Date'], format='%a %m/%d/%Y').dt.strftime('%m/%d/%Y')
+    
+    # 2. Define the mapping for hour columns
+    # Source columns: '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target columns: 'Hour 1', 'Hour 2', ..., 'Hour 23', 'Hour 24'
+    
+    # Generate source column names
+    source_hour_cols = [f"{h}:00" for h in range(1, 24)] + ["24:00:00"]
+    
+    # Generate target column names
+    target_hour_cols = [f"Hour {h}" for h in range(1, 25)]
+    
+    # Create a rename mapping
+    rename_map = dict(zip(source_hour_cols, target_hour_cols))
+    
+    # Rename the columns
+    df = df.rename(columns=rename_map)
+    
+    # 3. Select the final columns in the correct order
+    target_columns = ['date'] + target_hour_cols
+    
+    # Ensure we only return the required columns
+    df = df[target_columns]
+    
+    return df[target_columns]
+```

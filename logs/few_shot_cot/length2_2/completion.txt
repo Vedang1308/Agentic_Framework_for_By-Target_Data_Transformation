@@ -1,0 +1,87 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `class`, `Description`, `analysis`, `date`, `value1`...`value24`, `uom`. The `date` column is in string format (e.g., '7/3/2011'). The `value` columns represent hourly data for hours 1 through 24.
+    *   **Target**: Contains columns `dt_strata`, `dow`, `pct_hourly_0100`...`pct_hourly_2400`, `pct_hourly_2500`.
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target might include a date that is not present in the provided source sample, or there is an aggregation/grouping step. However, looking at the sample data, the source rows map 1-to-1 to target rows based on the date. The extra row in the target (183 vs 182) likely implies that the full dataset (not just the sample) has one more date, or potentially a "zero" row is added. But typically in these TbT tasks, if the mapping is 1-to-1 for the visible rows, we assume a direct transformation. Let's look closer. The source sample starts at 7/3/2011. The target sample starts at 1/1/2011. This indicates the source table provided in the prompt is a *subset* or the target covers a wider range. The transformation logic must be general: for every row in the source, produce a corresponding row in the target. The row count difference in the prompt description ("182 rows" vs "183 rows") might be a hint about the full dataset size, but the transformation function should process whatever is in `source`. If the target has an extra row not in source, it's impossible to generate it without external data. However, usually, these benchmarks imply that the `source` DataFrame passed to the function contains all necessary data to produce the `target`. If the target has 183 rows and source has 182, it's possible one date is missing in the source sample shown but present in the actual `source` argument, or there's a specific rule. Given the strict constraint "compute its result SOLELY from the `source` argument", we cannot invent rows. We will assume the `source` argument passed during testing will have the correct number of rows to match the target, or the "183" count includes a header or is a slight discrepancy in the problem description vs the actual data passed. The most robust approach is to transform each source row into a target row.
+
+2.  **Date Processing**:
+    *   Parse the `date` column from string (format `%m/%d/%Y`) to datetime.
+    *   Create `dt_strata` by formatting the datetime back to `%m/%d/%Y`. Note: The sample shows '1/1/2011' (single digit month/day) in target, while source shows '7/3/2011'. The format `%m/%d/%Y` in pandas `strftime` usually pads with zeros (e.g., '01/01/2011'). However, the target sample shows '1/1/2011'. Let's check the target sample again: `1/1/2011`. This is non-padded. Standard `strftime('%m/%d/%Y')` produces `01/01/2011`. To get `1/1/2011`, we might need `%m/%d/%Y` but strip leading zeros, or use a custom formatter. Let's look at Example 2 in the prompt: Target `dt_strata` sample was `['04/01/2009', '04/02/2009']` which is padded. Here, the target sample is `1/1/2011`. This is a crucial difference.
+    *   Wait, let's re-read the target sample carefully.
+        Target Sample: `1/1/2011`, `1/2/2011`, `1/3/2011`.
+        Source Sample: `7/3/2011`.
+        If I use `dt.strftime('%m/%d/%Y')`, I get `01/01/2011`.
+        If the target requires `1/1/2011`, I need to remove leading zeros.
+        However, often in these datasets, the display might be misleading or the format is actually `%m/%d/%Y` and the sample just happens to show single digits if the parser handles it. But pandas `to_datetime` with `format='%m/%d/%Y'` expects padded or unpadded? It handles both. `strftime` always pads.
+        Let's look at the "Datetime Format Inferences" section: "Target column 'dt_strata' requires date format '%m/%d/%Y' (sample: '1/1/2011')". This is contradictory. `%m` is zero-padded. `%#m` or `%-m` is not.
+        Let's check if the target sample values are actually `01/01/2011` but displayed as `1/1/2011` in the markdown table? No, the markdown table explicitly says `1/1/2011`.
+        Let's try to generate `1/1/2011`.
+        Method: `dt.strftime('%m/%d/%Y').str.lstrip('0').replace('/', '/', regex=False)`? No, that breaks `10/01/2011` -> `10/1/2011` (correct) but `01/01/2011` -> `1/1/2011` (correct).
+        Actually, a safer way to get non-padded dates in pandas is often tricky.
+        Alternative: Maybe the target format *is* padded and the sample display is just loose?
+        Let's look at Example 1: Target `cst` sample `['Fri 01/01/2016']`. Padded.
+        Example 2: Target `dt_strata` sample `['04/01/2009']`. Padded.
+        Example 3: Target `date` sample `['01/01/2016']`. Padded.
+        This case: Target `dt_strata` sample `['1/1/2011']`. Unpadded.
+        This is a specific requirement. I will implement a function to format dates as `M/D/YYYY` (no leading zeros).
+        Code: `df['dt_strata'] = dt.dt.strftime('%m/%d/%Y').apply(lambda x: '/'.join([str(int(p)) for p in x.split('/')]))`
+
+3.  **Day of Week (dow)**:
+    *   Calculate `dow` from the parsed datetime.
+    *   Standard pandas `dt.dayofweek` returns 0 (Monday) to 6 (Sunday).
+    *   Target sample: `1/1/2011` is a Saturday. `dow` is 6.
+    *   `1/2/2011` is a Sunday. `dow` is 7.
+    *   `1/3/2011` is a Monday. `dow` is 1.
+    *   This matches the convention: Monday=1, ..., Sunday=7.
+    *   Formula: `dt.dt.dayofweek + 1`.
+
+4.  **Hourly Value Columns**:
+    *   Source columns: `value1` to `value24`.
+    *   Target columns: `pct_hourly_0100` to `pct_hourly_2400`.
+    *   Mapping: `value1` -> `pct_hourly_0100`, ..., `value24` -> `pct_hourly_2400`.
+    *   Rename these columns.
+
+5.  **Extra Column `pct_hourly_2500`**:
+    *   Target has `pct_hourly_2500` with value `0` in all sample rows.
+    *   Add this column with value 0.
+
+6.  **Final Selection**:
+    *   Select columns in the exact order specified in the target schema.
+
+7.  **Refinement on Date Format**:
+    *   Let's double check if `1/1/2011` is truly unpadded.
+    *   If I use `dt.strftime('%m/%d/%Y')`, I get `01/01/2011`.
+    *   If the target expects `1/1/2011`, I must strip zeros.
+    *   Let's write a helper to strip leading zeros from month and day parts.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # 1. Parse date
+    dt = pd.to_datetime(df['date'])
+    
+    # 2. Format dt_strata as M/D/YYYY (no leading zeros)
+    # First format with leading zeros, then strip them
+    df['dt_strata'] = dt.dt.strftime('%m/%d/%Y').apply(lambda x: '/'.join([str(int(p)) for p in x.split('/')]))
+    
+    # 3. Calculate dow (Monday=1, Sunday=7)
+    df['dow'] = dt.dt.dayofweek + 1
+    
+    # 4. Rename value columns to pct_hourly_XXXX
+    rename_dict = {}
+    for i in range(1, 25):
+        rename_dict[f'value{i}'] = f'pct_hourly_{i:02d}00'
+    df = df.rename(columns=rename_dict)
+    
+    # 5. Add pct_hourly_2500 column with 0
+    df['pct_hourly_2500'] = 0
+    
+    # 6. Define target columns
+    target_columns = ['dt_strata', 'dow'] + [f'pct_hourly_{i:02d}00' for i in range(1, 25)] + ['pct_hourly_2500']
+    
+    # 7. Return selected columns
+    return df[target_columns]
+```

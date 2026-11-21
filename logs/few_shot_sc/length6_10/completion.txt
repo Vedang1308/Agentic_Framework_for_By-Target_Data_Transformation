@@ -1,0 +1,96 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source: `date` (datetime string), `zone_016_cooling_sp` (float). The source contains high-frequency data (5-minute intervals).
+    *   Target: `Date` (date string), `Hr 1` ... `Hr 24` (float). The target contains daily aggregated data where each hour is a separate column.
+    *   Row Count Change: Source has ~15k rows, Target has ~53 rows. This implies grouping by Date and pivoting hours into columns.
+
+2.  **Parse Date and Extract Components**:
+    *   Convert the source `date` column to datetime objects using `pd.to_datetime`.
+    *   Extract the date part (year, month, day) to create the grouping key. Let's call this `date_only`.
+    *   Extract the hour part (1-24) to create the pivot key. Note: `dt.hour` returns 0-23. The target columns are `Hr 1` to `Hr 24`. This suggests a mapping where hour 0 (12 AM) might map to `Hr 1` or `Hr 24`? Let's look at the sample.
+    *   Sample Source: `11/6/2018 21:45`. Hour is 21.
+    *   Sample Target for `11/06/2018`: `Hr 1` to `Hr 22` are 73, `Hr 23` and `Hr 24` are NaN.
+    *   Wait, the sample source only shows a few rows. Let's look at the target sample again.
+    *   Target `11/06/2018` has values up to `Hr 22`. `Hr 23` and `Hr 24` are NaN.
+    *   If the data starts at midnight, `Hr 1` usually corresponds to hour 0 (12:00 AM - 12:59 AM) or hour 1 (1:00 AM - 1:59 AM)?
+    *   Standard convention in many energy datasets: `Hr 1` = 12 AM (Hour 0), `Hr 2` = 1 AM (Hour 1), ..., `Hr 24` = 11 PM (Hour 23).
+    *   Let's verify with the sample. The source sample for `11/6/2018` shows times `21:45`, `21:50` etc. This is late evening. If `Hr 23` and `Hr 24` are NaN, it means data for hours 22 and 23 (if 1-based) or 21 and 22 (if 0-based mapped to 1-based) is missing?
+    *   Actually, looking at the target row `11/06/2018`, it has NaNs for `Hr 23` and `Hr 24`. If `Hr 1` = Hour 0, then `Hr 23` = Hour 22 (10 PM) and `Hr 24` = Hour 23 (11 PM). The source sample shows data at 21:45 (9 PM). It's possible the data just ends early or is sparse.
+    *   However, let's look at another row. `09/16/2018` has all 73s. This implies full day data.
+    *   Let's assume the standard mapping: `Hour 0` -> `Hr 1`, `Hour 1` -> `Hr 2`, ..., `Hour 23` -> `Hr 24`.
+    *   So, `Hour_Index = dt.hour + 1`.
+
+3.  **Aggregation Strategy**:
+    *   The source has multiple rows per hour (every 5 minutes). We need to aggregate these into a single value per hour per day.
+    *   The target values are integers/floats like 73. The source values are 73 or 84.
+    *   Since the sample target shows constant 73s for full days, and the source has 73s, a simple aggregation like `mean` or `first` or `last` might work. Given it's a "set point" (`cooling_sp`), it likely stays constant or changes step-wise. `mean` is a safe default for TbT unless specified otherwise, but `first` or `last` might preserve the step nature. However, looking at the distinct values `[73.0, 84.0]`, if a hour has mixed values, `mean` would result in a float. The target schema is float64.
+    *   Let's check if there's a specific aggregation implied. Usually, for setpoints, if they are constant within the hour, any aggregation works. If they change, `mean` is the most standard "summary" statistic. Let's use `mean`.
+
+4.  **Pivoting**:
+    *   Group by `date_only` and `Hour_Index`.
+    *   Aggregate `zone_016_cooling_sp`.
+    *   Pivot the table so that `Hour_Index` becomes columns and `date_only` becomes the index.
+    *   Rename columns to `Hr 1` ... `Hr 24`.
+
+5.  **Formatting Output**:
+    *   Format the `date_only` index as `%m/%d/%Y` and name it `Date`.
+    *   Reset index to make `Date` a column.
+    *   Ensure all columns `Hr 1` to `Hr 24` exist. If some hours are missing in the data, they will be NaN, which matches the sample.
+    *   Reorder columns to match target: `['Date', 'Hr 1', ..., 'Hr 24']`.
+
+6.  **Refinement on Hour Mapping**:
+    *   If `dt.hour` is 0 (12 AM), `Hr 1`.
+    *   If `dt.hour` is 23 (11 PM), `Hr 24`.
+    *   This seems consistent with the target column names `Hr 1`...`Hr 24`.
+
+7.  **Implementation Details**:
+    *   `df['datetime'] = pd.to_datetime(df['date'])`
+    *   `df['date_str'] = df['datetime'].dt.strftime('%m/%d/%Y')`
+    *   `df['hour_col'] = df['datetime'].dt.hour + 1`
+    *   `agg_df = df.groupby(['date_str', 'hour_col'])['zone_016_cooling_sp'].mean().reset_index()`
+    *   `pivot_df = agg_df.pivot(index='date_str', columns='hour_col', values='zone_016_cooling_sp')`
+    *   Rename columns: `pivot_df.columns = [f'Hr {i}' for i in pivot_df.columns]`
+    *   Ensure all 24 hours are present by reindexing columns with a complete range 1-24.
+    *   `pivot_df = pivot_df.reindex(columns=[f'Hr {i}' for i in range(1, 25)])`
+    *   Rename index to 'Date' and reset index.
+    *   Return selected columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse datetime
+    df['datetime'] = pd.to_datetime(df['date'])
+    
+    # 2. Extract date string for grouping and hour for pivoting
+    # Target date format is %m/%d/%Y
+    df['date_str'] = df['datetime'].dt.strftime('%m/%d/%Y')
+    
+    # Map hours: 0 (12 AM) -> 1, 1 (1 AM) -> 2, ..., 23 (11 PM) -> 24
+    df['hour_idx'] = df['datetime'].dt.hour + 1
+    
+    # 3. Aggregate data per date and hour
+    # Using mean as a standard aggregation for continuous values
+    agg_df = df.groupby(['date_str', 'hour_idx'])['zone_016_cooling_sp'].mean().reset_index()
+    
+    # 4. Pivot to wide format
+    pivot_df = agg_df.pivot(index='date_str', columns='hour_idx', values='zone_016_cooling_sp')
+    
+    # 5. Rename columns to 'Hr 1', 'Hr 2', ..., 'Hr 24'
+    pivot_df.columns = [f'Hr {int(col)}' for col in pivot_df.columns]
+    
+    # 6. Ensure all 24 hour columns exist, filling missing ones with NaN
+    target_hour_cols = [f'Hr {i}' for i in range(1, 25)]
+    pivot_df = pivot_df.reindex(columns=target_hour_cols)
+    
+    # 7. Reset index to make 'date_str' a column named 'Date'
+    pivot_df.index.name = 'Date'
+    pivot_df = pivot_df.reset_index()
+    
+    # 8. Select and order columns verbatim
+    target_columns = ['Date'] + target_hour_cols
+    return pivot_df[target_columns]
+```

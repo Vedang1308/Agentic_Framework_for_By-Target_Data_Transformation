@@ -1,0 +1,166 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Date Transformation**:
+    *   Source column `date` contains dates like '7/3/2011' (format `%m/%d/%Y`).
+    *   Target column `date` contains timestamps like '2011-01-01 00:00:00' (format `%Y-%m-%d %H:%M:%S`).
+    *   The source has 182 rows, while the target has 183 rows. This suggests the target includes a full year of data (365 days) or a specific range, whereas the source might be a subset or have missing days. However, looking at the samples:
+        *   Source starts around July 2011 and ends Dec 2011 in the snippet, but the prompt says 182 rows. A full year is 365. Half a year is ~182.
+        *   Target starts at `2011-01-01`.
+        *   Wait, let's look closer. The source sample shows dates in July and December 2011. The target sample shows dates starting Jan 1, 2011.
+        *   Crucially, the prompt states "Source sample rows: 182 rows" and "Target rows: 183 rows".
+        *   If the source is just a subset of days, and the target is a continuous range, we might need to generate missing dates. However, usually in these TbT tasks, if rows are added, it's often due to a `reindex` or filling missing dates if the source is supposed to represent a time series.
+        *   Let's check the distinct values. The source has `class`, `Description`, `analysis`, `uom` which are constant. This implies the data is for a single entity.
+        *   The target has only `date` and `Hour 1..24`.
+        *   If the source has 182 rows and target has 183, it's highly likely that the target represents a complete date range (e.g., a full year or a specific period) and the source might be missing one day, or the target includes an extra day (like leap year or just a different range).
+        *   Actually, looking at the target sample: `2011-01-01` to `2011-07-02` is shown. The source sample shows `7/3/2011` onwards. This is contradictory if we assume simple mapping.
+        *   Let's re-read carefully. "Source sample rows: 182". "Target rows: 183".
+        *   Hypothesis: The source data *is* the data for the target, but the target might be reindexed to a full date range? Or perhaps the source has duplicate dates that are aggregated?
+        *   Let's look at the values. Source `7/3/2011` has `value1` = 1.0243. Target `2011-07-02` (which is 7/2/2011) has `Hour 1` = 0.8341. Wait.
+        *   Source row 1: `7/3/2011`, `value1` = 1.0243.
+        *   Target row last shown: `2011-07-02`, `Hour 1` = 0.8341.
+        *   Let's check Source row 2: `7/4/2011`, `value1` = 0.8662.
+        *   There seems to be a mismatch in the sample display or my interpretation of the dates.
+        *   Let's look at the Target sample again.
+            *   `2011-07-02` (July 2nd) `Hour 1` is 0.8341.
+            *   Source `7/3/2011` (July 3rd) `value1` is 1.0243.
+            *   Source `7/2/2011` is NOT in the provided source sample snippet. The snippet starts at `7/3/2011`.
+            *   However, the Target sample *ends* with `2011-07-02`.
+            *   This implies the Target sample is just a few rows from the beginning/middle/end, not necessarily aligned with the Source snippet rows directly in the prompt display.
+            *   Key Insight: The transformation is likely a 1-to-1 mapping of rows, but the dates need to be formatted. The row count difference (182 vs 183) is small (1 row). This often happens if the source is missing a day (e.g., Feb 29 in a non-leap year, or just a missing day) and the target reindexes to a full date range, OR if the target includes a header/footer? No, DataFrame rows.
+            *   Let's assume the standard operation: Rename columns, format date. If the row counts differ, we might need to ensure the date index is continuous. But without knowing the exact missing date, we can't hardcode it.
+            *   Alternative: Maybe the source has 182 days and target has 183? 183 days is roughly half a year.
+            *   Let's look at the column mapping: `value1` -> `Hour 1`, ..., `value24` -> `Hour 24`. This is a direct rename.
+            *   Date formatting: `pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')`.
+            *   What about the extra row? If I simply transform the source, I get 182 rows. The target has 183.
+            *   Is it possible the source has a row that is aggregated? No, the schema is identical per row.
+            *   Is it possible the target includes a "total" or "average" row? The target sample doesn't show it.
+            *   Is it possible the source is missing one day of data that needs to be interpolated or filled?
+            *   Let's look at the distinct values again. `class`: ['RES'].
+            *   If the task is strictly "transform source to target", and the row counts differ, there must be a deterministic way to generate the extra row.
+            *   Common pattern: The source might be daily data. The target is daily data. If the source covers Jan 1 to Jun 30 (181 days) + 1 day = 182? Target covers Jan 1 to Jun 30 (181) + 2 days?
+            *   Actually, 2011 is not a leap year. Jan (31) + Feb (28) + Mar (31) + Apr (30) + May (31) + Jun (30) = 181 days.
+            *   If the source has 182 rows, it might cover Jan 1 to Jun 30 plus July 1? Or a different range.
+            *   If the target has 183 rows, it might cover Jan 1 to Jul 1?
+            *   Without explicit instructions on how to fill missing data, and given the "Strict Requirements" to not hardcode, the most robust assumption is that the provided `source` DataFrame *contains* the data for the target, and the row count discrepancy in the prompt description might be due to the specific test case having a missing day in the source that should be inferred, OR the prompt description of "182 vs 183" is a hint to check for missing dates.
+            *   However, in many TbT datasets, if the source is incomplete, the target is the "ground truth" complete series. But we cannot generate data from nothing.
+            *   Let's look at the samples again.
+                *   Source Sample: Starts `7/3/2011`.
+                *   Target Sample: Ends `2011-07-02`.
+                *   This suggests the Target Sample rows shown are *before* the Source Sample rows shown.
+                *   This implies the Source and Target cover the same time period, just different subsets shown in the prompt.
+                *   If the Source has 182 rows and Target has 183, and they cover the same period, one day is missing in Source.
+                *   Can we infer the missing day? If the dates are consecutive, we can detect the gap.
+                *   Plan:
+                    1. Parse source dates.
+                    2. Identify the min and max date.
+                    3. Create a full date range from min to max.
+                    4. Reindex the source data to this full date range. This will introduce a NaN row for the missing day.
+                    5. However, the target values are floats. We can't leave NaNs.
+                    6. Is there a pattern? The values look like load profiles.
+                    7. Maybe the missing row is not missing, but the source has a duplicate? No, 182 < 183.
+                    8. Let's check if the target *always* has 183 rows for this schema. If the source is guaranteed to have the data, maybe the source *does* have 183 rows in the actual test file, and the "182" in the prompt is a typo or refers to a specific training subset?
+                    9. Or, more likely: The source data *is* the target data, but the source might have been filtered?
+                    10. Let's assume the simplest case first: Direct mapping. If the row counts don't match in the final output, the evaluation will fail.
+                    11. Is there any aggregation? "HourlyLoad".
+                    12. Let's look at the columns `value1`..`value24`.
+                    13. Let's try to infer if we need to `reindex`.
+                    14. If I reindex to a full date range, I need to fill the missing values. How? Forward fill? Backward fill? Interpolate?
+                    15. Given the "RES01" and "HourlyLoad" context, these are likely residential load profiles. They are periodic.
+                    16. However, without a clear instruction, `reindex` with `ffill` or `bfill` is a guess.
+                    17. Let's look at the prompt again: "Row count changes from 182 to 183. Check if an aggregation, grouping, or pivoting operation is required."
+                    18. Aggregation/Grouping usually *reduces* rows. Pivoting can change structure.
+                    19. If rows *increase*, it's often `explode` or `reindex`.
+                    20. Since the columns are already wide (Hour 1..24), pivoting is unlikely to add rows unless we melt and then pivot back with a new index.
+                    21. Let's consider the possibility that the source has *two* entries for some days and we need to average them? No, that would reduce or keep same count.
+                    22. What if the source is missing one day, and we are expected to calculate it? Unlikely without more info.
+                    23. What if the "182 vs 183" is a red herring or specific to the training set shown, and the test set might have matching counts?
+                    24. Let's look at the target sample dates: `2011-01-01` to `2011-07-02`. That is 183 days (Jan 1 to Jul 2 inclusive: 31+28+31+30+31+30+2 = 183).
+                    25. So the target covers Jan 1, 2011 to July 2, 2011.
+                    26. The source sample shows `7/3/2011` to `12/31/2011`. This is a different part of the year.
+                    27. This implies the Source and Target in the *prompt description* are disjoint samples from the same underlying dataset structure.
+                    28. The actual `source` DataFrame passed to the function will likely contain the data for the period corresponding to the `target`.
+                    29. If the target has 183 rows (Jan 1 - Jul 2), the source *should* have 183 rows. If the prompt says source has 182, one day is missing.
+                    30. Which day? If we assume the source is a continuous time series, we can find the gap.
+                    31. Strategy:
+                        a. Parse `date` column to datetime.
+                        b. Set `date` as index.
+                        c. Create a complete date range from `min(date)` to `max(date)` with frequency 'D' (daily).
+                        d. Reindex the DataFrame to this complete date range.
+                        e. This will create a row with NaNs for the missing day.
+                        f. We need to fill these NaNs. How?
+                        g. Looking at the values, they are hourly loads.
+                        h. A simple `ffill` (forward fill) or `bfill` (backward fill) might work if the gap is at the end or beginning. If it's in the middle, interpolation or filling with previous day is common in load data.
+                        i. However, `ffill` is the most standard "missing data" handling in pandas for time series if no other info is given.
+                        j. Let's try `reindex` with `ffill`.
+
+2.  **Column Renaming**:
+    *   `value1` -> `Hour 1`
+    *   `value2` -> `Hour 2`
+    *   ...
+    *   `value24` -> `Hour 24`
+    *   `date` -> `date` (keep name, but format value)
+
+3.  **Date Formatting**:
+    *   Convert parsed datetime to string format `%Y-%m-%d %H:%M:%S`.
+
+4.  **Final Selection**:
+    *   Select columns `['date', 'Hour 1', ..., 'Hour 24']`.
+
+5.  **Refining the Missing Row Strategy**:
+    *   If I simply rename and format, and the source has 182 rows, the output will have 182 rows. The target expects 183.
+    *   If the test case actually has 182 rows in source and 183 in target, I *must* add a row.
+    *   Reindexing to a full date range is the only logical way to add a row deterministically based on the time series nature.
+    *   Filling method: `ffill` is safer than `bfill` for load data (assume load continues from previous day if data is missing).
+
+Let's write the code.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # 1. Parse dates
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # 2. Handle potential missing days by reindexing to a full date range
+    # Sort by date to ensure correct range detection
+    df = df.sort_values('date')
+    
+    # Create a complete date range from min to max
+    min_date = df['date'].min()
+    max_date = df['date'].max()
+    full_date_range = pd.date_range(start=min_date, end=max_date, freq='D')
+    
+    # Set date as index to reindex
+    df_indexed = df.set_index('date')
+    
+    # Reindex to full range, this will add rows for missing dates with NaNs
+    df_reindexed = df_indexed.reindex(full_date_range)
+    
+    # Fill missing values. Forward fill is a common strategy for time series gaps.
+    # If the missing day is at the start, bfill might be needed, but ffill is standard for "carry forward".
+    # Given the small gap (1 day), ffill should work for gaps in the middle or end.
+    # If the gap is at the very beginning, ffill leaves it NaN. 
+    # Let's check if we need to bfill for the first row if it's missing? 
+    # Usually, reindex with ffill is the standard "fill missing" in these tasks.
+    df_filled = df_reindexed.ffill()
+    
+    # If there are still NaNs (e.g. at the start), backfill
+    df_filled = df_filled.bfill()
+    
+    # Reset index to get 'date' back as a column
+    df = df_filled.reset_index()
+    df = df.rename(columns={'index': 'date'})
+    
+    # 3. Format date column
+    df['date'] = df['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 4. Rename value columns to Hour columns
+    rename_dict = {f'value{i}': f'Hour {i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    
+    # 5. Select target columns verbatim
+    target_columns = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    
+    return df[target_columns]
+```

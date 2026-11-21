@@ -1,0 +1,115 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a date column `CST` (format `%a %m/%d/%Y`) and 24 hourly columns (`1:00` to `24:00:00`).
+    *   **Target**: Contains `month` (string, e.g., "April"), `daytype` (string, "weekday" or "weekend"), and 24 hourly columns (`hr1` to `hr24`).
+    *   **Row Count Change**: Source has 1339 rows, Target has 1340 rows. This suggests that the transformation might involve grouping or aggregation, but looking at the sample data, the target rows seem to correspond to specific days or aggregated profiles. However, the target sample shows multiple rows for "April weekday" and "November weekday". Let's look closer. The source has daily data. The target has `month` and `daytype`. It is highly likely that the target represents an aggregation of source rows grouped by `month` and `daytype`. But wait, if we group by month and daytype, we would get one row per month/daytype combination (e.g., 12 months * 2 types = 24 rows max). The target has 1340 rows. This implies the target is NOT a simple groupby aggregation of the entire dataset into 24 rows.
+    *   Let's re-examine the row count. 1339 source rows -> 1340 target rows. This is a 1-to-1 mapping with one extra row? Or perhaps the source data spans multiple years, and the target is also daily data but formatted differently?
+    *   Let's look at the target sample values. `hr1` for "April weekday" is 1.02, 0.93, 0.98... These look like specific daily values, not averages. If they were averages, there would be fewer rows.
+    *   Hypothesis: The target table is simply the source table transformed row-by-row, but with an additional row added? Or maybe the source sample provided is just a subset, and the "1339 vs 1340" note is a hint about a specific edge case or a header row issue?
+    *   Actually, let's look at the `daytype` column. It distinguishes between "weekday" and "weekend". The source `CST` column has the day of the week (e.g., "Sat", "Sun").
+    *   Let's check the number of unique months in the source. If the source covers ~3-4 years, 1339 days is roughly 3.6 years.
+    *   If the target has 1340 rows, and the source has 1339, it's very close. It's possible the target includes a summary row or the source/target alignment is slightly off in the description. However, in TbT tasks, usually, the transformation is deterministic per row or a clear aggregation.
+    *   Let's look at the target sample again.
+        *   Row 1: April, weekday, hr1=1.02
+        *   Row 2: April, weekday, hr1=0.93
+        *   Row 3: April, weekday, hr1=0.98
+        *   Row 4: April, weekend, hr1=1.03
+    *   These look like individual days. If the target is just the source data reformatted, why the row count difference?
+    *   Let's consider the possibility that the target is an **average profile** for each month/daytype combination, but the sample shows multiple rows for the same month/daytype. This contradicts the "average profile" theory unless the target is listing *all* days but grouped/sorted?
+    *   Wait, look at the target sample values for "November weekday".
+        *   Row 5: hr1=1.057
+        *   Row 6: hr1=1.0484
+        *   Row 7: hr1=1.0741
+        *   Row 8: hr1=0.9232
+    *   These are distinct values. They are not identical. Therefore, the target is **not** a single aggregated row per month/daytype. It retains the granularity of individual days.
+    *   So, the transformation is likely:
+        1.  Parse `CST` to extract Month and Day of Week.
+        2.  Map Day of Week to `daytype` ("weekday" if Mon-Fri, "weekend" if Sat-Sun).
+        3.  Format Month name (e.g., "April").
+        4.  Rename hourly columns `1:00` -> `hr1`, ..., `24:00:00` -> `hr24`.
+        5.  The row count difference (1339 vs 1340) might be due to a specific handling of a missing day or an extra summary row, OR it might be a slight discrepancy in the problem description vs the actual data generation (e.g., source has a header row counted? No, pandas doesn't count headers).
+        6.  Let's look at the source sample dates: `12/01/2012` to `07/31/2016`. This is a continuous range?
+            *   Dec 2012 to July 2016 is about 43 months. 43 * 30 ≈ 1290 days. 1339 is close.
+            *   If the target has 1340 rows, maybe it includes a "Total" or "Average" row at the end? Or maybe the source has a duplicate or the target has an extra row for a specific reason?
+            *   However, without explicit instructions to add a summary row, and given the target sample looks like raw daily data, the most robust assumption is a **row-wise transformation**. The row count difference might be an artifact of the specific test file (e.g., one file has a leap year day, or one has an extra row for a holiday treated differently?).
+            *   Actually, let's look at the `daytype` logic.
+                *   Sat, Sun -> weekend
+                *   Mon-Fri -> weekday
+            *   Let's check if the target sample rows correspond to specific source rows.
+                *   Source: `Sat 12/01/2012` -> Month: December, Daytype: weekend.
+                *   Target Sample starts with April. The source sample provided is just a snippet.
+    *   Let's assume the transformation is a direct row-wise mapping. The row count difference is likely negligible for the logic (e.g., one file has 365 days, another 366, or one has a header row issue in the CSV reader context, but we are working with DataFrames). I will implement the row-wise transformation. If there is an aggregation required, the target sample would show fewer rows or identical values for groups. Since the values vary, it's row-wise.
+
+2.  **Date Parsing and Feature Extraction**:
+    *   Extract the date part from `CST`. The format is `%a %m/%d/%Y`.
+    *   Use `pd.to_datetime` on the date part (splitting by space and taking the last part, or using a custom parser).
+    *   Extract `month` as the full month name (e.g., "April") using `.dt.strftime('%B')`.
+    *   Extract `dayofweek` to determine `daytype`.
+        *   `dt.dt.dayofweek` returns 0 (Mon) to 6 (Sun).
+        *   If `dayofweek` < 5, `daytype` = "weekday".
+        *   Else, `daytype` = "weekend".
+
+3.  **Column Renaming**:
+    *   Map `1:00` -> `hr1`
+    *   Map `2:00` -> `hr2`
+    *   ...
+    *   Map `24:00:00` -> `hr24`
+    *   Note: The source column for hour 24 is `24:00:00`. Others are `H:00`.
+
+4.  **Constructing the Result**:
+    *   Create new columns `month` and `daytype`.
+    *   Rename the hourly columns.
+    *   Select the target columns in the specified order: `['month', 'daytype', 'hr1', ..., 'hr24']`.
+
+5.  **Handling the Row Count Discrepancy**:
+    *   If the transformation is purely row-wise, the output row count will match the input. If the target *must* have 1340 rows from 1339, there might be an implicit "All" or "Average" row, or the source data in the test case might actually have 1340 rows and the description is slightly off, or vice versa. Given the strict instruction "Do NOT hardcode... generalize", I cannot add a magic row. I will stick to the row-wise transformation which is the only logical deduction from the sample data structure.
+
+6.  **Refining Date Parsing**:
+    *   `CST` sample: `'Sat 12/01/2012'`
+    *   `df['CST'].str.split(' ').str[-1]` gives `'12/01/2012'`.
+    *   `pd.to_datetime(..., format='%m/%d/%Y')` converts it.
+
+7.  **Final Code Structure**:
+    *   Copy source.
+    *   Parse dates.
+    *   Create `month` and `daytype`.
+    *   Rename columns.
+    *   Return selected columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date from the CST column
+    # CST format is '%a %m/%d/%Y', e.g., 'Sat 12/01/2012'
+    # Extract the date part (last element after splitting by space)
+    date_str = df['CST'].str.split(' ').str[-1]
+    dt = pd.to_datetime(date_str, format='%m/%d/%Y')
+    
+    # 2. Create 'month' column with full month name
+    df['month'] = dt.dt.strftime('%B')
+    
+    # 3. Create 'daytype' column
+    # dayofweek: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+    # Weekday if 0-4, Weekend if 5-6
+    df['daytype'] = dt.dt.dayofweek.apply(lambda x: 'weekday' if x < 5 else 'weekend')
+    
+    # 4. Rename hourly columns
+    # Source: '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target: 'hr1', 'hr2', ..., 'hr23', 'hr24'
+    rename_dict = {}
+    for i in range(1, 24):
+        rename_dict[f'{i}:00'] = f'hr{i}'
+    rename_dict['24:00:00'] = 'hr24'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 5. Define target columns
+    target_columns = ['month', 'daytype'] + [f'hr{i}' for i in range(1, 25)]
+    
+    # 6. Return the transformed dataframe with exact column order
+    return df[target_columns]
+```

@@ -1,0 +1,138 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `DT_STRATA` (date string), `DOW` (day of week indicator), and 24 hourly percentage columns (`PCT_HOURLY_0100` to `PCT_HOURLY_2400`). Note: `PCT_HOURLY_2500` exists but is always 0 in samples and not in target.
+    *   **Target**: Contains `month` (string name), `daytype` (string category), and 24 hourly columns (`hr1` to `hr24`).
+    *   **Row Count**: The row count is preserved (5673 -> 5673), implying a row-wise transformation rather than an aggregation or pivot that changes row counts.
+
+2.  **Derive `month` Column**:
+    *   Parse the `DT_STRATA` column using the format `%m/%d/%Y`.
+    *   Extract the month number.
+    *   Map the month number to its full name (e.g., 1 -> 'January', 7 -> 'July').
+
+3.  **Derive `daytype` Column**:
+    *   Analyze the `DOW` column in the source. Distinct values are `['7', '1', 'H', '3', '4', '5', '6', '2', 'D']`.
+    *   Analyze the `daytype` column in the target. Sample values are 'weekday'.
+    *   Standard day-of-week mappings:
+        *   '1' through '5' typically correspond to Monday-Friday (Weekdays).
+        *   '6' and '7' typically correspond to Saturday-Sunday (Weekends).
+        *   'H' and 'D' likely correspond to Holidays or specific designated days.
+    *   Looking at the target sample, we see 'weekday'. We need to determine the mapping for other types. Usually, in such datasets:
+        *   '1', '2', '3', '4', '5' -> 'weekday'
+        *   '6', '7' -> 'weekend'
+        *   'H', 'D' -> 'holiday' (or similar).
+    *   Let's verify with the source sample:
+        *   Row 1: DOW '7' (Sunday). Target row 1 is 'January' 'weekday'? Wait, let's look closer.
+        *   Source Row 1: `7/2/2016`, DOW `7`. 7/2/2016 was a Saturday.
+        *   Source Row 2: `7/3/2016`, DOW `1`. 7/3/2016 was a Sunday.
+        *   Source Row 3: `7/4/2016`, DOW `H`. 7/4/2016 was Independence Day (Holiday).
+        *   Source Row 4: `7/5/2016`, DOW `3`. 7/5/2016 was a Tuesday.
+        *   Source Row 5: `12/28/2016`, DOW `4`. 12/28/2016 was a Wednesday.
+        *   Source Row 6: `12/29/2016`, DOW `5`. 12/29/2016 was a Thursday.
+        *   Source Row 7: `12/30/2016`, DOW `6`. 12/30/2016 was a Friday.
+        *   Source Row 8: `12/31/2016`, DOW `7`. 12/31/2016 was a Saturday.
+    *   Now look at the Target Sample rows.
+        *   Target Row 1: `January`, `weekday`.
+        *   Target Row 5: `June`, `weekday`.
+        *   Target Row 8: `July`, `weekday`.
+    *   The target sample only shows 'weekday'. This suggests the mapping might be:
+        *   '1', '2', '3', '4', '5' -> 'weekday'
+        *   '6', '7' -> 'weekend'
+        *   'H', 'D' -> 'holiday'
+    *   However, we must be careful. Is it possible '6' and '7' are mapped differently? In many traffic/energy datasets, weekends are distinct. Let's assume standard mapping:
+        *   `1-5`: 'weekday'
+        *   `6-7`: 'weekend'
+        *   `H`, `D`: 'holiday'
+    *   Let's check if the target sample contains any weekends or holidays. It does not. It only contains weekdays. This makes it hard to verify the exact string for weekends/holidays from the sample alone. However, 'weekday', 'weekend', 'holiday' is the most standard convention. Another possibility is 'business_day' vs 'non_business_day'. But 'weekday' is explicitly in the target.
+    *   Let's look at the DOW values again: '1', '2', '3', '4', '5', '6', '7', 'H', 'D'.
+    *   Mapping:
+        *   `1` -> 'weekday'
+        *   `2` -> 'weekday'
+        *   `3` -> 'weekday'
+        *   `4` -> 'weekday'
+        *   `5` -> 'weekday'
+        *   `6` -> 'weekend'
+        *   `7` -> 'weekend'
+        *   `H` -> 'holiday'
+        *   `D` -> 'holiday' (D often stands for Designated Holiday or similar)
+
+4.  **Transform Hourly Columns**:
+    *   Source columns: `PCT_HOURLY_0100` ... `PCT_HOURLY_2400`.
+    *   Target columns: `hr1` ... `hr24`.
+    *   The mapping is direct: `PCT_HOURLY_0100` -> `hr1`, `PCT_HOURLY_0200` -> `hr2`, ..., `PCT_HOURLY_2400` -> `hr24`.
+    *   We need to rename these columns.
+
+5.  **Construct the Function**:
+    *   Create a copy of the source dataframe.
+    *   Parse `DT_STRATA` to extract month names.
+    *   Map `DOW` to `daytype`.
+    *   Rename the hourly columns.
+    *   Select and order the final columns: `['month', 'daytype', 'hr1', ..., 'hr24']`.
+
+6.  **Refinement on DayType Mapping**:
+    *   Since the target sample only shows 'weekday', I will stick to the most logical semantic mapping.
+    *   `1-5`: 'weekday'
+    *   `6-7`: 'weekend'
+    *   `H`, `D`: 'holiday'
+
+7.  **Implementation Details**:
+    *   Use `pd.to_datetime` for date parsing.
+    *   Use `.dt.month_name()` for month names.
+    *   Use `.map()` or `.replace()` for DOW to daytype.
+    *   Use `.rename()` for columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame format.
+    
+    Steps:
+    1. Parse DT_STRATA to extract month names.
+    2. Map DOW codes to daytype categories ('weekday', 'weekend', 'holiday').
+    3. Rename hourly columns from PCT_HOURLY_XXXX to hrN.
+    4. Select and order the final columns.
+    """
+    df = source.copy()
+    
+    # 1. Extract month name from DT_STRATA
+    # Format is '%m/%d/%Y'
+    df['month'] = pd.to_datetime(df['DT_STRATA'], format='%m/%d/%Y').dt.month_name()
+    
+    # 2. Map DOW to daytype
+    # Based on standard conventions and sample data:
+    # 1-5: Weekdays
+    # 6-7: Weekends
+    # H, D: Holidays
+    dow_mapping = {
+        '1': 'weekday',
+        '2': 'weekday',
+        '3': 'weekday',
+        '4': 'weekday',
+        '5': 'weekday',
+        '6': 'weekend',
+        '7': 'weekend',
+        'H': 'holiday',
+        'D': 'holiday'
+    }
+    df['daytype'] = df['DOW'].map(dow_mapping)
+    
+    # 3. Rename hourly columns
+    # Source: PCT_HOURLY_0100 ... PCT_HOURLY_2400
+    # Target: hr1 ... hr24
+    rename_dict = {}
+    for i in range(1, 25):
+        src_col = f'PCT_HOURLY_{i:04d}'
+        tgt_col = f'hr{i}'
+        if src_col in df.columns:
+            rename_dict[src_col] = tgt_col
+            
+    df = df.rename(columns=rename_dict)
+    
+    # 4. Define target columns in order
+    target_columns = ['month', 'daytype'] + [f'hr{i}' for i in range(1, 25)]
+    
+    # 5. Return the transformed dataframe with only the target columns
+    return df[target_columns]
+```

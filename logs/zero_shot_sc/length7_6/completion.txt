@@ -1,0 +1,88 @@
+### Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `Date`, `Class`, and 24 hourly columns named `'1'` through `'24'`. The `Date` column is in string format `'m/d/Y'`. The `Class` column contains values like `'RESIDENT'`.
+    *   **Target**: Contains `month` (string name), `daytype` (weekday/weekend), and 24 hourly columns named `'hr1'` through `'hr24'`.
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the transformation involves grouping or aggregating data, likely by month and day type, but since the target rows look like individual daily profiles (not aggregated averages of many days into one row per month), the increase in row count is unusual for a simple aggregation. Let's look closer at the data.
+    *   Actually, looking at the target sample, there are multiple rows for "January weekday", "June weekend", etc. This implies that the target table is *not* an aggregation of all days into a single profile per month/daytype. Instead, it seems to be a transformation of the source rows where each source row becomes a target row, but with derived columns `month` and `daytype`.
+    *   Wait, the row count increases from 182 to 183. Let's re-examine the source sample. The source sample shows dates from July 2013 and December 2013. The target sample shows January, June, July. This suggests the full dataset spans a year.
+    *   Why would row count increase? 182 source rows -> 183 target rows.
+    *   Let's check if there's a missing row or if an extra row is generated.
+    *   Hypothesis: The transformation is primarily a **reshape/rename** operation. Each source row corresponds to one target row. The `Date` is parsed to extract `month` (name) and `daytype` (weekday vs weekend). The columns `1`-`24` are renamed to `hr1`-`hr24`.
+    *   Why the row count difference? 182 vs 183. It's possible that the source data has a duplicate or a specific date handling issue, or perhaps one day is split? Or maybe the target includes a summary row?
+    *   Let's look at the target values. They are floats. The source values are floats.
+    *   Let's look at the target `daytype`. It has 'weekday' and 'weekend'.
+    *   Let's look at the target `month`. It has 'January', 'June', 'July'.
+    *   The most standard interpretation for TbT tasks with this kind of schema change is:
+        1.  Parse `Date`.
+        2.  Derive `month` from the date (e.g., `dt.strftime('%B')`).
+        3.  Derive `daytype` from the date (e.g., if `dt.dayofweek < 5` then 'weekday' else 'weekend').
+        4.  Rename columns `1`-`24` to `hr1`-`hr24`.
+        5.  Drop `Class` and `Date`.
+    *   The row count discrepancy (182 vs 183) might be due to a specific edge case in the test data or a slight difference in the sample provided vs the full file. However, without an explicit aggregation instruction (like "average by month"), and given that the target rows preserve the granularity of daily profiles (there are multiple "January weekday" rows with different values), the 1-to-1 mapping is the most logical structural transformation. The extra row might be an artifact of the specific test instance or a header/footer issue in the raw CSV parsing not visible here. I will proceed with the 1-to-1 transformation as it preserves the data integrity of the hourly profiles.
+
+2.  **Step-by-Step Transformation**:
+    *   **Step 1: Parse Date**. Convert the `Date` column to datetime objects using `pd.to_datetime(source['Date'], format='%m/%d/%Y')`.
+    *   **Step 2: Extract Month Name**. Create a new column `month` using the datetime accessor: `dt.strftime('%B')`. This gives full month names like "January", "February", etc.
+    *   **Step 3: Determine Day Type**. Create a new column `daytype`. Check if the day of the week is a weekend (Saturday=5, Sunday=6). If yes, 'weekend', else 'weekday'.
+    *   **Step 4: Rename Hour Columns**. The source has columns named `'1'`, `'2'`, ..., `'24'`. These need to be renamed to `'hr1'`, `'hr2'`, ..., `'hr24'`.
+    *   **Step 5: Construct Final DataFrame**. Select the columns `['month', 'daytype']` and the renamed hour columns. Ensure the order matches the target schema.
+    *   **Step 6: Handle Column Order**. The target schema specifies `month`, `daytype`, then `hr1` to `hr24`.
+
+3.  **Refinement on Row Count**:
+    *   If the row count changes, it *could* imply that one source row is expanded into two, or a new row is inserted. However, looking at the data values, they are distinct daily profiles. It is highly unlikely that a single source row splits into two without a specific rule (e.g., splitting day/night).
+    *   Another possibility: The source might have a row that is invalid or NaN that is dropped, but the target has 183? No, source 182 -> target 183 is an increase.
+    *   Could it be that the source has 365 days (or 366) and the sample is just a subset? The prompt says "Source sample rows: 182 rows". This usually refers to the *entire* source table provided in the benchmark case, not just the visible sample. If the entire source is 182 rows, and the target is 183, there is a mismatch.
+    *   Let's reconsider the aggregation. If we aggregate by `month` and `daytype`, we would get far fewer rows (e.g., 12 months * 2 types = 24 rows max). The target has many more rows than that (the sample shows 8 rows, but the total is 183).
+    *   Therefore, the target is definitely not a high-level aggregation. It retains daily granularity.
+    *   Why 183? Perhaps the source data has a duplicate date that is merged? No, that would reduce rows.
+    *   Perhaps the target includes a "Total" or "Average" row for each group? Unlikely given the column names `hr1`...`hr24` are floats similar to the source.
+    *   Let's assume the standard 1-to-1 transformation. The difference of 1 row might be due to a specific date parsing quirk or a header row in the source that wasn't counted in the "182" metadata but is present in the file, or vice versa. Or, more likely, the "182" and "183" counts in the prompt description are approximate or refer to specific test instances where one might have a leap year or specific start/end date differences. Given the strict instruction "Do NOT hardcode... generalize", the 1-to-1 mapping with derived columns is the only generalizable logic that fits the schema change.
+
+4.  **Implementation Details**:
+    *   Use `pd.to_datetime` for date parsing.
+    *   Use `dt.strftime('%B')` for month name.
+    *   Use `dt.dayofweek` to determine weekday/weekend.
+    *   Rename columns using a dictionary or list comprehension.
+    *   Return the DataFrame with the exact target column names.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame.
+    
+    Steps:
+    1. Parse the 'Date' column to datetime.
+    2. Extract 'month' as the full month name (e.g., 'January').
+    3. Determine 'daytype' as 'weekday' or 'weekend' based on the day of the week.
+    4. Rename columns '1' through '24' to 'hr1' through 'hr24'.
+    5. Select and order the columns to match the target schema.
+    """
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Parse Date
+    df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y')
+    
+    # 2. Extract Month Name
+    df['month'] = df['Date'].dt.strftime('%B')
+    
+    # 3. Determine Day Type
+    # dayofweek: Monday=0, ..., Friday=4, Saturday=5, Sunday=6
+    df['daytype'] = df['Date'].dt.dayofweek.apply(lambda x: 'weekday' if x < 5 else 'weekend')
+    
+    # 4. Rename Hour Columns
+    # Source columns are strings '1' to '24'
+    # Target columns are 'hr1' to 'hr24'
+    rename_dict = {str(i): f'hr{i}' for i in range(1, 25)}
+    df.rename(columns=rename_dict, inplace=True)
+    
+    # 5. Define Target Columns
+    target_columns = ['month', 'daytype'] + [f'hr{i}' for i in range(1, 25)]
+    
+    # 6. Select and Return
+    # Ensure we only return the required columns in the correct order
+    return df[target_columns]
+```

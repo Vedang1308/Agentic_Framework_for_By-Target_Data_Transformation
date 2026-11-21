@@ -1,0 +1,124 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a `date` column (format `M/D/YYYY`) and 24 hourly columns with names like `1:00 AM`, `2:00 AM`, ..., `12:00 AM`, `1:00 PM`, ..., `12:00 PM`. There is also a `DSL` column which appears to be metadata or a flag (values 0.0 and ~0.12).
+    *   **Target**: Contains a `date` column (format `YYYY-MM-DD 00:00:00`) and 24 columns named `Hour 1` through `Hour 24`.
+    *   **Row Count Change**: The prompt notes source has 182 rows and target has 183. This suggests that the transformation might involve adding a row (e.g., a total or a specific date fill) or that the sample provided is just a subset and the logic is row-wise. However, looking at the data values, they seem to correspond directly. Let's look closer at the mapping.
+    *   **Date Mapping**: Source `7/3/2014` corresponds to Target `2014-01-01 00:00:00`? No, that's unlikely. Let's look at the sample data provided in the prompt description vs the table.
+        *   Source Sample Row 1: `7/3/2014`.
+        *   Target Sample Row 1: `2014-01-01 00:00:00`.
+        *   This implies the dates in the source are *not* the same as the dates in the target. Wait, usually in these TbT tasks, the rows correspond 1-to-1 unless there's an aggregation. The prompt says "Source sample rows: 182" and "Target rows: 183". This is a strong hint of an aggregation or a specific row addition.
+        *   Let's check the values.
+            *   Source `7/3/2014` Hour 1 (`1:00 AM`): `1.03593`.
+            *   Target `2014-01-01` Hour 1: `0.401886`.
+            *   These values are different. This suggests the source and target samples provided in the text might be from different datasets or the transformation involves a complex mapping not just renaming.
+            *   *Correction*: In many of these generated benchmarks, the "Source Sample" and "Target Sample" shown in the prompt description are often just illustrative of the *schema* and *format*, not necessarily row-aligned values from the same underlying dataset instance, OR the transformation is a simple rename/format but the samples are mismatched in the prompt description for privacy/randomization reasons.
+            *   However, let's look at the column mapping logic which is usually consistent.
+            *   Source Columns: `1:00 AM`, `2:00 AM`... `12:00 AM` (Midnight), `1:00 PM`... `12:00 PM` (Noon).
+            *   Target Columns: `Hour 1`... `Hour 24`.
+            *   Standard 24-hour clock mapping:
+                *   `1:00 AM` -> Hour 1
+                *   `2:00 AM` -> Hour 2
+                *   ...
+                *   `11:00 AM` -> Hour 11
+                *   `12:00 PM` -> Hour 12
+                *   `1:00 PM` -> Hour 13
+                *   ...
+                *   `11:00 PM` -> Hour 23
+                *   `12:00 AM` -> Hour 24 (Midnight at the end of the day)
+    *   **Date Formatting**:
+        *   Source `date`: `7/3/2014` -> `2014-07-03`.
+        *   Target `date`: `2014-01-01 00:00:00`.
+        *   The target format is ISO 8601 with time `00:00:00`.
+        *   If the row count changes (182 -> 183), it's possible one row is dropped or added. But typically, if the values don't match the sample, we rely on the structural transformation.
+        *   Let's assume the standard transformation: Parse source date, format to target date string, rename columns to `Hour 1`...`Hour 24`.
+        *   Why the row count difference? 182 to 183. Maybe a "Total" row is added? Or maybe the source has a header row counted? No, pandas reads headers.
+        *   Let's look at the `DSL` column. It has values 0.0 and 0.119509. Maybe rows with `DSL != 0` are filtered out? Or kept?
+        *   If we look at Example 1, 2, 3, they are mostly renames and formats.
+        *   Let's assume the transformation is:
+            1.  Parse `date` column.
+            2.  Format `date` as `%Y-%m-%d 00:00:00`.
+            3.  Rename the 24 hourly columns to `Hour 1` ... `Hour 24`.
+            4.  Drop `DSL` and original `date` (replaced by new `date`).
+            5.  Return the result.
+        *   The row count discrepancy (182 vs 183) might be an artifact of the specific test case generation (e.g., a dummy row added in target, or a specific date range expansion). However, without explicit instruction to aggregate or generate rows, the safest bet for a "general" function is to map the existing rows. If the target has *more* rows, it's possible the source is missing a row in the sample or the target includes a summary. But usually, these tasks are 1-to-1 mappings unless specified.
+        *   Let's re-read carefully: "Source sample rows: 182... Target rows: 183".
+        *   Is it possible `12:00 AM` and `12:00 PM` handling creates an extra column? No, both have 24 hours.
+        *   Is it possible the date range is expanded? Unlikely for a simple transform function.
+        *   Let's look at the `DSL` column again. If `DSL` is a weight, maybe we are averaging? No, target has floats similar magnitude.
+        *   Let's stick to the structural mapping. The row count difference might be due to the specific `test_0.csv` having a different structure or the prompt description being slightly off regarding the exact count for the *sample* vs the *file*. I will implement the 1-to-1 row transformation. If a row needs to be added, it's usually a specific constant row. Given the lack of info, I will process all source rows.
+
+2.  **Column Mapping Logic**:
+    *   `1:00 AM` -> `Hour 1`
+    *   `2:00 AM` -> `Hour 2`
+    *   ...
+    *   `11:00 AM` -> `Hour 11`
+    *   `12:00 PM` -> `Hour 12`
+    *   `1:00 PM` -> `Hour 13`
+    *   `2:00 PM` -> `Hour 14`
+    *   ...
+    *   `11:00 PM` -> `Hour 23`
+    *   `12:00 AM` -> `Hour 24`
+
+    I will create a dictionary mapping source column names to target column names.
+
+3.  **Date Processing**:
+    *   Parse `source['date']` using `pd.to_datetime`.
+    *   Format using `.dt.strftime('%Y-%m-%d 00:00:00')`.
+
+4.  **Constructing the Function**:
+    *   Copy source.
+    *   Transform date.
+    *   Rename columns.
+    *   Select target columns.
+
+5.  **Refinement on Row Count**:
+    *   If the target has 183 rows and source has 182, and no aggregation is obvious, it's possible the source data in the actual test file has 183 rows, or the sample description is just indicative. I will process all rows present in `source`.
+
+### Generated Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Process the date column
+    # Parse the source date string (e.g., '7/3/2014') to datetime
+    dt = pd.to_datetime(df['date'])
+    # Format to target style: 'YYYY-MM-DD 00:00:00'
+    df['date'] = dt.dt.strftime('%Y-%m-%d 00:00:00')
+    
+    # 2. Map hourly columns from 12-hour format with AM/PM to 24-hour Hour N format
+    # Source columns: '1:00 AM', '2:00 AM', ..., '12:00 AM', '1:00 PM', ..., '12:00 PM'
+    # Target columns: 'Hour 1', 'Hour 2', ..., 'Hour 24'
+    
+    rename_map = {}
+    
+    # AM Hours: 1:00 AM -> Hour 1, ..., 11:00 AM -> Hour 11
+    for h in range(1, 12):
+        rename_map[f'{h}:00 AM'] = f'Hour {h}'
+        
+    # Noon: 12:00 PM -> Hour 12
+    rename_map['12:00 PM'] = 'Hour 12'
+    
+    # PM Hours: 1:00 PM -> Hour 13, ..., 11:00 PM -> Hour 23
+    for h in range(1, 12):
+        rename_map[f'{h}:00 PM'] = f'Hour {h + 12}'
+        
+    # Midnight: 12:00 AM -> Hour 24
+    rename_map['12:00 AM'] = 'Hour 24'
+    
+    # Apply renaming
+    df = df.rename(columns=rename_map)
+    
+    # 3. Define target columns in the correct order
+    target_columns = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    
+    # 4. Select and return the target columns
+    # Note: If the row count difference (182 vs 183) implies a specific row addition 
+    # not derivable from source structure (like a total row), it cannot be generalized 
+    # without more specific rules. Assuming 1-to-1 mapping for generalization.
+    return df[target_columns]
+```

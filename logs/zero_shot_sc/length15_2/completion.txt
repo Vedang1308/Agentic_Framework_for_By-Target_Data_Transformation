@@ -1,0 +1,166 @@
+### Reasoning Plan
+
+1.  **Parse Datetime**: The source column `local_15min` contains timestamps in the format `%m/%d/%Y %H:%M`. We need to parse this into a datetime object to extract temporal features.
+2.  **Extract Temporal Features**:
+    *   **Hour**: Extract the hour of the day (0-23) from the parsed datetime. This matches the target column `hour`.
+    *   **Season**: Determine the season based on the month. Standard meteorological seasons are often used in such datasets:
+        *   Winter: Dec, Jan, Feb (12, 1, 2)
+        *   Spring: Mar, Apr, May (3, 4, 5)
+        *   Summer: Jun, Jul, Aug (6, 7, 8)
+        *   Fall/Autumn: Sep, Oct, Nov (9, 10, 11)
+        *   *Self-Correction/Verification*: Looking at the target sample, we see 'Summer', 'Winter', 'Spring'. We need to define the mapping clearly. Let's assume standard meteorological seasons.
+3.  **Map Source Columns to Target Categories**: The target columns (`hvac`, `domestic_water_heating`, `major_appliances`, `lighting`, `miscellaneous_plug_loads`, `total`) represent aggregated energy loads. We need to group the many source `_sum` columns into these categories.
+    *   **HVAC (Heating, Ventilation, Air Conditioning)**: Typically includes air conditioners, furnaces, heaters, and fans.
+        *   Columns: `air1_sum`, `air2_sum`, `air3_sum`, `airwindowunit1_sum`, `furnace1_sum`, `furnace2_sum`, `heater1_sum`, `heater2_sum`, `heater3_sum`, `housefan1_sum`, `poolpump1_sum` (sometimes considered HVAC if for pool heating, but often separate. Let's look at common load disaggregation datasets like UAL or similar. Usually, pool pumps are miscellaneous or HVAC depending on context. Given the high magnitude of HVAC, it likely includes major climate control. Let's include `poolpump1_sum` in miscellaneous or HVAC? Let's stick to strict HVAC first: air, furnace, heater, fan. If the numbers don't match, we might adjust. However, looking at the sample, `grid_sum` is the total. The target `total` column likely sums up the categories.
+        *   Let's refine the mapping based on standard residential load profiles:
+            *   **HVAC**: `air1_sum`, `air2_sum`, `air3_sum`, `airwindowunit1_sum`, `furnace1_sum`, `furnace2_sum`, `heater1_sum`, `heater2_sum`, `heater3_sum`, `housefan1_sum`.
+            *   **Domestic Water Heating**: `waterheater1_sum`, `waterheater2_sum`.
+            *   **Major Appliances**: `clotheswasher1_sum`, `clotheswasher_dryg1_sum`, `dishwasher1_sum`, `drye1_sum`, `dryg1_sum`, `oven1_sum`, `oven2_sum`, `range1_sum`, `refrigerator1_sum`, `refrigerator2_sum`, `microwave1_sum`.
+            *   **Lighting**: `lights_plugs1_sum` through `lights_plugs6_sum`, `poollight1_sum`, `outsidelights_plugs1_sum`, `outsidelights_plugs2_sum`. *Note*: The source has `lights_plugs` which might include plugs. However, there is a separate `miscellaneous_plug_loads` category. Usually, "Lighting" refers strictly to lights. The columns named `lights_plugs` are ambiguous. Let's look at other columns. `bathroom1_sum`, `bedroom1_sum` etc. are likely room-level aggregates which might be double counting if we sum them with device-level.
+            *   *Crucial Observation*: The source table has both device-level columns (e.g., `air1_sum`) and room-level columns (e.g., `bedroom1_sum`). It also has `grid_sum`.
+            *   If we sum all device columns, do we get `grid_sum`?
+            *   Let's check the first row:
+                *   `grid_sum` = 568.702
+                *   Sum of obvious devices:
+                    *   Air: 6.007 + 1.327 + 0.607 + 0 = 7.941
+                    *   Aquarium: 0.292
+                    *   Bathroom: 2.322 + 0.388 = 2.71
+                    *   Bedroom: 4.001 + 1.957 + 0.384 + 0.015 + 0.027 = 6.384
+                    *   Car: 15.423
+                    *   Clotheswasher: 1.71
+                    *   Dryer/Washer: 0.955
+                    *   Dining: 0.253
+                    *   Dishwasher: 6.198
+                    *   Disposal: 0.322
+                    *   Drye: 25.381
+                    *   Dryg: 0.553
+                    *   Freezer: 0.738
+                    *   Furnace: 20.258 + 7.412 = 27.67
+                    *   Garage: 4.29 + 0.412 = 4.702
+                    *   Heater: 0.81
+                    *   Housefan: 0
+                    *   Icemaker: 0.213
+                    *   Jacuzzi: 9.54
+                    *   Kitchen: 2.134 + 0.852 = 2.986
+                    *   KitchenApp: 3.394 + 2.587 = 5.981
+                    *   Lights_Plugs: 13.236 + 5.011 + 2.467 + 0.482 + 0.653 + 0.173 = 22.022
+                    *   Livingroom: 16.035 + 0.631 = 16.666
+                    *   Microwave: 3.099
+                    *   Office: 5.009
+                    *   Outsidelights: 1.736 + 0.814 = 2.55
+                    *   Oven: 11.083 + 0.022 = 11.105
+                    *   Pool: 2.815 + 6.965 + 0.025 = 9.805 (pool1, poollight, poolpump?) No, `pool1_sum` is likely a pool heater or pump. `poolpump1_sum` is 0.025. `poollight1_sum` is 2.815.
+                    *   Pump: 0.025 (pump1)
+                    *   Range: 7.867
+                    *   Refrigerator: 25.021 + 2.743 = 27.764
+                    *   Security: 0.271
+                    *   Sewerpump: 0.474
+                    *   Shed: 0
+                    *   Solar: -1.255 (Generation)
+                    *   Sprinkler: 0.033
+                    *   Sump: 0
+                    *   Utility: 1.008
+                    *   Venthood: 0.746
+                    *   Waterheater: 17.109 + 0.005 = 17.114
+                    *   Wellpump: 0.453
+                    *   Winecooler: 0
+                *   This manual summation is tedious and prone to error. However, the target `total` column in the sample is `244423` for Summer 19. The source rows are 15-min intervals. There are 96 intervals in a day. 96 * 24 hours? No, 96 intervals per day.
+                *   The target has 96 rows. This strongly suggests an aggregation **per hour** across all days/seasons?
+                *   Wait, the target has `season` and `hour`. There are 4 seasons and 24 hours. 4 * 24 = 96 rows.
+                *   This confirms the transformation is: **Group by Season and Hour, then Sum the energy loads.**
+
+4.  **Defining the Categories for Summation**:
+    We need to map the source columns to the 5 target categories. The `total` is likely the sum of these 5 categories (or `grid_sum` adjusted for solar? The target `total` is positive. `solar_sum` is negative in source. `grid_sum` = Load - Solar. So `total` likely represents the total load, or the grid consumption. Given the name `total`, and the presence of `solar_sum` (negative), `total` might be the sum of all end-use loads. Let's assume `total` = sum(hvac, dwhe, major, lighting, misc).
+
+    *   **HVAC**:
+        *   `air1_sum`, `air2_sum`, `air3_sum`, `airwindowunit1_sum`
+        *   `furnace1_sum`, `furnace2_sum`
+        *   `heater1_sum`, `heater2_sum`, `heater3_sum`
+        *   `housefan1_sum`
+        *   *Possible additions*: `poolpump1_sum` (if considered HVAC), `jacuzzi1_sum` (heating?). Usually, Jacuzzis are miscellaneous or separate. Let's stick to core HVAC.
+    *   **Domestic Water Heating**:
+        *   `waterheater1_sum`, `waterheater2_sum`
+    *   **Major Appliances**:
+        *   `refrigerator1_sum`, `refrigerator2_sum`
+        *   `clotheswasher1_sum`, `clotheswasher_dryg1_sum`
+        *   `dishwasher1_sum`
+        *   `drye1_sum`, `dryg1_sum`
+        *   `oven1_sum`, `oven2_sum`, `range1_sum`
+        *   `microwave1_sum`
+        *   `freezer1_sum`
+    *   **Lighting**:
+        *   `lights_plugs1_sum` ... `lights_plugs6_sum` (These names are tricky. "Lights_Plugs" suggests mixed. However, in many datasets, these are the main lighting circuits. If we put them in Lighting, what goes in Misc?)
+        *   `poollight1_sum`
+        *   `outsidelights_plugs1_sum`, `outsidelights_plugs2_sum`
+    *   **Miscellaneous Plug Loads**:
+        *   Everything else:
+        *   `aquarium1_sum`
+        *   `bathroom1_sum`, `bathroom2_sum` (Room aggregates? If we use room aggregates, we double count devices. The source has both device and room sums. This is a classic "U-AL" or similar dataset structure. Usually, you sum the *device* level columns to avoid double counting. The room columns (e.g., `bedroom1_sum`) are likely the sum of devices in that room. We should **ignore** room-level sums (`bedroom*`, `bathroom*`, `kitchen*`, `livingroom*`, `diningroom*`, `garage*`, `utilityroom*`, `office*`, `shed*`) to avoid double counting.
+        *   `car1_sum`, `car2_sum` (EV charging? Usually misc or major. Let's put in Misc for now).
+        *   `circpump1_sum`
+        *   `disposal1_sum`
+        *   `icemaker1_sum`
+        *   `jacuzzi1_sum`
+        *   `kitchenapp1_sum`, `kitchenapp2_sum`
+        *   `pool1_sum`, `pool2_sum` (Pool heaters/pumps)
+        *   `pump1_sum`, `sewerpump1_sum`, `sumppump1_sum`, `wellpump1_sum`
+        *   `security1_sum`
+        *   `solar_sum`, `solar2_sum` (Generation, usually subtracted from load or handled separately. If `total` is end-use load, we ignore solar. If `total` is grid consumption, we include it. Given `solar` is negative, summing it reduces the total. Let's look at the `total` column in target. It's large. If we sum all positive loads, we get a large number. If we include negative solar, it reduces. Let's assume `total` is the sum of the 5 categories. Solar is not an end-use load. It's generation. So exclude solar from the 5 categories.)
+        *   `sprinkler1_sum`
+        *   `venthood1_sum`
+        *   `winecooler1_sum`
+        *   `battery1_sum`
+
+    *Refining the "Lights_Plugs" ambiguity*:
+    If `lights_plugs*` are in Lighting, then `miscellaneous` gets the rest.
+    Let's check the magnitude.
+    In the sample row 1 (Dec 5, 17:45):
+    `grid_sum` = 568.7
+    Sum of device columns (approx):
+    HVAC: 7.94 (air) + 27.67 (furnace) + 0.81 (heater) = ~36.4
+    DWHE: 17.1
+    Major: 27.76 (fridge) + 1.71 (washer) + 0.955 (dryer/washer) + 6.2 (dish) + 25.4 (dryer) + 0.55 (dryg) + 11.1 (oven) + 3.1 (micro) + 7.9 (range) + 0.74 (freezer) = ~84.5
+    Lighting (lights_plugs + outside + pool light): 22.02 + 2.55 + 2.81 = ~27.4
+    Misc (car, jacuzzi, pool, pumps, etc):
+    Car: 15.4
+    Jacuzzi: 9.54
+    Pool: 2.815 (pool1) + 0.025 (pump) = 2.84
+    Pumps: 0.025 + 0.474 + 0.453 = 0.95
+    KitchenApp: 5.98
+    Aquarium: 0.29
+    Battery: 0
+    Sprinkler: 0.03
+    Venthood: 0.75
+    Winecooler: 0
+    Security: 0.27
+    Disposal: 0.32
+    Icemaker: 0.21
+    Circpump: 0
+    Total Misc: ~36.5
+    
+    Sum of categories: 36.4 + 17.1 + 84.5 + 27.4 + 36.5 = 201.9.
+    This is far from `grid_sum` (568.7).
+    
+    Why the discrepancy?
+    1. I ignored room-level sums (`bedroom1_sum`=4.0, `livingroom1_sum`=16.0, etc.). If these are *additional* loads not captured by devices, adding them might help.
+       Sum of room columns:
+       Bedroom: 6.38
+       Bathroom: 2.71
+       Kitchen: 2.99
+       Livingroom: 16.67
+       Dining: 0.25
+       Garage: 4.70
+       Utility: 1.01
+       Office: 5.01
+       Shed: 0
+       Total Room: ~39.7
+       New Total: 201.9 + 39.7 = 241.6. Still far from 568.7.
+    
+    2. Maybe `grid_sum` includes something else? Or my category mapping is wrong.
+    3. Let's look at `solar_sum` = -1.255. `grid_sum` = Load - Solar. So Load = Grid + Solar = 568.7 - 1.255 = 567.4.
+    
+    There is a significant gap (~325 kWh/15min? No, units are likely Wh or kWh. If kWh, 568 kWh/15min is huge. If Wh, 568 Wh is small. The target `total` is 244,423. If this is sum of 15-min intervals over a season...
+    Summer has ~92 days. 92 * 24 * 4 = 8832 intervals.
+    244,423 / 8832 ≈ 27.6 per interval.
+    If the unit is Wh, 27.6 Wh/15min is tiny.
+    If the unit is kWh, 27.6 kWh/15min is 110 kW average. That's a

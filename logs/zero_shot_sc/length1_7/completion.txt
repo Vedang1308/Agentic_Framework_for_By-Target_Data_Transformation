@@ -1,0 +1,62 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source Columns**: `Segment`, `Date`, and hourly columns from `1:00` to `24:00:00`.
+    *   **Target Columns**: `cst` and hourly columns from `1:00` to `24:00`.
+    *   **Observation**: The target has one fewer column than the source (`Segment` is dropped). The date column is renamed from `Date` to `cst`. The last hourly column is renamed from `24:00:00` to `24:00`. All other hourly columns (`1:00` through `23:00`) remain unchanged in name and value.
+
+2.  **Identify Transformation Steps**:
+    *   **Step 1: Column Selection/Dropping**: The `Segment` column is present in the source but not in the target. It needs to be dropped.
+    *   **Step 2: Renaming**:
+        *   Rename `Date` to `cst`.
+        *   Rename `24:00:00` to `24:00`.
+    *   **Step 3: Column Ordering**: Ensure the final DataFrame columns match the exact order specified in the target: `['cst', '1:00', ..., '24:00']`.
+
+3.  **Verification with Samples**:
+    *   Source `Date`: `'Thu 10/01/2009'` -> Target `cst`: `'Wed 01/01/2003'`. The format `%a %m/%d/%Y` is preserved. No parsing or reformatting is strictly required for the string value itself, just the column name change.
+    *   Source `24:00:00` value: `1.155` -> Target `24:00` value: `2.188` (Note: The sample rows provided in the prompt for source and target are *different* datasets, likely from different time periods or random samples. However, the structural transformation is consistent. The values in the target correspond to the values in the source for the *same* logical row if the data were aligned. Since we cannot map specific source rows to specific target rows without a key, we assume the transformation is structural: rename columns and drop unused ones. The values themselves are passed through directly).
+    *   Wait, let's look closer at the sample values.
+        *   Source Row 0: `Thu 10/01/2009`, `1:00`=1.153, ..., `24:00:00`=1.155.
+        *   Target Row 0: `Wed 01/01/2003`, `1:00`=2.188, ..., `24:00`=2.753.
+        *   The values are completely different. This implies the `source` and `target` samples shown are just examples of the *schema* and *format*, not a direct row-by-row mapping of the same data. The task is to define the *structural* transformation.
+        *   Therefore, the logic is: Take the input `source` DataFrame, drop `Segment`, rename `Date` to `cst`, rename `24:00:00` to `24:00`, and reorder columns.
+
+4.  **Constructing the Code**:
+    *   Start with `df = source.copy()`.
+    *   Drop `Segment`.
+    *   Rename columns: `{'Date': 'cst', '24:00:00': '24:00'}`.
+    *   Define the target column list.
+    *   Return `df[target_columns]`.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    # Create a copy to avoid modifying the original source
+    df = source.copy()
+    
+    # Define the target columns in the exact required order
+    target_columns = [
+        'cst', '1:00', '2:00', '3:00', '4:00', '5:00', '6:00', '7:00', 
+        '8:00', '9:00', '10:00', '11:00', '12:00', '13:00', '14:00', 
+        '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00', 
+        '22:00', '23:00', '24:00'
+    ]
+    
+    # Drop the 'Segment' column as it is not in the target
+    if 'Segment' in df.columns:
+        df = df.drop(columns=['Segment'])
+    
+    # Rename columns to match target schema
+    # 'Date' -> 'cst'
+    # '24:00:00' -> '24:00'
+    rename_map = {
+        'Date': 'cst',
+        '24:00:00': '24:00'
+    }
+    df = df.rename(columns=rename_map)
+    
+    # Ensure the column order matches the target exactly
+    return df[target_columns]
+```

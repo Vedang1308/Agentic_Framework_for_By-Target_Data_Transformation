@@ -1,0 +1,56 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source has columns: `Strata_ID`, `Strata`, `DT_STRATA`, `DOW`, and hourly columns `PCT_HOURLY_0100` through `PCT_HOURLY_2500`.
+    *   Target has columns: `Date` and `Hr 1` through `Hr 24`.
+    *   The row count is preserved (5673 rows in both samples), implying a row-wise transformation without aggregation or reshaping (melt/pivot).
+
+2.  **Date Transformation**:
+    *   Source column `DT_STRATA` contains dates like '7/2/2016'.
+    *   Target column `Date` requires dates formatted as 'MM/DD/YYYY' (e.g., '01/01/2016').
+    *   Action: Parse `DT_STRATA` using `pd.to_datetime` and format it using `.dt.strftime('%m/%d/%Y')` to create the `Date` column.
+
+3.  **Hourly Column Renaming**:
+    *   Source hourly columns are named `PCT_HOURLY_0100`, `PCT_HOURLY_0200`, ..., `PCT_HOURLY_2400`.
+    *   Target hourly columns are named `Hr 1`, `Hr 2`, ..., `Hr 24`.
+    *   Action: Create a mapping dictionary to rename `PCT_HOURLY_{i:02d}00` to `Hr {i}` for `i` in 1..24.
+    *   Note: The source also has `PCT_HOURLY_2500`, which is not present in the target schema. This column should be dropped or ignored.
+
+4.  **Column Selection**:
+    *   Construct the list of target columns: `['Date', 'Hr 1', 'Hr 2', ..., 'Hr 24']`.
+    *   Select these columns from the transformed DataFrame.
+
+5.  **Implementation Details**:
+    *   Copy the source DataFrame to avoid modifying the original.
+    *   Perform the date formatting.
+    *   Perform the column renaming.
+    *   Return the DataFrame with the exact target column order.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Transform Date column
+    # Parse DT_STRATA and format as MM/DD/YYYY
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['Date'] = dt.dt.strftime('%m/%d/%Y')
+    
+    # 2. Rename Hourly columns
+    # Map PCT_HOURLY_0100 -> Hr 1, ..., PCT_HOURLY_2400 -> Hr 24
+    rename_dict = {}
+    for i in range(1, 25):
+        src_col = f'PCT_HOURLY_{i:02d}00'
+        tgt_col = f'Hr {i}'
+        if src_col in df.columns:
+            rename_dict[src_col] = tgt_col
+            
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define target columns verbatim
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # 4. Return the transformed dataframe with only target columns
+    return df[target_columns]
+```

@@ -1,0 +1,141 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Understand the Goal**: The objective is to transform a wide-format source DataFrame containing hourly energy rate data into a wide-format target DataFrame where rows represent hours (1-24) and columns represent months (January-December). The values in the target table appear to be aggregated sums of the hourly rates for each month.
+
+2.  **Analyze Source Schema**:
+    *   Columns: `Company`, `Rate`, `Rate Code`, `Date`, `Hr 1` through `Hr 24`.
+    *   `Date` is a string in `%m/%d/%Y` format.
+    *   `Hr 1` to `Hr 24` are float values representing rates for specific hours of the day.
+    *   There are multiple companies and rate types, but the target table aggregates everything into a single set of monthly totals per hour. This implies we need to sum across all rows for each specific hour and month combination.
+
+3.  **Analyze Target Schema**:
+    *   Columns: `hour`, `january`, `february`, ..., `december`.
+    *   `hour` is an integer (1-24).
+    *   Month columns are floats.
+    *   The row count is 24 (one for each hour).
+
+4.  **Transformation Steps**:
+    *   **Parse Date**: Convert the `Date` column to datetime objects to extract the month.
+    *   **Melt/Unpivot**: The source data is in a "wide" format with 24 separate hour columns. We need to reshape this into a "long" format where each row represents a single observation of (Company, Rate, Date, Hour, Value). This will make grouping easier.
+        *   Columns to keep: `Company`, `Rate`, `Rate Code`, `Date`.
+        *   Columns to melt: `Hr 1` to `Hr 24`.
+        *   The variable name from melting will be the hour column name (e.g., "Hr 1"), and the value will be the rate.
+    *   **Extract Hour Number**: From the melted variable column (e.g., "Hr 1"), extract the integer hour (1). This becomes the `hour` column in the target.
+    *   **Extract Month**: From the parsed `Date` column, extract the month number (1 for January, 2 for February, etc.).
+    *   **Map Month to Name**: Map the month number to the lowercase month name required by the target schema (e.g., 1 -> 'january').
+    *   **Aggregate**: Group by `hour` and the new `month_name` column. Sum the `Value` column for each group.
+    *   **Pivot/Reshape**: Pivot the aggregated data so that:
+        *   Index: `hour`
+        *   Columns: `month_name`
+        *   Values: Summed rates
+    *   **Clean Up**:
+        *   Reset the index to make `hour` a column.
+        *   Ensure the `hour` column is integer type.
+        *   Ensure month columns are float type.
+        *   Sort the `hour` column ascending (1 to 24).
+        *   Ensure all 12 month columns exist (even if some have NaN, though with full year data they should be present).
+        *   Rename columns to match target exactly.
+
+5.  **Refining the Aggregation**:
+    *   Looking at the sample data, there are multiple rows per date (different companies/rates). The target values are large (e.g., ~721 for Jan Hr 1). Let's verify if it's a sum.
+    *   Source `Hr 1` for 1/1/2014 R4 is ~2.4.
+    *   Target `january` for `hour` 1 is 721.418.
+    *   If we sum all `Hr 1` values for January across all companies and rates, we should get this number.
+    *   Therefore, the aggregation function is `sum`.
+
+6.  **Implementation Details**:
+    *   Use `pd.melt` to unpivot.
+    *   Use string manipulation or regex to extract the hour number from column names like "Hr 1".
+    *   Use `dt.month` to get month integers.
+    *   Use a dictionary or `calendar` module to map month ints to names.
+    *   Use `groupby` and `sum`.
+    *   Use `unstack` or `pivot` to get the final wide format.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms source hourly rate data into a monthly aggregated table by hour.
+    
+    Steps:
+    1. Parse the 'Date' column to extract month information.
+    2. Melt the dataframe from wide (Hr 1-24 columns) to long format.
+    3. Extract the hour number from the melted column names.
+    4. Map month numbers to lowercase month names.
+    5. Group by hour and month, summing the values.
+    6. Pivot to get months as columns and hours as rows.
+    7. Format and return the result.
+    """
+    
+    # 1. Parse Date
+    df = source.copy()
+    df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y')
+    
+    # 2. Identify hour columns
+    hour_cols = [col for col in df.columns if col.startswith('Hr ')]
+    
+    # 3. Melt the dataframe
+    # id_vars: columns to keep as identifiers
+    # value_vars: columns to unpivot
+    # var_name: name for the column that will hold the original column names ('Hr 1', etc.)
+    # value_name: name for the column that will hold the values
+    df_melted = df.melt(
+        id_vars=['Company', 'Rate', 'Rate Code', 'Date'],
+        value_vars=hour_cols,
+        var_name='Hour_Col',
+        value_name='Value'
+    )
+    
+    # 4. Extract Hour Number
+    # 'Hour_Col' contains strings like 'Hr 1', 'Hr 2', ... 'Hr 24'
+    # We extract the integer part.
+    df_melted['hour'] = df_melted['Hour_Col'].str.extract('(\d+)').astype(int)
+    
+    # 5. Extract Month and Map to Name
+    df_melted['month_num'] = df_melted['Date'].dt.month
+    
+    # Mapping dictionary for month names
+    month_map = {
+        1: 'january', 2: 'february', 3: 'march', 4: 'april',
+        5: 'may', 6: 'june', 7: 'july', 8: 'august',
+        9: 'september', 10: 'october', 11: 'november', 12: 'december'
+    }
+    df_melted['month_name'] = df_melted['month_num'].map(month_map)
+    
+    # 6. Aggregate: Group by hour and month_name, sum the values
+    # We drop NaNs if any, though unlikely in this clean dataset
+    df_agg = df_melted.groupby(['hour', 'month_name'])['Value'].sum().reset_index()
+    
+    # 7. Pivot to wide format
+    # index: hour, columns: month_name, values: Value
+    df_pivot = df_agg.pivot(index='hour', columns='month_name', values='Value')
+    
+    # 8. Clean up the resulting dataframe
+    df_pivot.reset_index(inplace=True)
+    
+    # Ensure hour is integer
+    df_pivot['hour'] = df_pivot['hour'].astype(int)
+    
+    # Sort by hour to ensure 1-24 order
+    df_pivot = df_pivot.sort_values('hour').reset_index(drop=True)
+    
+    # Ensure all month columns exist and are in the correct order
+    target_months = ['january', 'february', 'march', 'april', 'may', 'june', 
+                     'july', 'august', 'september', 'october', 'november', 'december']
+    
+    # Fill any potential NaNs with 0 if a month/hour combination is missing (though unlikely)
+    for month in target_months:
+        if month not in df_pivot.columns:
+            df_pivot[month] = 0.0
+            
+    # Select and order columns as required by target
+    target_columns = ['hour'] + target_months
+    
+    # Ensure float type for month columns
+    for col in target_months:
+        df_pivot[col] = df_pivot[col].astype(float)
+        
+    return df_pivot[target_columns]
+```

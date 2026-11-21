@@ -1,0 +1,82 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Date` (object), `Class` (object), and numeric columns `1` through `24` (float64). The `Date` column is in format `M/D/YYYY`. The `Class` column appears to be constant ('RESIDENT') in the sample, but we should handle it generally if needed (though likely just dropped).
+    *   **Target**: Contains columns `dt_strata` (object), `dow` (int64), and `pct_hourly_0100` through `pct_hourly_2500` (float64).
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target might include a date that is not present in the source sample provided, or there is an aggregation/grouping involved. However, looking at the sample data, the source dates are `7/3/2013` to `12/31/2013` (and potentially earlier dates not shown in the truncated sample, as the target starts at `1/1/2013`). The target sample shows dates starting from `1/1/2013`. The source sample provided is just a snippet. The key observation is that the transformation is row-to-row (one date maps to one row in target), but the target includes a `pct_hourly_2500` column which is `nan` in the sample. This implies we need to add this column. The row count difference (182 vs 183) likely just reflects the full dataset range (e.g., a full year has 365 days, but maybe the source is missing one day or the target includes an extra day like a leap day or just a different range). Since the mapping is 1-to-1 based on the date, we don't need complex aggregation, just column renaming and date processing.
+
+2.  **Date Processing**:
+    *   Parse the `Date` column into datetime objects.
+    *   Create `dt_strata` by formatting the datetime as `%m/%d/%Y`. Note: The sample shows `1/1/2013` (single digit month/day). `pd.to_datetime` handles this, and `strftime('%m/%d/%Y')` will produce `01/01/2013`. We need to check if the target requires zero-padding. The target sample shows `1/1/2013`. Standard `strftime` with `%m` and `%d` zero-pads. To match `1/1/2013`, we might need to strip leading zeros or use a custom format. However, looking at Example 2, the target `dt_strata` was `04/01/2009` (zero-padded). Let's look closely at the target sample provided in the prompt: `1/1/2013`. This is *not* zero-padded. But wait, `12/28/2013` in source becomes `12/28/2013` in target? The target sample shows `1/1/2013`, `1/2/2013`, etc. It seems single digits are not zero-padded.
+    *   *Correction*: In pandas, `dt.strftime('%m/%d/%Y')` produces `01/01/2013`. To get `1/1/2013`, we can use `dt.strftime('%-m/%-d/%Y')` on Linux or handle it via string manipulation. Alternatively, we can convert to string and strip leading zeros. A robust way is `dt.strftime('%m/%d/%Y').str.lstrip('0')`? No, that would turn `10` into `0`. Better: `dt.strftime('%m/%d/%Y').replace(r'^0(\d)/', r'\1/', regex=True).replace(r'/0(\d)/', r'/\1/', regex=True)`. Or simply use `dt.strftime('%-m/%-d/%Y')` if supported, but it's platform-dependent.
+    *   Let's re-examine the target sample carefully. `1/1/2013`. `6/29/2013`. `7/1/2013`. It seems consistent with non-zero-padded single digits.
+    *   However, often in these benchmarks, the "sample" might be illustrative. Let's look at the source sample: `7/3/2013`. If I parse `7/3/2013` and format as `%m/%d/%Y`, I get `07/03/2013`. If the target expects `7/3/2013`, I need to remove leading zeros.
+    *   Let's check the `dow` column. Target `dow` for `1/1/2013` is `2`. Jan 1, 2013 was a Tuesday. If Monday=1, Tuesday=2. This matches `dt.dayofweek + 1` (where Monday=0). So `dow = dt.dayofweek + 1`.
+
+3.  **Column Renaming**:
+    *   Source columns `1` to `24` need to be renamed to `pct_hourly_0100` to `pct_hourly_2400`.
+    *   Mapping: `1` -> `pct_hourly_0100`, `2` -> `pct_hourly_0200`, ..., `24` -> `pct_hourly_2400`.
+    *   Create a dictionary for this mapping.
+
+4.  **Adding Missing Column**:
+    *   The target has `pct_hourly_2500`. The source does not.
+    *   The sample shows `nan` for this column. We should add this column with `NaN` values.
+
+5.  **Final Selection**:
+    *   Select columns in the exact order: `dt_strata`, `dow`, `pct_hourly_0100` ... `pct_hourly_2500`.
+
+6.  **Refining Date Format**:
+    *   To ensure `1/1/2013` instead of `01/01/2013`, I will use a helper function or string replacement.
+    *   `df['dt_strata'] = dt.dt.strftime('%m/%d/%Y')`
+    *   Then strip leading zeros from month and day parts.
+    *   `df['dt_strata'] = df['dt_strata'].apply(lambda x: '/'.join([str(int(part)) for part in x.split('/')]))`
+    *   This converts `01/01/2013` to `1/1/2013`.
+
+7.  **Implementation Steps**:
+    *   Copy source.
+    *   Parse `Date` to datetime.
+    *   Create `dt_strata` with non-zero-padded format.
+    *   Create `dow` as `dayofweek + 1`.
+    *   Rename numeric columns `1`-`24` to `pct_hourly_0100`-`pct_hourly_2400`.
+    *   Add `pct_hourly_2500` as NaN.
+    *   Return selected columns.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse Date column
+    dt = pd.to_datetime(df['Date'])
+    
+    # 2. Create dt_strata with format M/D/YYYY (no leading zeros for single digits)
+    # First format with leading zeros, then strip them
+    df['dt_strata'] = dt.dt.strftime('%m/%d/%Y')
+    # Remove leading zeros from month and day
+    def format_date(s):
+        parts = s.split('/')
+        return f"{int(parts[0])}/{int(parts[1])}/{parts[2]}"
+    df['dt_strata'] = df['dt_strata'].apply(format_date)
+    
+    # 3. Create dow column (Monday=1, ..., Sunday=7)
+    # pandas dayofweek: Monday=0, ..., Sunday=6
+    df['dow'] = dt.dt.dayofweek + 1
+    
+    # 4. Rename hourly columns 1-24 to pct_hourly_0100 - pct_hourly_2400
+    rename_dict = {}
+    for i in range(1, 25):
+        rename_dict[str(i)] = f'pct_hourly_{i:02d}00'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 5. Add pct_hourly_2500 column with NaN
+    df['pct_hourly_2500'] = np.nan
+    
+    # 6. Define target columns in exact order
+    target_columns = ['dt_strata', 'dow'] + [f'pct_hourly_{i:02d}00' for i in range(1, 26)]
+    
+    # 7. Return the transformed dataframe
+    return df[target_columns]
+```

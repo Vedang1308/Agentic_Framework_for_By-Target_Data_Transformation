@@ -1,0 +1,128 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Date Transformation**:
+    *   Source column `CST` contains strings like `'Sat 12/01/2012'` (format `%a %m/%d/%Y`).
+    *   Target column `Date` requires strings like `'04/01/2009'` (format `%m/%d/%Y`).
+    *   Action: Parse `CST` to datetime using `pd.to_datetime`, then format as `'%m/%d/%Y'` to create the `Date` column.
+
+2.  **Analyze Hourly Column Transformation**:
+    *   Source columns are named `'1:00'`, `'2:00'`, ..., `'23:00'`, `'24:00:00'`.
+    *   Target columns are named `'Hr 1'`, `'Hr 2'`, ..., `'Hr 23'`, `'Hr 24'`.
+    *   Action: Create a mapping dictionary to rename these columns. Note that `'24:00:00'` maps to `'Hr 24'`.
+
+3.  **Analyze Row Count Discrepancy**:
+    *   Source has 1339 rows, Target has 1340 rows.
+    *   Looking at the sample data, the source rows seem to be daily records. The target rows also seem to be daily records.
+    *   The difference of 1 row suggests that either a row is added (e.g., a total/average row) or a row is split/merged. However, in many TbT tasks, if the row count increases by 1 without obvious grouping keys, it might be due to an index reset or a specific aggregation not immediately visible in the small sample.
+    *   Let's look closer at the samples.
+        *   Source Sample: Starts with `Sat 12/01/2012`.
+        *   Target Sample: Starts with `04/01/2009`.
+        *   The dates are different. This implies the transformation is purely structural (renaming/formatting) and the specific values in the sample are just illustrative of the *format*, not necessarily the same dataset instance.
+        *   Wait, the prompt says "Source sample rows: 1339... Target rows: 1340". This is a strong hint.
+        *   Let's check if there's a missing day or an extra day.
+        *   Often, if the source is daily data and the target is daily data, and the count differs by 1, it might be that the source is missing a day that is present in the target, or vice versa. But we cannot "invent" data.
+        *   Alternative hypothesis: Is there an aggregation? If we group by something, we usually reduce rows.
+        *   Let's look at the column values. The values in the target sample (e.g., `1.02` for Hr 1 on 04/01/2009) look like typical load profiles.
+        *   Let's re-read the "Notice": "Row count changes from 1339 to 1340. Check if an aggregation, grouping, or pivoting operation is required."
+        *   If no grouping key is obvious (like a station ID or year), and the data looks like a single time series, maybe the source is missing the first or last day?
+        *   However, without a key to join or a clear pattern of missing data, we cannot simply insert a row.
+        *   Let's look at the source schema again. `CST` is the only identifier.
+        *   Is it possible the source has duplicate dates that need to be averaged? If there were duplicates, row count would decrease.
+        *   Is it possible the target has a "Total" or "Average" row? The target sample doesn't show a non-date row.
+        *   Let's consider the possibility that the source data provided in the prompt is just a *sample* and the actual transformation logic is simple renaming/formatting, and the row count difference in the *benchmark description* might be due to a specific edge case in the full dataset (e.g., a leap year day, or a specific date range inclusion).
+        *   However, looking at Example 2, a column `pct_hourly_2500` was added with 0s. Here, no new columns are added.
+        *   Let's look at the dates in the source sample: `12/01/2012` to `07/31/2016`. This is a large gap. The sample is not contiguous.
+        *   Let's look at the target sample: `04/01/2009` to `11/30/2012`.
+        *   The samples are disjoint. This confirms we are transforming structure, not specific values.
+        *   If the row count increases, and we are not aggregating, could it be that the source has a column that needs to be exploded? No, all other columns are hourly values.
+        *   Could it be that the source `CST` column has some entries that represent multiple days? Unlikely given the format.
+        *   Let's reconsider the "1339 to 1340" hint. 1340 days is exactly 3 years and 65 days (or 3 years + 1 month + 5 days). 1339 is 3 years and 64 days.
+        *   If the dataset covers a specific period, say 3 years, 365*3 = 1095. 1340 is roughly 3.67 years.
+        *   If the source is missing one day compared to the target, we can't fix it without knowing which day.
+        *   **Crucial Insight**: In many of these generated benchmarks, if the row count changes slightly and no grouping key is present, it might be a red herring or related to how the data was generated (e.g., one file includes a header or footer row that was parsed differently, or one date is missing in the source sample but present in the full source).
+        *   However, there is another possibility: **Index alignment**. If the source has an index that is not reset, and the target expects a specific index? No, `transform` returns a DataFrame, index usually doesn't matter for correctness unless specified.
+        *   Let's look at the columns again.
+        *   Source: `1:00` ... `24:00:00`.
+        *   Target: `Hr 1` ... `Hr 24`.
+        *   The transformation is strictly:
+            1. Parse Date.
+            2. Rename Columns.
+        *   If I implement this, and the row count is off, it's likely due to the specific test data having a missing row in the source that the target "corrects" or vice versa. But since I must compute solely from source, I cannot add rows.
+        *   Wait, is it possible that `CST` contains a value that splits into two rows? No.
+        *   Is it possible that the source has a row with `NaN` dates that gets dropped? If so, row count would decrease.
+        *   Is it possible that the source has a row that is duplicated and needs to be kept?
+        *   Let's assume the standard transformation: Parse Date, Rename Columns. If the benchmark expects 1340 rows from 1339, and I can't generate data, there might be a misunderstanding of the "Source Sample". The source sample shows 8 rows. The target sample shows 8 rows.
+        *   Let's check if the source has a hidden column or if `CST` needs splitting.
+        *   Actually, look at the source sample `CST`: `Sat 12/01/2012`.
+        *   Look at target `Date`: `04/01/2009`.
+        *   The transformation is definitely just formatting.
+        *   Why the row count difference?
+        *   Hypothesis: The source data might have a row that is an "average" or "total" row that needs to be removed? No, that would decrease count.
+        *   Hypothesis: The source data is missing a day that is implicitly present in the target's time range?
+        *   Let's look at similar problems. Often, if the row count increases, it's because of a `melt` or `explode`. But here we are going from wide to wide.
+        *   Let's consider that the prompt's "Notice" might be referring to the *test* set specifically, where perhaps the source file has a trailing newline or empty row that pandas ignores, but the target has it? Or vice versa?
+        *   If I simply perform the rename and format, I will get 1339 rows. If the target has 1340, my solution will fail the row count check.
+        *   Is there any column in the source that could be expanded? No.
+        *   Is it possible that `24:00:00` represents two hours? No, it's one column.
+        *   Let's look at the date range. 1340 days.
+        *   If the source is 1339 days, maybe one day is missing in the source?
+        *   If I cannot add data, I must assume the transformation is 1-to-1.
+        *   **Alternative**: Maybe the source `CST` column has a value like `"Sat 12/01/2012, Sun 12/02/2012"`? No, sample shows single dates.
+        *   **Alternative**: Maybe the source has a row with `NaN` in `CST` that should be inferred?
+        *   Let's look at the provided examples. Example 2 added a column. Example 1 and 3 were 1-to-1.
+        *   If I am forced to guess, the most robust transformation is the 1-to-1 mapping. The row count discrepancy might be an artifact of the specific benchmark generation (e.g., one file includes a header row in the data, or a specific date like Feb 29 is handled differently).
+        *   However, there is one more possibility: **The source has a row that is a duplicate of another row, and the target has them merged?** No, that reduces rows.
+        *   **The source has a row that is split?**
+        *   Let's look at the column `24:00:00`. In some datasets, 24:00 is the end of the day, and 00:00 is the start. Here we have 1:00 to 24:00.
+        *   Let's assume the standard 1-to-1 transformation. If the test fails due to row count, it's likely a data issue in the benchmark definition rather than a complex transformation I'm missing, given the lack of keys for splitting.
+        *   *Self-Correction*: What if the source `CST` column has a value that is `NaT` or empty, and the target expects a specific date there?
+        *   Let's stick to the strongest signal: The schema mapping.
+        *   1. Parse `CST` -> `Date`.
+        *   2. Rename `1:00`..`24:00:00` -> `Hr 1`..`Hr 24`.
+        *   3. Return.
+
+    *   *Refined Check on Row Count*: 1339 to 1340.
+    *   If the source is missing a day, I can't add it.
+    *   If the source has an extra day, I can't remove it without a key.
+    *   Is it possible that the source `CST` contains a string like `"Sat 12/01/2012"` and the target expects `"12/01/2012"`? Yes.
+    *   Is it possible that the source has a row with `CST` = `""` or `NaN`?
+    *   Let's assume the transformation is straightforward. The "Notice" might be a distractor or referring to a specific edge case in the *test* file (e.g., the test source has 1339 rows, but the *expected* target has 1340 because the benchmark generator made a mistake or included a header). Or, more likely, the source *sample* shown is 8 rows, but the *full* source is 1339.
+    *   Actually, 1340 days is exactly 3 years + 65 days.
+    *   1339 days is 3 years + 64 days.
+    *   This is a very specific difference.
+    *   Could it be that the source data *excludes* a specific day (e.g., a holiday) that the target *includes*?
+    *   Without external knowledge, I cannot add a row.
+    *   I will proceed with the 1-to-1 transformation.
+
+4.  **Implementation Details**:
+    *   `df['Date'] = pd.to_datetime(df['CST']).dt.strftime('%m/%d/%Y')`
+    *   Rename dict: `{f'{i}:00': f'Hr {i}' for i in range(1, 24)}` plus `{'24:00:00': 'Hr 24'}`.
+    *   Select columns: `['Date'] + [f'Hr {i}' for i in range(1, 25)]`.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the CST column and format as MM/DD/YYYY for the 'Date' column
+    # Source format: '%a %m/%d/%Y' (e.g., 'Sat 12/01/2012')
+    # Target format: '%m/%d/%Y' (e.g., '12/01/2012')
+    df['Date'] = pd.to_datetime(df['CST']).dt.strftime('%m/%d/%Y')
+    
+    # 2. Rename the hourly columns
+    # Source: '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target: 'Hr 1', 'Hr 2', ..., 'Hr 23', 'Hr 24'
+    rename_dict = {}
+    for i in range(1, 24):
+        rename_dict[f'{i}:00'] = f'Hr {i}'
+    rename_dict['24:00:00'] = 'Hr 24'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define the target columns in the correct order
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # 4. Return the DataFrame with only the target columns
+    return df[target_columns]
+```

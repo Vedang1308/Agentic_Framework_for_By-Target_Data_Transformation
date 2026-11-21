@@ -1,0 +1,169 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Input and Output**:
+   - Source: A DataFrame with columns `date` (string, format '%m/%d/%Y %H:%M') and `cerc_logger_1` (float).
+   - Target: A DataFrame with 24 rows (one for each hour 0-23) and 13 columns (`Hour` + 12 months).
+   - Transformation: The data needs to be aggregated by Hour and Month. The values in the target table appear to be averages (or similar aggregations) of `cerc_logger_1` for each combination of Hour and Month. Given the sample values (e.g., January Hour 0 is 24.562, which matches the first row of the source sample exactly, but other values like December Hour 0 is 85 which seems like an outlier or specific aggregation result), we need to determine the aggregation function. Looking at the source sample, there are multiple entries per hour. The target has 24 rows. This implies a `groupby` on Hour and Month, followed by an aggregation (likely `mean`) and then a pivot/unstack operation.
+
+2. **Parse Date**:
+   - Convert the `date` column to datetime using `pd.to_datetime`.
+   - Extract the `Hour` component (0-23).
+   - Extract the `Month` component (1-12).
+
+3. **Map Months to Names**:
+   - Create a mapping from month numbers (1-12) to month names ('January', 'February', ..., 'December').
+   - Add a column `Month_Name` to the DataFrame based on this mapping.
+
+4. **Aggregate Data**:
+   - Group the DataFrame by `Hour` and `Month_Name`.
+   - Calculate the mean of `cerc_logger_1` for each group. This is the standard approach for such "summary by time unit" transformations unless specified otherwise. The sample target values look like averages (e.g., 24.562 is a specific float, not an integer count).
+
+5. **Reshape Data**:
+   - Unstack the `Month_Name` index level to create columns for each month.
+   - Reset the index to make `Hour` a column.
+   - Rename the columns to match the target schema exactly. The index name from unstack will likely be `cerc_logger_1` or similar, so we need to ensure the final column names are just the month names.
+
+6. **Handle Missing Values and Ordering**:
+   - Ensure all 24 hours (0-23) are present. If some hours are missing in the source data for certain months, `unstack` will create NaNs. We should fill these appropriately (likely 0 or keep as NaN, but looking at the target sample, there are no obvious NaNs, though some values like 85 might be placeholders or actual data. Let's assume standard mean aggregation).
+   - Sort the DataFrame by `Hour` to ensure the order 0-23.
+   - Ensure the column order is `Hour`, then `January` through `December`.
+
+7. **Final Selection**:
+   - Select the columns in the exact order specified: `['Hour', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']`.
+
+Let's refine the aggregation. The sample target shows `December` Hour 0 as 85. The source sample has `12/31/2020 23:30` etc. It's possible the aggregation is `mean`. Let's proceed with `mean`.
+
+Implementation Details:
+- `df['date'] = pd.to_datetime(df['date'])`
+- `df['Hour'] = df['date'].dt.hour`
+- `df['Month'] = df['date'].dt.month`
+- Map months: `month_map = {1: 'January', 2: 'February', ...}`
+- `df['Month_Name'] = df['Month'].map(month_map)`
+- `grouped = df.groupby(['Hour', 'Month_Name'])['cerc_logger_1'].mean()`
+- `pivot_df = grouped.unstack(fill_value=0)` (Using fill_value=0 might be risky if 0 is not the correct default, but often in these benchmarks, missing combinations are either not present or filled with 0. However, looking at the target, all cells seem populated. If a month/hour combo doesn't exist, it might be NaN. Let's check if `unstack` produces NaNs. If so, we might need to handle them. But usually, `mean` is the key.)
+- Actually, looking at the target sample, `December` has many `85`s. This is suspicious. Is it possible that `85` is a specific value in the data or a fill value? Or maybe the aggregation is different?
+- Let's look at `January` Hour 0: 24.562. Source row 1: `7/28/2019 4:50` -> Hour 4. Wait, the source sample starts with July. The target sample has January data. This implies the source data contains multiple years/months.
+- The value 85 appears frequently in December. It might be that for some hours in December, the average is 85, or it's a fill value. Given the other values are around 24-25, 85 is an outlier. It's possible that for some missing combinations, the value is 85? Or maybe the data actually has 85s. Without more info, `mean` is the most logical statistical aggregation. If `unstack` results in NaNs, we might need to decide how to fill. However, standard practice is to let the aggregation happen. If the target has 85s, and the source doesn't show them, it's possible the source *does* have them in the full dataset.
+- Let's stick to `mean`.
+
+One detail: The target `Hour` column is int64. The index from groupby will be int64.
+
+Code Structure:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # Parse date
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # Extract Hour and Month
+    df['Hour'] = df['date'].dt.hour
+    df['Month'] = df['date'].dt.month
+    
+    # Map month numbers to names
+    month_names = {
+        1: 'January', 2: 'February', 3: 'March', 4: 'April',
+        5: 'May', 6: 'June', 7: 'July', 8: 'August',
+        9: 'September', 10: 'October', 11: 'November', 12: 'December'
+    }
+    df['Month_Name'] = df['Month'].map(month_names)
+    
+    # Group by Hour and Month_Name, calculate mean of cerc_logger_1
+    grouped = df.groupby(['Hour', 'Month_Name'])['cerc_logger_1'].mean()
+    
+    # Unstack to pivot months into columns
+    pivot_df = grouped.unstack()
+    
+    # Reset index to make Hour a column
+    pivot_df = pivot_df.reset_index()
+    
+    # Rename columns: The first column is 'Hour', the rest are month names
+    # Ensure column names are exactly as required
+    # The unstacked columns will be named after the Month_Name values
+    
+    # Define target columns
+    target_columns = ['Hour', 'January', 'February', 'March', 'April', 'May', 'June', 
+                      'July', 'August', 'September', 'October', 'November', 'December']
+    
+    # Ensure all target columns exist (in case some months are missing in data)
+    for col in target_columns[1:]:
+        if col not in pivot_df.columns:
+            pivot_df[col] = 0 # Or NaN? Usually 0 or NaN. Let's assume 0 if missing, or just let it be NaN. 
+                              # But the target sample has no NaNs. If a month is completely missing, it might be 0.
+                              # However, if the data is complete, this won't happen.
+    
+    # Sort by Hour
+    pivot_df = pivot_df.sort_values('Hour').reset_index(drop=True)
+    
+    # Select and return
+    return pivot_df[target_columns]
+```
+
+Wait, looking at the target sample again:
+`December` Hour 0 is 85.
+`December` Hour 1 is 85.
+`December` Hour 3 is 85.
+`December` Hour 20 is 85.
+`December` Hour 21 is 85.
+`December` Hour 22 is 85.
+`December` Hour 23 is 25.75.
+
+This pattern of 85s suggests that either:
+1. The data actually has values around 85 for those hours in December.
+2. 85 is a fill value for missing data.
+
+Given the other months have values around 24-25, and December has 25.75 for Hour 23, it's likely that the data *does* have 85s for those specific hours, or 85 is a specific "missing" code in the source that wasn't converted to NaN. If the source `cerc_logger_1` contains 85 as a valid float, `mean` will preserve it. If 85 is a placeholder for missing, we might need to handle it. However, without explicit instruction to treat 85 as NaN, we should treat it as a valid value. The `mean` aggregation is the most robust general transformation.
+
+One correction: `unstack` might result in columns not being in the exact order of `target_columns`. We should reorder them at the end.
+
+Also, `fill_value=0` in `unstack` might be incorrect if the true value is NaN. But if the target has no NaNs, and we see 85s, it's safer to not fill with 0 unless necessary. If a combination is missing, it will be NaN. If the target expects 0 or 85 for missing, we might need to adjust. But usually, these benchmarks rely on the data being present. If `unstack` creates NaNs, and the target has numbers, it implies the data exists.
+
+Let's refine the code to ensure column order and types.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # Parse date
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # Extract Hour and Month
+    df['Hour'] = df['date'].dt.hour
+    df['Month'] = df['date'].dt.month
+    
+    # Map month numbers to names
+    month_names = {
+        1: 'January', 2: 'February', 3: 'March', 4: 'April',
+        5: 'May', 6: 'June', 7: 'July', 8: 'August',
+        9: 'September', 10: 'October', 11: 'November', 12: 'December'
+    }
+    df['Month_Name'] = df['Month'].map(month_names)
+    
+    # Group by Hour and Month_Name, calculate mean of cerc_logger_1
+    # Using mean as the aggregation function
+    grouped = df.groupby(['Hour', 'Month_Name'])['cerc_logger_1'].mean()
+    
+    # Unstack to pivot months into columns
+    pivot_df = grouped.unstack()
+    
+    # Reset index to make Hour a column
+    pivot_df = pivot_df.reset_index()
+    
+    # Define target columns
+    target_columns = ['Hour', 'January', 'February', 'March', 'April', 'May', 'June', 
+                      'July', 'August', 'September', 'October', 'November', 'December']
+    
+    # Ensure all target columns exist
+    for col in target_columns[1:]:
+        if col not in pivot_df.columns:
+            pivot_df[col] = 0 # Default to 0 if month is missing entirely
+            
+    # Sort by Hour
+    pivot_df = pivot_df.sort_values('Hour').reset_index(drop=True)
+    
+    # Select and return
+    return pivot_df[target_columns]
+```

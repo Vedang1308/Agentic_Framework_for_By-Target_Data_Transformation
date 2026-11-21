@@ -1,0 +1,124 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Input and Output Schemas**:
+   - Source: `date` (string, format '%m/%d/%Y %H:%M'), `zone_016_cooling_sp` (float).
+   - Target: `date` (string, format '%m/%d/%Y'), followed by 24 columns representing hours of the day in 12-hour format with AM/PM (e.g., '1:00 AM', ..., '12:00 AM').
+   - Row count reduction: Source has ~15k rows, Target has ~53 rows. This implies aggregation by date. The target rows represent unique dates.
+
+2. **Parse Dates and Extract Components**:
+   - Convert the source `date` column to datetime objects using `pd.to_datetime`.
+   - Extract the date part (year, month, day) to group by. Format this as '%m/%d/%Y' for the target `date` column.
+   - Extract the hour component (0-23) from the datetime to determine which target column the value belongs to.
+
+3. **Map Hours to Target Column Names**:
+   - The target columns use 12-hour clock format with AM/PM.
+   - Mapping logic:
+     - Hour 0 (00:00) -> '12:00 AM'
+     - Hour 1 (01:00) -> '1:00 AM'
+     - ...
+     - Hour 11 (11:00) -> '11:00 AM'
+     - Hour 12 (12:00) -> '12:00 PM'
+     - Hour 13 (13:00) -> '1:00 PM'
+     - ...
+     - Hour 23 (23:00) -> '11:00 PM'
+   - Create a mapping dictionary or function to convert 24-hour integers to these specific strings.
+
+4. **Pivot/Reshape the Data**:
+   - Group the data by the extracted date string.
+   - For each group (date), we need to assign the `zone_016_cooling_sp` values to the correct hour columns.
+   - Since the source data has multiple entries per hour (e.g., every 5 minutes), we need an aggregation strategy. Looking at the target sample, the values are constant (73) for most hours. If there are multiple values for a specific hour on a specific date, we should likely take the mean or the first value. Given the nature of "setpoint" data, it's often constant. Let's use `mean` to be safe against noise, or `first` if it's strictly step-wise. However, looking at the sample, `11/06/2018` has `nan` for '10:00 PM' and '11:00 PM'. This suggests that if data is missing for a specific hour, it should remain NaN.
+   - A robust approach:
+     1. Create a DataFrame with index as the date string.
+     2. Create a column for the target hour label based on the source hour.
+     3. Use `pivot_table` or `groupby` + `unstack`.
+     4. `pivot_table(index='date', columns='hour_label', values='zone_016_cooling_sp', aggfunc='mean')` (or 'first'). Let's check the sample again. The sample shows `nan` for missing hours. `pivot_table` handles missing combinations by defaulting to NaN.
+
+5. **Refine Hour Mapping**:
+   - Define the list of target hour columns in order: `['1:00 AM', '2:00 AM', ..., '12:00 AM']`.
+   - Map source hour `h` to label:
+     - If `h == 0`: '12:00 AM'
+     - If `1 <= h <= 11`: f'{h}:00 AM'
+     - If `h == 12`: '12:00 PM'
+     - If `13 <= h <= 23`: f'{h-12}:00 PM'
+
+6. **Construct Final DataFrame**:
+   - Perform the pivot operation.
+   - Rename the index to 'date'.
+   - Reset index to make 'date' a column.
+   - Ensure all 24 target hour columns exist, even if empty (fill with NaN if necessary, though pivot usually handles this if we specify columns).
+   - Reorder columns to match the target schema exactly: `['date', '1:00 AM', ..., '12:00 AM']`.
+
+7. **Implementation Details**:
+   - Use `pd.to_datetime` with `format='%m/%d/%Y %H:%M'` (or infer).
+   - Extract date string: `dt.strftime('%m/%d/%Y')`.
+   - Extract hour: `dt.hour`.
+   - Map hour to label.
+   - Pivot.
+   - Select and order columns.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column
+    # The source format is '%m/%d/%Y %H:%M'
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract the date string for grouping/indexing
+    df['date_str'] = df['datetime'].dt.strftime('%m/%d/%Y')
+    
+    # 3. Extract the hour (0-23)
+    df['hour_24'] = df['datetime'].dt.hour
+    
+    # 4. Map 24-hour format to 12-hour AM/PM format strings
+    def map_hour_to_label(h):
+        if h == 0:
+            return '12:00 AM'
+        elif 1 <= h <= 11:
+            return f'{h}:00 AM'
+        elif h == 12:
+            return '12:00 PM'
+        else: # 13-23
+            return f'{h-12}:00 PM'
+            
+    df['hour_label'] = df['hour_24'].apply(map_hour_to_label)
+    
+    # 5. Pivot the data
+    # We group by date_str and hour_label, aggregating the zone_016_cooling_sp values.
+    # Using 'mean' to handle multiple entries per hour (e.g., every 5 mins).
+    # If a specific hour has no data for a date, it will be NaN.
+    pivot_df = df.pivot_table(
+        index='date_str', 
+        columns='hour_label', 
+        values='zone_016_cooling_sp', 
+        aggfunc='mean'
+    )
+    
+    # 6. Define the target column order
+    # The target columns are in chronological order starting from 1:00 AM
+    target_hour_cols = [
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', 
+        '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 PM', 
+        '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', 
+        '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 AM'
+    ]
+    
+    # 7. Ensure all target columns exist in the pivot result
+    # If some hours are completely missing from the dataset, add them as NaN columns
+    for col in target_hour_cols:
+        if col not in pivot_df.columns:
+            pivot_df[col] = np.nan
+            
+    # 8. Reset index to make 'date_str' a column named 'date'
+    pivot_df = pivot_df.reset_index()
+    pivot_df = pivot_df.rename(columns={'date_str': 'date'})
+    
+    # 9. Select and order the final columns
+    target_columns = ['date'] + target_hour_cols
+    result_df = pivot_df[target_columns]
+    
+    return result_df
+```

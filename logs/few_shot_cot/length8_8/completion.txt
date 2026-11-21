@@ -1,0 +1,163 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a `date` column (string format 'M/D/YYYY') and 24 columns named `Hour 1` through `Hour 24` containing numeric values.
+    *   **Target**: Contains an `hour` column (integer 1-24) and 12 columns named after months (`january` through `december`).
+    *   **Transformation Type**: This is a pivot/aggregation operation. We need to group the data by the hour of the day and the month of the year, then aggregate the values.
+
+2.  **Determine Aggregation Logic**:
+    *   The target has one row per hour (1-24).
+    *   The target has one column per month.
+    *   Looking at the sample data, for a specific hour and month, there might be multiple days (e.g., July 3, July 4, etc.). The target values appear to be consistent across days for the same hour/month in the sample, or represent an average/sum. Given the small values and the nature of such datasets (often probabilities or rates), and seeing that `Hour 1` for `july` is `0.000239866` in the target, and the source has `0.000239866` for multiple days in July, it's likely an **average** or simply taking the value if it's constant. However, standard practice for "table-to-table" where rows are collapsed is often `mean` or `sum`. Let's look closer.
+    *   Source `Hour 1` for `7/3/2015` is `0.000239866`. Source `Hour 1` for `7/4/2015` is `0.000239866`. Target `hour=1`, `july` is `0.000239866`.
+    *   Source `Hour 6` for `7/3/2015` is `0.000119933`. Target `hour=6`, `july` is `0.000119933`.
+    *   Since the values are identical for the same hour across different days in the same month in the sample, `mean` and `sum` (if count=1) or just `first` would work. However, if there are multiple days, `mean` is the safest statistical aggregation for rates/probabilities unless specified otherwise. Let's assume `mean` aggregation. If the values were counts, `sum` would be appropriate. Given the decimal precision, these look like probabilities or normalized values. `mean` preserves the magnitude.
+
+3.  **Step-by-Step Implementation**:
+    *   **Parse Date**: Convert the `date` column to datetime objects to extract the month.
+    *   **Extract Month**: Create a new column `month` from the datetime object. Map the integer month (1-12) to the lowercase month names required by the target schema (`january`, `february`, etc.).
+    *   **Melt/Reshape**: The source is in "wide" format (one column per hour). We need to transform it to "long" format to group by hour and month.
+        *   Keep `date` (or the extracted `month`) as an identifier.
+        *   Melt the `Hour 1`...`Hour 24` columns into two columns: `hour_name` (e.g., "Hour 1") and `value`.
+        *   Extract the integer hour from `hour_name` (e.g., "Hour 1" -> 1).
+    *   **Group and Aggregate**:
+        *   Group by the extracted `hour` (integer) and the `month` (string name).
+        *   Aggregate the `value` column. Based on the analysis, `mean` is the likely candidate.
+    *   **Pivot**:
+        *   Pivot the resulting long DataFrame so that `hour` becomes the index (or a column), `month` becomes the columns, and the aggregated values fill the cells.
+    *   **Format Output**:
+        *   Ensure the column names match the target exactly: `['hour', 'january', 'february', ..., 'december']`.
+        *   Reset the index to make `hour` a column.
+        *   Sort by `hour` to match the target order (1, 10, 11... or 1, 2, 3...? The target sample shows 1, 10, 11, 12, 6, 7, 8, 9. This looks like a specific sort order, possibly string sort or just arbitrary. However, standard practice is usually numeric sort. Let's look at the target sample again: `1, 10, 11, 12, 6, 7, 8, 9`. This is not numeric (1, 2, 3...) nor standard string sort (1, 10, 11, 12, 2, 3...). It looks like the order in which they appeared or were processed. Wait, looking at the provided target sample rows:
+            Row 0: hour 1
+            Row 1: hour 10
+            Row 2: hour 11
+            Row 3: hour 12
+            Row 4: hour 6
+            Row 5: hour 7
+            Row 6: hour 8
+            Row 7: hour 9
+            This order is strange. It might be the order of appearance in the source data? Or maybe the target sample is just a subset and not sorted. The requirement says "Return a DataFrame with the same schema and contents as target.csv". Usually, row order matters if not specified. However, in TbT tasks, unless a specific sort key is evident, numeric sort is the default assumption for integer IDs. But let's look at the source. The source has dates. Maybe the order is determined by the first occurrence?
+            Actually, looking at the target sample provided in the prompt, it is *not* sorted numerically. It is `1, 10, 11, 12, 6, 7, 8, 9`. This is very specific.
+            Let's re-read the source sample.
+            Source rows: 7/3, 7/4, 7/5, 7/6, 12/28, 12/29, 12/30, 12/31.
+            If we group by hour, the order of hours in the result might depend on the pivot operation.
+            Standard `pivot_table` sorts columns and index by default.
+            If I use `pivot_table`, the index `hour` will be sorted numerically (1, 2, 3...).
+            The target sample shows `1, 10, 11, 12, 6, 7, 8, 9`. This looks like a string sort of the hour numbers?
+            String sort of "1", "10", "11", "12", "6", "7", "8", "9":
+            "1" < "10" < "11" < "12" < "6" < "7" < "8" < "9".
+            Yes! The target rows are sorted by the string representation of the hour.
+            So, after creating the `hour` column as integer, I should probably convert it to string for sorting, or just sort the final dataframe by the `hour` column treating it as a string?
+            Wait, the target schema says `hour` is `int64`.
+            If I sort by string, I get the order 1, 10, 11, 12, 2, 3...
+            The sample shows 1, 10, 11, 12, 6, 7, 8, 9. It doesn't show 2, 3, 4, 5.
+            Let's assume the standard numeric sort is expected unless the "string sort" hypothesis is strong. The string sort hypothesis fits the visible rows perfectly.
+            However, usually, TbT targets are sorted by the primary key numerically. The sample might just be a random subset or the result of a specific operation.
+            Let's look at the columns. `january`...`december`.
+            
+            Let's refine the aggregation.
+            1. Parse `date` to datetime.
+            2. Extract `month_num` (1-12).
+            3. Map `month_num` to `month_name` (lowercase).
+            4. Melt `Hour 1`...`Hour 24` to `hour_str` and `value`.
+            5. Extract `hour_int` from `hour_str`.
+            6. Group by `hour_int` and `month_name`.
+            7. Aggregate `value` using `mean`.
+            8. Pivot: index=`hour_int`, columns=`month_name`, values=`value`.
+            9. Reset index.
+            10. Rename columns to match target.
+            11. Sort? If I sort by `hour` numerically, I get 1, 2, 3... If the target expects string sort, I need to sort by `hour.astype(str)`. Given the sample `1, 10, 11, 12, 6...`, string sort is the only logical explanation for that specific order. I will apply string sort to the `hour` column to match the sample's row order.
+
+4.  **Refining the Month Mapping**:
+    *   1: january, 2: february, ..., 12: december.
+
+5.  **Handling Missing Values**:
+    *   If a month is not present in the source for a specific hour, the pivot will result in NaN. The target sample shows `nan` for months not present (e.g., `august` is `nan` in the sample rows shown). This is consistent with standard pivot behavior.
+
+6.  **Final Code Structure**:
+    *   Import pandas.
+    *   Copy source.
+    *   Parse dates.
+    *   Melt.
+    *   Extract hour and month.
+    *   Group and aggregate.
+    *   Pivot.
+    *   Clean up column names and index.
+    *   Sort by `hour` as string to match sample order.
+    *   Return specific columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column to extract month information
+    df['date_dt'] = pd.to_datetime(df['date'])
+    df['month_num'] = df['date_dt'].dt.month
+    
+    # Map month numbers to lowercase month names
+    month_map = {
+        1: 'january', 2: 'february', 3: 'march', 4: 'april',
+        5: 'may', 6: 'june', 7: 'july', 8: 'august',
+        9: 'september', 10: 'october', 11: 'november', 12: 'december'
+    }
+    df['month_name'] = df['month_num'].map(month_map)
+    
+    # 2. Melt the hour columns from wide to long format
+    # Identify hour columns
+    hour_cols = [f'Hour {i}' for i in range(1, 25)]
+    
+    # Melt
+    df_melted = df.melt(
+        id_vars=['month_name'], 
+        value_vars=hour_cols, 
+        var_name='hour_col', 
+        value_name='value'
+    )
+    
+    # 3. Extract integer hour from the column name 'Hour X'
+    df_melted['hour'] = df_melted['hour_col'].str.extract(r'(\d+)').astype(int)
+    
+    # 4. Group by hour and month, and aggregate
+    # Using mean as the aggregation function. 
+    # If values are constant per hour/month, mean equals the value.
+    grouped = df_melted.groupby(['hour', 'month_name'])['value'].mean().reset_index()
+    
+    # 5. Pivot the data to get months as columns
+    # Index: hour, Columns: month_name, Values: value
+    df_pivot = grouped.pivot(index='hour', columns='month_name', values='value')
+    
+    # 6. Clean up the DataFrame
+    df_pivot.reset_index(inplace=True)
+    
+    # Rename columns to match target schema exactly
+    # The pivot creates a MultiIndex or simple columns depending on version, 
+    # but here columns are the month names.
+    # Ensure column names are strings and lowercase (they should be from the map)
+    df_pivot.columns.name = None
+    
+    # Define target columns
+    target_columns = ['hour', 'january', 'february', 'march', 'april', 'may', 'june', 
+                      'july', 'august', 'september', 'october', 'november', 'december']
+    
+    # Ensure all target month columns exist, filling missing with NaN if necessary
+    for col in target_columns[1:]:
+        if col not in df_pivot.columns:
+            df_pivot[col] = float('nan')
+            
+    # Select and order columns
+    df_result = df_pivot[target_columns]
+    
+    # 7. Sort the rows
+    # The sample target shows order: 1, 10, 11, 12, 6, 7, 8, 9
+    # This corresponds to a string sort of the hour numbers.
+    df_result['hour_str'] = df_result['hour'].astype(str)
+    df_result = df_result.sort_values(by='hour_str').drop(columns=['hour_str'])
+    
+    # Ensure hour is int64 as per target schema
+    df_result['hour'] = df_result['hour'].astype(int)
+    
+    return df_result
+```

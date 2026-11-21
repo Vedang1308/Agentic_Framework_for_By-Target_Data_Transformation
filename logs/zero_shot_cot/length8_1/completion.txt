@@ -1,0 +1,89 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Date/Time**: The source column `date` is a string in the format `%m/%d/%Y %H:%M`. We need to convert this into a pandas `datetime` object to extract temporal components.
+2.  **Extract Components**: From the parsed datetime, extract:
+    *   `Hour`: The hour of the day (0-23).
+    *   `Month`: The month of the year (1-12).
+3.  **Map Month to Name**: Create a mapping from month numbers (1-12) to their full names (January, February, etc.) to align with the target column names.
+4.  **Pivot/Reshape**: The target table has `Hour` as rows and Months as columns. This suggests a pivot operation.
+    *   Index: `Hour`
+    *   Columns: `Month Name`
+    *   Values: `cerc_logger_1`
+5.  **Aggregation**: Since multiple source rows might map to the same (Hour, Month) combination (e.g., multiple days in January at Hour 0), we need an aggregation function. Looking at the target values (e.g., January Hour 0 is 24.562, which matches a specific sample value, but other values like 24.062 appear frequently), and considering typical sensor data transformations, `mean` is the most standard aggregation for averaging readings over time. Let's verify with the sample.
+    *   Sample Source: `7/28/2019 4:50` -> Hour 4, July. Value 24.562.
+    *   Sample Target: July Hour 4 is not explicitly shown in the snippet, but July Hour 0 is 24.437.
+    *   Let's look at December Hour 23. Target is 25.75.
+    *   Let's look at December Hour 2. Target is 23.5.
+    *   The values in the target look like averages. For instance, if there are multiple days, the average smooths the data. I will use `mean` as the aggregation function.
+6.  **Handle Missing Data**: The pivot might result in NaNs if a specific hour doesn't exist for a specific month in the dataset. However, the target table seems to have values for all hours (0-23) and all months. If there are missing combinations, we might need to fill them, but usually, in these benchmarks, if the data is dense enough, `mean` suffices. If specific cells are empty in the source, they might be empty in the target or filled with a default. Looking at the target, there are no obvious NaNs. I will proceed with `mean`.
+7.  **Reindex Hours**: Ensure the `Hour` column contains all hours from 0 to 23. The target sample shows hours 0, 1, 2, 3, 20, 21, 22, 23. It implies a full 24-hour cycle. I should reindex the result to ensure all 24 hours are present, sorted ascending.
+8.  **Rename Columns**: The pivot will create columns with month names. Ensure they match the target verbatim: `['January', 'February', ..., 'December']`.
+9.  **Reset Index**: Convert the `Hour` index back to a column.
+10. **Final Formatting**: Ensure the `Hour` column is integer type and month columns are float. Return the DataFrame with the exact target column order.
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame by pivoting
+    sensor readings by Hour and Month.
+    """
+    # 1. Parse the date column
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract Hour and Month
+    df['Hour'] = df['datetime'].dt.hour
+    df['Month'] = df['datetime'].dt.month
+    
+    # 3. Map Month numbers to names
+    month_map = {
+        1: 'January', 2: 'February', 3: 'March', 4: 'April',
+        5: 'May', 6: 'June', 7: 'July', 8: 'August',
+        9: 'September', 10: 'October', 11: 'November', 12: 'December'
+    }
+    df['Month_Name'] = df['Month'].map(month_map)
+    
+    # 4. Pivot the table
+    # Index: Hour, Columns: Month_Name, Values: cerc_logger_1
+    # Aggregation: mean (standard for time-series sensor data)
+    pivot_df = df.pivot_table(
+        index='Hour', 
+        columns='Month_Name', 
+        values='cerc_logger_1', 
+        aggfunc='mean'
+    )
+    
+    # 5. Ensure all 24 hours are present and sorted
+    all_hours = pd.RangeIndex(0, 24)
+    pivot_df = pivot_df.reindex(all_hours)
+    
+    # 6. Reset index to make Hour a column
+    pivot_df = pivot_df.reset_index()
+    
+    # 7. Rename the index column to 'Hour' if it was renamed during reset
+    # (pivot_table usually keeps the name 'Hour' from the index)
+    pivot_df = pivot_df.rename(columns={'index': 'Hour'})
+    
+    # 8. Define target columns
+    target_columns = [
+        'Hour', 'January', 'February', 'March', 'April', 'May', 'June', 
+        'July', 'August', 'September', 'October', 'November', 'December'
+    ]
+    
+    # 9. Ensure column order and existence
+    # The pivot columns should already be the month names. 
+    # We select them in the specific order required.
+    result_df = pivot_df[target_columns]
+    
+    # 10. Ensure correct data types
+    result_df['Hour'] = result_df['Hour'].astype(int)
+    for col in target_columns[1:]:
+        result_df[col] = result_df[col].astype(float)
+        
+    return result_df
+```

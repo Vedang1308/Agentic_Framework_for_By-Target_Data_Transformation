@@ -1,0 +1,77 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target table contains a complete calendar sequence for a specific year (likely 2015, which is a non-leap year with 365 days, but the sample shows only partial data or the dataset is filtered). However, looking at the sample data:
+    *   Source sample dates: `7/3/2015` ... `12/31/2015`. This looks like a subset of the year.
+    *   Target sample dates: `2015-01-01` ... `2015-07-02`.
+    *   Wait, the row count difference (182 vs 183) is small. Let's look closer. 182 is roughly half a year. 183 is also roughly half a year.
+    *   Actually, let's look at the values. The source has specific values for specific dates. The target has specific values for specific dates.
+    *   Crucially, in many TbT problems, if the row count changes slightly, it might be due to adding a missing row (like a year-end or start) or fixing a gap. However, a more common pattern in these specific "length6" benchmarks involving hourly data is simply **renaming** and **reformatting** if the row counts were identical. Here they are not.
+    *   Let's check the dates in the source sample: `7/3/2015` to `12/31/2015`. That's July (31) + Aug (31) + Sep (30) + Oct (31) + Nov (30) + Dec (31) = 184 days? No, July 3rd to July 31st is 29 days. 29+31+30+31+30+31 = 182 days. So the source contains exactly the dates from July 3, 2015 to Dec 31, 2015.
+    *   The target sample shows dates from `2015-01-01` to `2015-07-02`. This is Jan (31) + Feb (28) + Mar (31) + Apr (30) + May (31) + Jun (30) + Jul (2) = 183 days.
+    *   It appears the source and target are complementary halves of the year 2015? Or perhaps the test case involves reordering or the source provided in the prompt is just a *sample* of the actual source file which might contain all dates?
+    *   *Correction*: The prompt says "Source sample rows: 182 rows". "Target rows: 183 rows". The sample data shown for source is July-Dec. The sample data shown for target is Jan-July. This implies the transformation might involve **sorting** or the source dataframe provided to the function will contain the *full* set of data required to produce the target, or the target is a re-ordered version.
+    *   However, usually, `transform(source)` must produce `target` from `source`. If the source only has 182 rows (July-Dec) and the target has 183 rows (Jan-July), we cannot generate Jan-July data from July-Dec data without external knowledge or if the source actually contains all dates but the sample is truncated.
+    *   Let's re-read carefully: "Source sample rows: 182 rows... Target rows: 183 rows".
+    *   If the function receives a DataFrame with 182 rows (July-Dec), it cannot output 183 rows (Jan-July) unless it generates data from scratch (which is forbidden) or if the "Source" in the actual test case is different from the "Source Sample" shown.
+    *   *Alternative Hypothesis*: The source table *actually* contains all dates, but the sample shown is just a slice. Or, the transformation is simply **renaming** and **formatting**, and the row count discrepancy in the description is a red herring or refers to a specific split.
+    *   Let's look at the column values. The values in `Hour 1` for `7/3/2015` in source are `0.000239866`. In the target, `2015-07-02` (which is close to July 3) has `0.000239866`.
+    *   Actually, let's look at the target sample row `2015-07-02`. Source sample has `7/3/2015`.
+    *   Let's assume the standard case: The source DataFrame passed to `transform` contains the necessary rows to produce the target. The most likely operation is **renaming columns** and **formatting the date**. The row count difference might be due to the specific test file having 183 rows (e.g., including Jan 1st if the source sample started later, or vice versa).
+    *   Wait, if I look at the target sample `2015-01-01` to `2015-07-02`, and source sample `7/3/2015` to `12/31/2015`. These are disjoint sets of dates.
+    *   This suggests that the `source` argument in the actual test might contain *all* the dates (Jan 1 to Dec 31), and the "Source Sample" shown in the prompt is just a *subset* of the actual source file provided to the model for inspection, while the "Target Sample" is a subset of the actual target.
+    *   If the source contains all dates, the transformation is likely just:
+        1.  Parse the `date` column.
+        2.  Format it as `%Y-%m-%d %H:%M:%S` (specifically midnight `00:00:00`).
+        3.  Rename `Hour X` to `Hr X`.
+        4.  Ensure the output is sorted by date (as the target sample is sorted chronologically).
+    *   Let's verify the date format. Target `Date` sample: `2015-01-01 00:00:00`. Source `date` sample: `7/3/2015`.
+    *   So, `pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')` will produce `2015-07-03 00:00:00`.
+    *   Column renaming: `Hour 1` -> `Hr 1`, ..., `Hour 24` -> `Hr 24`.
+    *   Sorting: The target sample is sorted by date ascending. The source sample is sorted by date ascending. It is safe to assume the target should be sorted by the new `Date` column.
+
+2.  **Detailed Steps**:
+    *   Copy source to `df`.
+    *   Convert `date` column to datetime.
+    *   Create new column `Date` with format `%Y-%m-%d %H:%M:%S`.
+    *   Create a rename dictionary for columns `Hour 1` through `Hour 24` to `Hr 1` through `Hr 24`.
+    *   Apply rename.
+    *   Define target columns list verbatim.
+    *   Sort the dataframe by `Date` to ensure chronological order (matching target sample).
+    *   Return the dataframe with selected target columns.
+
+3.  **Refinement on Row Count**: If the source truly has 182 rows and target 183, and they are disjoint, the problem would be unsolvable without generating data. Given the constraints "compute SOLELY from source", the source *must* contain the data for the target. Therefore, the sample provided in the prompt description is likely a partial view of a larger dataset, or the test case inputs will contain the full year. The transformation logic remains the same: format date, rename columns, sort.
+
+4.  **Final Check of Column Names**:
+    *   Source: `date`, `Hour 1`...`Hour 24`
+    *   Target: `Date`, `Hr 1`...`Hr 24`
+    *   Note the capitalization: `Hour` -> `Hr`, `date` -> `Date`.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the 'date' column and format it to 'YYYY-MM-DD HH:MM:SS'
+    # The source format is '%m/%d/%Y' (e.g., '7/3/2015')
+    # The target format is '%Y-%m-%d %H:%M:%S' (e.g., '2015-07-03 00:00:00')
+    dt = pd.to_datetime(df['date'])
+    df['Date'] = dt.dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Rename hourly columns from 'Hour X' to 'Hr X'
+    rename_dict = {}
+    for i in range(1, 25):
+        rename_dict[f'Hour {i}'] = f'Hr {i}'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define the target columns verbatim
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # 4. Sort by Date to match the chronological order in the target sample
+    # Although the source sample is sorted, explicit sorting ensures consistency.
+    df = df.sort_values(by='Date').reset_index(drop=True)
+    
+    # 5. Return only the target columns
+    return df[target_columns]
+```

@@ -1,0 +1,137 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a `date` column (MM/DD/YYYY format) and 24 columns representing hourly data (`1:00 AM` through `12:00 PM`, `1:00 PM` through `11:00 PM`). There is also a `DSL` column which appears to be metadata or a flag, likely not needed for the target values based on the target schema.
+    *   **Target**: Contains a `date` column (YYYY-MM-DD HH:MM:SS format) and 24 columns named `Hour 1` through `Hour 24`.
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the transformation might involve sorting or re-indexing, but more importantly, looking at the data, the source dates are not contiguous in the sample (jumps from July to December). The target dates are contiguous (Jan 1, Jan 2, etc.). Wait, looking closely at the sample data provided:
+        *   Source sample starts with `7/3/2014`.
+        *   Target sample starts with `2014-01-01`.
+        *   This implies the source data provided in the "Source Table Sample" is just a *subset* or *sample* of the full source dataset. The full source dataset likely contains all dates from the start of the year. The transformation must handle *any* date present in the source. The row count difference (182 vs 183) in the benchmark description might be due to a specific test case having a different number of days, or potentially an aggregation if multiple rows per day existed (but here it seems 1 row per day). Let's assume 1 row per day in source maps to 1 row per day in target. The increase in row count might just be an artifact of the specific test file having one more day than the training sample, or perhaps a "null" day was added? No, usually in these TbT tasks, if row counts differ significantly, it's aggregation or expansion. Here, 182 to 183 is a +1 difference. Let's look at the columns.
+        *   Source has 24 hourly columns. Target has 24 hourly columns.
+        *   The mapping is clearly a renaming and reordering of the hourly columns.
+
+2.  **Map Hourly Columns**:
+    The source columns are named with AM/PM. We need to map them to `Hour 1` through `Hour 24`.
+    *   `12:00 AM` -> Hour 1 (Midnight, start of day)
+    *   `1:00 AM` -> Hour 2
+    *   ...
+    *   `11:00 AM` -> Hour 12
+    *   `12:00 PM` -> Hour 13 (Noon)
+    *   `1:00 PM` -> Hour 14
+    *   ...
+    *   `11:00 PM` -> Hour 24
+
+    Let's verify this standard 24-hour clock mapping:
+    *   Hour 1: 00:00 - 01:00 (12:00 AM)
+    *   Hour 2: 01:00 - 02:00 (1:00 AM)
+    *   ...
+    *   Hour 12: 11:00 - 12:00 (11:00 AM)
+    *   Hour 13: 12:00 - 13:00 (12:00 PM)
+    *   Hour 14: 13:00 - 14:00 (1:00 PM)
+    *   ...
+    *   Hour 24: 23:00 - 24:00 (11:00 PM)
+
+    So the mapping is:
+    *   `12:00 AM` -> `Hour 1`
+    *   `1:00 AM` -> `Hour 2`
+    *   `2:00 AM` -> `Hour 3`
+    *   `3:00 AM` -> `Hour 4`
+    *   `4:00 AM` -> `Hour 5`
+    *   `5:00 AM` -> `Hour 6`
+    *   `6:00 AM` -> `Hour 7`
+    *   `7:00 AM` -> `Hour 8`
+    *   `8:00 AM` -> `Hour 9`
+    *   `9:00 AM` -> `Hour 10`
+    *   `10:00 AM` -> `Hour 11`
+    *   `11:00 AM` -> `Hour 12`
+    *   `12:00 PM` -> `Hour 13`
+    *   `1:00 PM` -> `Hour 14`
+    *   `2:00 PM` -> `Hour 15`
+    *   `3:00 PM` -> `Hour 16`
+    *   `4:00 PM` -> `Hour 17`
+    *   `5:00 PM` -> `Hour 18`
+    *   `6:00 PM` -> `Hour 19`
+    *   `7:00 PM` -> `Hour 20`
+    *   `8:00 PM` -> `Hour 21`
+    *   `9:00 PM` -> `Hour 22`
+    *   `10:00 PM` -> `Hour 23`
+    *   `11:00 PM` -> `Hour 24`
+
+3.  **Process Date Column**:
+    *   Parse the source `date` string from `%m/%d/%Y` to a datetime object.
+    *   Format it to `%Y-%m-%d %H:%M:%S`. Since the input is just a date, the time part will be `00:00:00`.
+
+4.  **Construct Target DataFrame**:
+    *   Create a new DataFrame.
+    *   Set the `date` column using the parsed and formatted dates.
+    *   Assign the values from the source hourly columns to the new `Hour 1` ... `Hour 24` columns based on the mapping derived above.
+    *   Ensure the order of rows is consistent (usually sorted by date if not already, but the problem doesn't explicitly state sorting is required, just transformation. However, target samples are sorted. It's safer to sort by date to match the target sample order if the source is unordered, but typically TbT tasks preserve row order unless aggregation happens. Given the source sample is unordered (July, then December) and target is ordered (Jan 1, Jan 2...), sorting by date is a crucial step).
+
+5.  **Final Output**:
+    *   Return the DataFrame with columns exactly matching `['date', 'Hour 1', ..., 'Hour 24']`.
+
+### Python Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse and format the date column
+    # Source format: %m/%d/%Y
+    # Target format: %Y-%m-%d %H:%M:%S
+    df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y').dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Define the mapping from source column names to target column names
+    # Source columns represent the hour ending at that time? Or starting?
+    # Standard convention: "1:00 AM" column usually represents the data for the hour 00:00-01:00? 
+    # Or is it the value AT 1:00 AM?
+    # Let's look at the mapping again.
+    # Hour 1 in 24h clock is 00:00-01:00. This corresponds to 12:00 AM in 12h clock.
+    # Hour 2 in 24h clock is 01:00-02:00. This corresponds to 1:00 AM in 12h clock.
+    # ...
+    # Hour 13 in 24h clock is 12:00-13:00. This corresponds to 12:00 PM in 12h clock.
+    # Hour 14 in 24h clock is 13:00-14:00. This corresponds to 1:00 PM in 12h clock.
+    
+    mapping = {
+        '12:00 AM': 'Hour 1',
+        '1:00 AM': 'Hour 2',
+        '2:00 AM': 'Hour 3',
+        '3:00 AM': 'Hour 4',
+        '4:00 AM': 'Hour 5',
+        '5:00 AM': 'Hour 6',
+        '6:00 AM': 'Hour 7',
+        '7:00 AM': 'Hour 8',
+        '8:00 AM': 'Hour 9',
+        '9:00 AM': 'Hour 10',
+        '10:00 AM': 'Hour 11',
+        '11:00 AM': 'Hour 12',
+        '12:00 PM': 'Hour 13',
+        '1:00 PM': 'Hour 14',
+        '2:00 PM': 'Hour 15',
+        '3:00 PM': 'Hour 16',
+        '4:00 PM': 'Hour 17',
+        '5:00 PM': 'Hour 18',
+        '6:00 PM': 'Hour 19',
+        '7:00 PM': 'Hour 20',
+        '8:00 PM': 'Hour 21',
+        '9:00 PM': 'Hour 22',
+        '10:00 PM': 'Hour 23',
+        '11:00 PM': 'Hour 24'
+    }
+    
+    # 3. Rename the columns
+    df = df.rename(columns=mapping)
+    
+    # 4. Select only the required columns for the target
+    # The target schema has 'date' followed by 'Hour 1' to 'Hour 24'
+    target_columns = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    
+    # 5. Sort by date to ensure consistent ordering (as seen in target sample)
+    df = df.sort_values(by='date').reset_index(drop=True)
+    
+    # 6. Return the DataFrame with exact target columns
+    return df[target_columns]
+```

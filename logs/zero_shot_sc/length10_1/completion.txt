@@ -1,0 +1,167 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains detailed electricity usage breakdowns in kWh for various appliances and systems (heating, cooling, lighting, pumps, etc.). The time column is `time` (string format with milliseconds).
+    *   **Target**: Contains aggregated categories like `hvac`, `water_heating`, `lighting`, `plug`, etc. The time column is `datetime` (standard ISO format without milliseconds).
+    *   **Goal**: Map source columns to target columns, performing aggregations (sums) where necessary.
+
+2.  **Map Target Columns to Source Columns**:
+    *   `datetime`: Derived from `time`. Needs parsing and formatting to `YYYY-MM-DD HH:MM:SS`.
+    *   `refrigerator`: Directly maps to `electricity_refrigerator_kwh`.
+    *   `clothes_washer`: Directly maps to `electricity_clothes_washer_kwh`.
+    *   `clothes_dryer`: Directly maps to `electricity_clothes_dryer_kwh`.
+    *   `dishwasher`: Directly maps to `electricity_dishwasher_kwh`.
+    *   `cooking_range`: Directly maps to `electricity_cooking_range_kwh`.
+    *   `interior_lighting`: Directly maps to `electricity_interior_lighting_kwh`.
+    *   `exterior_lighting`: Directly maps to `electricity_exterior_lighting_kwh`.
+    *   `lighting`: Sum of `interior_lighting` and `exterior_lighting`.
+    *   `plug`: Directly maps to `electricity_plug_loads_kwh`.
+    *   `water_heating`: Directly maps to `electricity_water_systems_kwh`.
+    *   `pool_spa_pumps`: Sum of pool/spa related pumps. Looking at source columns: `electricity_pool_pump_kwh` and `electricity_hot_tub_pump_kwh`.
+    *   `pool_spa_heater`: Sum of pool/spa related heaters. Looking at source columns: `electricity_pool_heater_kwh` and `electricity_hot_tub_heater_kwh`.
+    *   `hvac`: This is typically the sum of heating, cooling, and associated fans/pumps.
+        *   Heating components: `electricity_heating_kwh` (or potentially `electricity_central_system_heating_kwh`), `electricity_fans_heating_kwh`, `electricity_pumps_heating_kwh` (or `electricity_central_system_pumps_heating_kwh`).
+        *   Cooling components: `electricity_cooling_kwh` (or potentially `electricity_central_system_cooling_kwh`), `electricity_fans_cooling_kwh`, `electricity_pumps_cooling_kwh` (or `electricity_central_system_pumps_cooling_kwh`).
+        *   *Refinement*: Let's look at the sample data to verify which columns are non-zero and likely intended for HVAC.
+            *   Sample row 17568:
+                *   `electricity_heating_kwh`: 0.13
+                *   `electricity_central_system_heating_kwh`: 0
+                *   `electricity_cooling_kwh`: 406631
+                *   `electricity_central_system_cooling_kwh`: 2106.66
+                *   `electricity_fans_heating_kwh`: 1.07
+                *   `electricity_fans_cooling_kwh`: 83543.4
+                *   `electricity_pumps_heating_kwh`: 0.00014
+                *   `electricity_central_system_pumps_heating_kwh`: 0
+                *   `electricity_pumps_cooling_kwh`: 0
+                *   `electricity_central_system_pumps_cooling_kwh`: 398.354
+            *   Target `hvac` for this row (2012-07-02 00:00:00) is 505762.
+            *   Let's sum the major cooling/heating components:
+                *   `electricity_cooling_kwh` (406631) + `electricity_fans_cooling_kwh` (83543.4) + `electricity_central_system_cooling_kwh` (2106.66) + `electricity_central_system_pumps_cooling_kwh` (398.354) + `electricity_heating_kwh` (0.13) + `electricity_fans_heating_kwh` (1.07) + `electricity_pumps_heating_kwh` (0.00014) ≈ 492680. This is close but not exact.
+                *   Let's check `electricity_central_system_heating_kwh` and `electricity_central_system_pumps_heating_kwh`. They are 0.
+                *   Is there another component? `electricity_house_fan_kwh`? It's 0.
+                *   Let's re-read the values.
+                *   406631 + 83543.4 + 2106.66 + 398.354 + 0.13 + 1.07 + 0.00014 = 492,680.61.
+                *   Target is 505,762. Difference is ~13,000.
+                *   Let's look at `electricity_water_systems_kwh`? No, that's water_heating.
+                *   Let's look at `net_site_electricity_kwh`? 800,940.
+                *   Let's look at the target `water_heating` for this row: 20987.9. Source `electricity_water_systems_kwh`: 14689.4. Mismatch.
+                *   Wait, let's look at the target `water_heating` calculation again.
+                *   Target `water_heating` (20987.9) vs Source `electricity_water_systems_kwh` (14689.4).
+                *   Target `refrigerator` (52585.8) vs Source `electricity_refrigerator_kwh` (51271.1). Mismatch.
+                *   Target `clothes_washer` (1784.42) vs Source `electricity_clothes_washer_kwh` (999.944). Mismatch.
+                *   Target `clothes_dryer` (13568) vs Source `electricity_clothes_dryer_kwh` (26407.7). Mismatch.
+                *   Target `dishwasher` (801.302) vs Source `electricity_dishwasher_kwh` (1137.03). Mismatch.
+                *   Target `cooking_range` (3725.23) vs Source `electricity_cooking_range_kwh` (3725.23). Match.
+                *   Target `interior_lighting` (39205.1) vs Source `electricity_interior_lighting_kwh` (23523.1). Mismatch.
+                *   Target `exterior_lighting` (7653.41) vs Source `electricity_exterior_lighting_kwh` (4592.04). Mismatch.
+                *   Target `plug` (161968) vs Source `electricity_plug_loads_kwh` (149820). Mismatch.
+
+    *   **Hypothesis**: The source data provided in the prompt's "Source Table Sample" might be scaled or normalized differently than the target, OR the target values are derived from a different set of source columns, OR there is a scaling factor involved.
+    *   Let's check the ratio for a matching column like `cooking_range`.
+        *   Target: 3725.23, Source: 3725.23. Ratio = 1.
+    *   Let's check `interior_lighting`.
+        *   Target: 39205.1, Source: 23523.1. Ratio ≈ 1.666.
+    *   Let's check `exterior_lighting`.
+        *   Target: 7653.41, Source: 4592.04. Ratio ≈ 1.666.
+    *   Let's check `plug`.
+        *   Target: 161968, Source: 149820. Ratio ≈ 1.08.
+    *   Let's check `water_heating`.
+        *   Target: 20987.9, Source: 14689.4. Ratio ≈ 1.42.
+
+    *   **Alternative Hypothesis**: The columns in the source sample provided in the prompt text might not align row-for-row with the target sample provided, or the "Source Table Sample" rows shown (17568-35135) do not correspond to the "Target Table Sample" rows (2012-01-01 and 2012-07-01).
+    *   The Target Sample starts with `2012-01-01`. The Source Sample starts with `2012-07-02`.
+    *   Therefore, I cannot validate the mapping by comparing specific row values from the provided samples because they are from different dates. I must rely on semantic column naming conventions.
+
+    *   **Semantic Mapping Strategy**:
+        *   `datetime`: Parse `time`.
+        *   `hvac`: Sum of all heating, cooling, and associated fan/pump loads.
+            *   Components:
+                *   `electricity_heating_kwh`
+                *   `electricity_central_system_heating_kwh`
+                *   `electricity_cooling_kwh`
+                *   `electricity_central_system_cooling_kwh`
+                *   `electricity_fans_heating_kwh`
+                *   `electricity_fans_cooling_kwh`
+                *   `electricity_pumps_heating_kwh`
+                *   `electricity_central_system_pumps_heating_kwh`
+                *   `electricity_pumps_cooling_kwh`
+                *   `electricity_central_system_pumps_cooling_kwh`
+        *   `water_heating`: `electricity_water_systems_kwh`
+        *   `refrigerator`: `electricity_refrigerator_kwh`
+        *   `clothes_washer`: `electricity_clothes_washer_kwh`
+        *   `clothes_dryer`: `electricity_clothes_dryer_kwh`
+        *   `dishwasher`: `electricity_dishwasher_kwh`
+        *   `cooking_range`: `electricity_cooking_range_kwh`
+        *   `pool_spa_pumps`: `electricity_pool_pump_kwh` + `electricity_hot_tub_pump_kwh`
+        *   `interior_lighting`: `electricity_interior_lighting_kwh`
+        *   `exterior_lighting`: `electricity_exterior_lighting_kwh`
+        *   `lighting`: `interior_lighting` + `exterior_lighting`
+        *   `plug`: `electricity_plug_loads_kwh`
+        *   `pool_spa_heater`: `electricity_pool_heater_kwh` + `electricity_hot_tub_heater_kwh`
+
+3.  **Implementation Details**:
+    *   Create a copy of the source DataFrame.
+    *   Parse `time` column to datetime, format to string `YYYY-MM-DD HH:MM:SS`.
+    *   Construct new columns based on the semantic mapping above.
+    *   Ensure all target columns are present.
+    *   Return the DataFrame with only the target columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Process Datetime
+    # Parse the time column, remove timezone if present, and format to 'YYYY-MM-DD HH:MM:SS'
+    df['datetime'] = pd.to_datetime(df['time']).dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Map Direct Columns
+    df['refrigerator'] = df['electricity_refrigerator_kwh']
+    df['clothes_washer'] = df['electricity_clothes_washer_kwh']
+    df['clothes_dryer'] = df['electricity_clothes_dryer_kwh']
+    df['dishwasher'] = df['electricity_dishwasher_kwh']
+    df['cooking_range'] = df['electricity_cooking_range_kwh']
+    df['water_heating'] = df['electricity_water_systems_kwh']
+    df['interior_lighting'] = df['electricity_interior_lighting_kwh']
+    df['exterior_lighting'] = df['electricity_exterior_lighting_kwh']
+    df['plug'] = df['electricity_plug_loads_kwh']
+    
+    # 3. Aggregate Columns
+    
+    # Lighting: Sum of interior and exterior
+    df['lighting'] = df['interior_lighting'] + df['exterior_lighting']
+    
+    # Pool/Spa Pumps: Sum of pool pump and hot tub pump
+    df['pool_spa_pumps'] = df['electricity_pool_pump_kwh'] + df['electricity_hot_tub_pump_kwh']
+    
+    # Pool/Spa Heater: Sum of pool heater and hot tub heater
+    df['pool_spa_heater'] = df['electricity_pool_heater_kwh'] + df['electricity_hot_tub_heater_kwh']
+    
+    # HVAC: Sum of heating, cooling, and associated fans/pumps
+    # Including central system components if available
+    hvac_cols = [
+        'electricity_heating_kwh',
+        'electricity_central_system_heating_kwh',
+        'electricity_cooling_kwh',
+        'electricity_central_system_cooling_kwh',
+        'electricity_fans_heating_kwh',
+        'electricity_fans_cooling_kwh',
+        'electricity_pumps_heating_kwh',
+        'electricity_central_system_pumps_heating_kwh',
+        'electricity_pumps_cooling_kwh',
+        'electricity_central_system_pumps_cooling_kwh'
+    ]
+    df['hvac'] = df[hvac_cols].sum(axis=1)
+    
+    # 4. Define Target Columns
+    target_columns = [
+        'datetime', 'hvac', 'water_heating', 'refrigerator', 'clothes_washer', 
+        'clothes_dryer', 'dishwasher', 'cooking_range', 'pool_spa_pumps', 
+        'interior_lighting', 'exterior_lighting', 'lighting', 'plug', 'pool_spa_heater'
+    ]
+    
+    # 5. Return Result
+    return df[target_columns]
+```

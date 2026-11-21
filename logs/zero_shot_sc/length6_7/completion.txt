@@ -1,0 +1,77 @@
+### Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source Columns**: `Segment`, `Date`, and 24 hourly columns named `1:00`, `2:00`, ..., `23:00`, `24:00:00`.
+    *   **Target Columns**: `Date`, and 24 hourly columns named `Hr 1`, `Hr 2`, ..., `Hr 24`.
+    *   **Observation**: The row count is identical (2465 rows in sample), implying a 1-to-1 row mapping. No aggregation or reshaping (like melt/pivot) is required across rows. The transformation is primarily column selection, renaming, and potentially cleaning.
+
+2.  **Identify Transformation Steps**:
+    *   **Step 1: Select Relevant Columns**: The `Segment` column is present in the source but not in the target. It should be dropped. The `Date` column and all hourly columns are needed.
+    *   **Step 2: Rename Columns**:
+        *   The `Date` column name remains `Date`.
+        *   The hourly columns need to be mapped from the source format (`1:00`, `2:00`, ..., `24:00:00`) to the target format (`Hr 1`, `Hr 2`, ..., `Hr 24`).
+        *   Specifically:
+            *   `1:00` -> `Hr 1`
+            *   `2:00` -> `Hr 2`
+            *   ...
+            *   `23:00` -> `Hr 23`
+            *   `24:00:00` -> `Hr 24`
+    *   **Step 3: Handle Date Format**: The source `Date` is already in the string format `%a %m/%d/%Y` (e.g., 'Thu 10/01/2009'). The target `Date` is also in the same format (e.g., 'Wed 01/01/2003'). No parsing or re-formatting is strictly necessary unless the internal representation needs normalization, but since the input and output are both strings in the same format, we can keep it as is.
+    *   **Step 4: Construct the Mapping Dictionary**: Create a dictionary to map the old column names to the new column names.
+    *   **Step 5: Apply Renaming and Selection**: Rename the dataframe columns using the mapping. Then, select the columns in the exact order specified by the target schema.
+
+3.  **Drafting the Code**:
+    *   Define the target columns list: `['Date', 'Hr 1', ..., 'Hr 24']`.
+    *   Create a rename mapping:
+        ```python
+        rename_map = {}
+        for i in range(1, 24):
+            rename_map[f"{i}:00"] = f"Hr {i}"
+        rename_map["24:00:00"] = "Hr 24"
+        ```
+    *   Apply `df.rename(columns=rename_map)`.
+    *   Drop the `Segment` column if it still exists (or just select the target columns directly).
+    *   Return `df[target_columns]`.
+
+4.  **Refinement**:
+    *   Ensure the column selection order matches the target exactly.
+    *   Ensure no hardcoded values from specific rows are used.
+    *   The logic generalizes to any table with the same source schema.
+
+### Python Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame by renaming
+    hourly columns and removing the Segment column.
+    """
+    # Define the exact target column names
+    target_columns = [
+        'Date', 'Hr 1', 'Hr 2', 'Hr 3', 'Hr 4', 'Hr 5', 'Hr 6', 
+        'Hr 7', 'Hr 8', 'Hr 9', 'Hr 10', 'Hr 11', 'Hr 12', 'Hr 13', 
+        'Hr 14', 'Hr 15', 'Hr 16', 'Hr 17', 'Hr 18', 'Hr 19', 'Hr 20', 
+        'Hr 21', 'Hr 22', 'Hr 23', 'Hr 24'
+    ]
+    
+    # Create a mapping from source column names to target column names
+    # Source hourly columns are '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target hourly columns are 'Hr 1', 'Hr 2', ..., 'Hr 24'
+    rename_map = {}
+    
+    # Map 1:00 to Hr 1, ..., 23:00 to Hr 23
+    for i in range(1, 24):
+        rename_map[f"{i}:00"] = f"Hr {i}"
+        
+    # Map the last column specifically
+    rename_map["24:00:00"] = "Hr 24"
+    
+    # Apply the renaming
+    df = source.rename(columns=rename_map)
+    
+    # Select only the target columns in the correct order
+    # This automatically drops the 'Segment' column as it is not in target_columns
+    return df[target_columns]
+```

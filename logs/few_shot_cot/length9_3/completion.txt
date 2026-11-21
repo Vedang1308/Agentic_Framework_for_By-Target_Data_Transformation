@@ -1,0 +1,173 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source has columns: `CLASS`, `SEASON DAY TYPE`, `HOUR`, and multiple sets of temperature/range data (`T_MIN_1`, `T_MAX_1`, `CONSTANT_1`, etc., up to `_3`), plus `PROFILE_MIN` and `PROFILE_MAX`.
+    *   Target has columns: `season`, `daytype`, `hour`, `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end`.
+    *   The row count is preserved (300 rows in source -> 300 rows in target), implying a row-wise transformation or mapping, not an aggregation that reduces rows.
+
+2.  **Map Categorical Columns**:
+    *   `SEASON DAY TYPE` in source contains values like "June WE", "December WE".
+    *   Target `season` contains "SPRING", "SUMMER", etc.
+    *   Target `daytype` contains "WEEKDAY", "WEEKEND".
+    *   Logic:
+        *   Extract the month part from `SEASON DAY TYPE` (e.g., "June"). Map months to seasons:
+            *   Dec, Jan, Feb -> WINTER
+            *   Mar, Apr, May -> SPRING
+            *   Jun, Jul, Aug -> SUMMER
+            *   Sep, Oct, Nov -> AUTUMN
+        *   Extract the day type part (e.g., "WE"). Map "WE" to "WEEKEND" and "WD" (if present) to "WEEKDAY". Note: The sample only shows "WE", but standard logic applies.
+
+3.  **Map Numeric Columns**:
+    *   `HOUR` maps directly to `hour`.
+    *   The target columns `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end` need to be derived from the source columns.
+    *   Looking at the source sample:
+        *   Row 1: `T_MIN_1`=68, `T_MAX_1`=75, `CONSTANT_1`=-2.27...
+        *   Row 1: `T_MIN_2`=75, `T_MAX_2`=82, `CONSTANT_2`=-6.58...
+        *   Row 1: `T_MIN_3`=82, `T_MAX_3`=91, `CONSTANT_3`=-4.27...
+    *   Looking at the target sample:
+        *   The target rows provided in the prompt seem to be from a different part of the dataset (Spring/Winter) than the source sample (June/December). However, the structure suggests that the source table contains *multiple* profiles or ranges per hour/season/daytype, or perhaps the source table is already "unpivoted" or specific to a certain profile.
+        *   Wait, let's look closer. The source has `T_MIN_1`, `T_MAX_1`, `CONSTANT_1`, `T_MIN_2`, `T_MAX_2`, `CONSTANT_2`, `T_MIN_3`, `T_MAX_3`, `CONSTANT_3`.
+        *   The target has single columns `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end`.
+        *   Usually, in these TbT tasks, if the row count is identical, we are selecting specific columns or performing a calculation.
+        *   Let's check the values.
+        *   Source Row 1 (June WE, Hour 13): `T_MIN_1`=68, `T_MAX_1`=75. Range = 75-68 = 7? No, target `temperature_range` is 53, 21, etc.
+        *   Let's look at `PROFILE_MIN` and `PROFILE_MAX`. Source Row 1: 0.616, 2.821.
+        *   Let's look at the target sample again.
+            *   Target Row 1: SPRING, WEEKDAY, Hour 1, temp_range 53, low 9, high 62.
+            *   Target Row 5: SUMMER, WEEKEND, Hour 9, temp_range 21, low 60, high 81.
+        *   The source sample provided is for "June WE" (Summer Weekend) and "December WE" (Winter Weekend).
+        *   The target sample provided includes "SPRING WEEKDAY" and "SUMMER WEEKEND".
+        *   This implies the transformation must handle the mapping of the source columns to the target columns.
+        *   Hypothesis: The source table contains data for 3 different temperature ranges/profiles (1, 2, 3). The target table might be selecting one of them, or the source table is actually a "wide" format where each row corresponds to a specific profile index, but the source schema doesn't have an explicit profile index column.
+        *   However, the source has `T_MIN_1`, `T_MIN_2`, `T_MIN_3`.
+        *   Let's look at the target columns `low_end` and `high_end`.
+        *   In Source Row 1: `T_MIN_1`=68, `T_MAX_1`=75. `T_MIN_2`=75, `T_MAX_2`=82. `T_MIN_3`=82, `T_MAX_3`=91.
+        *   In Target Row 5 (Summer Weekend, Hour 9): `low_end`=60, `high_end`=81.
+        *   This doesn't match Source Row 1 directly.
+        *   Let's re-read the prompt carefully. "Source sample rows: 300 rows... Target rows: 300 rows".
+        *   The source sample shows `CLASS`='RS0'.
+        *   Maybe the target `temperature_range` is `T_MAX - T_MIN`?
+        *   Maybe `constant` is `CONSTANT_1`?
+        *   Maybe `coefficient` is derived from `TEMP_1`, `RH_1`, `WIND_1`?
+        *   Let's look at the target `coefficient` column. It is `nan` in the sample.
+        *   Let's look at the target `constant` column. It is `nan` in the sample.
+        *   This suggests that for the rows in the target sample, these values are missing or not applicable.
+        *   However, in the source, `CONSTANT_1` has values.
+        *   Is it possible that the target table is a *subset* or a *different view*?
+        *   Let's look at the column names again.
+        *   Source: `T_MIN_1`, `T_MAX_1`, `CONSTANT_1`, `TEMP_1`, `RH_1`, `WIND_1`.
+        *   Target: `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end`.
+        *   It is highly likely that:
+            *   `low_end` = `T_MIN_1`
+            *   `high_end` = `T_MAX_1`
+            *   `temperature_range` = `T_MAX_1 - T_MIN_1` (or similar)
+            *   `constant` = `CONSTANT_1`
+            *   `coefficient` = `TEMP_1` (or some other coeff)
+        *   But why are they `nan` in the target sample?
+        *   The target sample rows are for "SPRING WEEKDAY" and "SUMMER WEEKEND".
+        *   The source sample rows are for "June WE" and "December WE".
+        *   If the source table contains *all* data, and the target table contains *all* data, then the mapping must be consistent.
+        *   Perhaps the target sample provided in the prompt is just a snippet, and the `nan` values are because those specific rows in the target dataset (which might correspond to different source rows) have missing data?
+        *   Or, more likely, the source table provided in the prompt is *not* the full source table, but a sample. The target sample is also a sample.
+        *   Let's assume the standard mapping:
+            *   `season`: Derived from `SEASON DAY TYPE`.
+            *   `daytype`: Derived from `SEASON DAY TYPE`.
+            *   `hour`: From `HOUR`.
+            *   `low_end`: From `T_MIN_1`.
+            *   `high_end`: From `T_MAX_1`.
+            *   `temperature_range`: From `T_MAX_1 - T_MIN_1`? Or is it a specific column? The name `temperature_range` suggests a difference. Let's check Source Row 1: 75-68=7. Target Row 5: 81-60=21. Target Row 1: 62-9=53.
+            *   `constant`: From `CONSTANT_1`.
+            *   `coefficient`: From `TEMP_1`? Or `RH_1`?
+        *   Let's check if `T_MIN_2`/`T_MAX_2` are used.
+        *   If the row count is the same, we are likely just renaming and calculating.
+        *   Why are there `_1`, `_2`, `_3` columns?
+        *   Maybe the target table only uses the `_1` set?
+        *   Let's verify with the "Summer Weekend" example.
+        *   Target: Summer, Weekend, Hour 9, Low 60, High 81.
+        *   Source: June WE (Summer Weekend). Hour 13 has Low 68, High 75. Hour 14 has Low 68, High 81.
+        *   Wait, Source Hour 14: `T_MIN_1`=68, `T_MAX_1`=81.
+        *   Target Hour 10: Low 63, High 84.
+        *   Target Hour 11: Low 66, High 87.
+        *   Target Hour 12: Low 67, High 89.
+        *   The source sample doesn't have Hour 9, 10, 11, 12 for June WE. It has 13, 14, 15, 16.
+        *   So we can't directly match values.
+        *   However, the structure `T_MIN_1` -> `low_end` and `T_MAX_1` -> `high_end` is the most logical guess given the column names.
+        *   `temperature_range` is likely `high_end - low_end`.
+        *   `constant` is likely `CONSTANT_1`.
+        *   `coefficient` is likely `TEMP_1` (as it's the first numeric variable after constant in the source block, often representing a slope or coefficient in load profiles).
+        *   What about `_2` and `_3`? They might be ignored if the target only has one set of range/constant/coefficient columns.
+        *   What about `PROFILE_MIN` and `PROFILE_MAX`? They might be ignored.
+
+4.  **Refining the Mapping**:
+    *   `season`: Map month from `SEASON DAY TYPE`.
+        *   Split `SEASON DAY TYPE` by space. First part is month.
+        *   Map: Jan/Feb/Dec -> WINTER, Mar/Apr/May -> SPRING, Jun/Jul/Aug -> SUMMER, Sep/Oct/Nov -> AUTUMN.
+    *   `daytype`: Map suffix from `SEASON DAY TYPE`.
+        *   Split by space. Last part is day type code.
+        *   Map: WE -> WEEKEND, WD -> WEEKDAY.
+    *   `hour`: Copy from `HOUR`.
+    *   `low_end`: Copy from `T_MIN_1`.
+    *   `high_end`: Copy from `T_MAX_1`.
+    *   `temperature_range`: Calculate `T_MAX_1 - T_MIN_1`.
+    *   `constant`: Copy from `CONSTANT_1`.
+    *   `coefficient`: Copy from `TEMP_1`.
+
+5.  **Handling Missing Values**:
+    *   The target sample shows `nan` for `constant` and `coefficient`.
+    *   In the source, `CONSTANT_1` and `TEMP_1` have values for the sample rows.
+    *   This implies that for the rows in the target sample (Spring/Winter), the source data might have `nan` in `CONSTANT_1` and `TEMP_1`, or the mapping is different.
+    *   However, without seeing the source rows for Spring/Winter, we must assume the mapping holds generally. If the source has `nan`, the target will have `nan`.
+    *   The target sample `nan`s might just be because those specific source rows had `nan`s.
+
+6.  **Final Column Selection**:
+    *   Construct the new DataFrame with columns: `season`, `daytype`, `hour`, `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end`.
+
+7.  **Implementation Details**:
+    *   Use `str.split` to parse `SEASON DAY TYPE`.
+    *   Use `map` or `replace` for season/daytype.
+    *   Perform arithmetic for `temperature_range`.
+    *   Select and rename columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # 1. Parse SEASON DAY TYPE into season and daytype
+    # Example: "June WE" -> Month: "June", Type: "WE"
+    parts = df['SEASON DAY TYPE'].str.split(' ', n=1, expand=True)
+    month_str = parts[0]
+    day_type_code = parts[1]
+    
+    # Map months to seasons
+    month_to_season = {
+        'January': 'WINTER', 'February': 'WINTER', 'December': 'WINTER',
+        'March': 'SPRING', 'April': 'SPRING', 'May': 'SPRING',
+        'June': 'SUMMER', 'July': 'SUMMER', 'August': 'SUMMER',
+        'September': 'AUTUMN', 'October': 'AUTUMN', 'November': 'AUTUMN'
+    }
+    df['season'] = month_str.map(month_to_season)
+    
+    # Map day type codes to full names
+    day_type_map = {
+        'WE': 'WEEKEND',
+        'WD': 'WEEKDAY'
+    }
+    df['daytype'] = day_type_code.map(day_type_map)
+    
+    # 2. Map numeric columns
+    # Assuming the target uses the first set of variables (_1)
+    df['hour'] = df['HOUR']
+    df['low_end'] = df['T_MIN_1']
+    df['high_end'] = df['T_MAX_1']
+    df['constant'] = df['CONSTANT_1']
+    df['coefficient'] = df['TEMP_1']
+    
+    # 3. Calculate temperature_range
+    df['temperature_range'] = df['high_end'] - df['low_end']
+    
+    # 4. Select and order target columns
+    target_columns = ['season', 'daytype', 'hour', 'temperature_range', 'constant', 'coefficient', 'low_end', 'high_end']
+    
+    return df[target_columns]
+```

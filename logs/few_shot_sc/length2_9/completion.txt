@@ -1,0 +1,154 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source has `date` (datetime string) and `zone_016` (float).
+    *   Target has `dt_strata` (date string), `dow` (int), and 25 hourly columns (`pct_hourly_0100` to `pct_hourly_2500`).
+    *   Row count drops significantly (1450 -> 2 in sample), implying aggregation by date.
+
+2.  **Parse Date and Extract Components**:
+    *   Convert `date` column to datetime.
+    *   Extract the date part for grouping and for the `dt_strata` column.
+    *   Format `dt_strata` as `%m/%d/%y` (e.g., '01/02/18') based on the target sample.
+    *   Calculate `dow` (Day of Week). The target sample shows `01/01/18` (Monday) has `dow=1` and `01/02/18` (Tuesday) has `dow=2`. This corresponds to `dt.dayofweek + 1` (where Monday=0 in pandas, so +1 makes Monday=1).
+
+3.  **Determine Hourly Buckets**:
+    *   The target has columns for hours 1 through 25.
+    *   Hour 25 (`pct_hourly_2500`) appears to be a constant 0 in the sample.
+    *   Hours 1-24 correspond to standard 24-hour periods.
+    *   We need to assign each source row to an hour bucket. Since the source data has minute-level granularity (e.g., `0:11`, `0:12`), we should extract the hour from the timestamp.
+    *   Standard convention: Hour 0 (00:xx) usually maps to the first hour column. In many energy/load datasets, "Hour 1" might represent 00:00-00:59 or 01:00-01:59. Let's look at the sample values.
+        *   Source row `1/2/2018 0:11` (Hour 0) contributes to `pct_hourly_2400` (746.9) in the target for `01/02/18`. Wait, looking at the target for `01/02/18`:
+            *   `pct_hourly_0100` to `pct_hourly_2300` are 0.
+            *   `pct_hourly_2400` is 746.9.
+            *   This suggests that Hour 0 (midnight) maps to column `pct_hourly_2400`.
+        *   Let's check `01/01/18`. The target has non-zero values for all hours 1-24. This implies data exists for all hours.
+        *   Hypothesis: The columns `pct_hourly_0100` ... `pct_hourly_2400` correspond to hours 1..24 of the day, but there might be an offset or specific mapping.
+        *   Usually, in such datasets:
+            *   `pct_hourly_0100` -> Hour 1 (01:00-01:59) or Hour 0 (00:00-00:59)?
+            *   If `01/02/18` only has data at `0:11` (Hour 0) and it ends up in `pct_hourly_2400`, then Hour 0 maps to `2400`.
+            *   This implies:
+                *   Hour 0 -> `pct_hourly_2400`
+                *   Hour 1 -> `pct_hourly_0100`? Or is it a shift?
+                *   Let's assume standard mapping where `pct_hourly_HHMM` corresponds to the HH-th hour of the day, but with a 1-based index where 24 represents midnight (00:xx).
+                *   So: `hour == 0` -> `pct_hourly_2400`. `hour == 1` -> `pct_hourly_0100`. ... `hour == 23` -> `pct_hourly_2300`.
+                *   Let's verify with `01/01/18`. If this mapping holds, `pct_hourly_0100` should contain the sum of values from 01:00-01:59.
+
+4.  **Aggregation Strategy**:
+    *   Group by the date (normalized to day).
+    *   For each group, we need to sum (or average?) the `zone_016` values into the respective hourly buckets.
+    *   The problem asks for a general transformation. Summing is a common aggregation for load data over minutes. Let's assume `sum`.
+    *   Create a helper function or logic to pivot the data.
+    *   Extract `hour` from `date`.
+    *   Map `hour` to column name:
+        *   If `hour == 0`, col = `pct_hourly_2400`.
+        *   Else, col = `pct_hourly_{hour:02d}00`.
+    *   Group by `date` and `mapped_hour_col`.
+    *   Sum `zone_016`.
+    *   Pivot/Unstack to get hours as columns.
+    *   Fill missing hours with 0.
+    *   Add `pct_hourly_2500` column with 0.
+
+5.  **Refining the Mapping**:
+    *   Let's double-check the `01/02/18` case.
+    *   Source: `1/2/2018 0:11` (Hour 0). Value 67.9.
+    *   There are 4 rows for `1/2/2018 0:11` to `0:14` with value 67.9. Sum = 67.9 * 4 = 271.6.
+    *   There are rows for `1/3/2018` (next day) in the sample source, but the target row is for `01/02/18`.
+    *   Wait, the source sample shows `1/2/2018` and `1/3/2018`. The target shows `01/02/18` and `01/01/18`.
+    *   The target `01/02/18` has `pct_hourly_2400` = 746.9.
+    *   My sum of 4 rows was 271.6. This doesn't match 746.9.
+    *   Perhaps the aggregation is not just summing the visible sample rows, but the sample is truncated. Or perhaps it's an average? 67.9 * 11 minutes? No.
+    *   Let's look at the structure again.
+    *   Maybe `pct_hourly_2400` corresponds to Hour 0.
+    *   Let's assume the mapping: `hour` 0-23.
+    *   Col `pct_hourly_0100` corresponds to Hour 1.
+    *   Col `pct_hourly_2400` corresponds to Hour 0.
+    *   This is a standard "24-hour clock" representation where 24:00 is midnight end-of-day.
+
+6.  **Implementation Steps**:
+    *   Parse `date` to datetime.
+    *   Create `dt_strata` string: `dt.strftime('%m/%d/%y')`.
+    *   Create `dow`: `dt.dayofweek + 1`.
+    *   Create `hour` bucket: `dt.hour`.
+    *   Map `hour` to target column name:
+        *   `0` -> `pct_hourly_2400`
+        *   `1` -> `pct_hourly_0100`
+        *   ...
+        *   `23` -> `pct_hourly_2300`
+    *   Group by `dt_strata` (or the date object) and the mapped column name.
+    *   Sum `zone_016`.
+    *   Unstack to form the wide table.
+    *   Reindex columns to ensure all 24 hourly columns exist, filling NaN with 0.
+    *   Add `pct_hourly_2500` = 0.
+    *   Sort/Order columns as required.
+
+7.  **Edge Cases**:
+    *   Missing hours in a day should be 0.
+    *   `pct_hourly_2500` is always 0.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms source DataFrame with 'date' and 'zone_016' into a target DataFrame
+    with daily aggregated hourly load profiles.
+    """
+    df = source.copy()
+    
+    # 1. Parse date
+    df['datetime'] = pd.to_datetime(df['date'])
+    
+    # 2. Extract components for grouping and output
+    # dt_strata format: MM/DD/YY
+    df['dt_strata'] = df['datetime'].dt.strftime('%m/%d/%y')
+    
+    # dow: Monday=1, ..., Sunday=7
+    df['dow'] = df['datetime'].dt.dayofweek + 1
+    
+    # Extract hour for bucketing
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 3. Map hour to target column name
+    # Mapping: Hour 0 -> pct_hourly_2400, Hour 1 -> pct_hourly_0100, ..., Hour 23 -> pct_hourly_2300
+    def get_hour_col(h):
+        if h == 0:
+            return 'pct_hourly_2400'
+        else:
+            return f'pct_hourly_{h:02d}00'
+            
+    df['hour_col'] = df['hour'].apply(get_hour_col)
+    
+    # 4. Aggregate
+    # Group by dt_strata and hour_col, summing the zone_016 values
+    agg_df = df.groupby(['dt_strata', 'hour_col'])['zone_016'].sum().reset_index()
+    
+    # 5. Pivot to wide format
+    pivot_df = agg_df.pivot(index='dt_strata', columns='hour_col', values='zone_016')
+    
+    # 6. Ensure all expected hourly columns exist and fill missing with 0
+    expected_hour_cols = [f'pct_hourly_{i:02d}00' for i in range(1, 24)] + ['pct_hourly_2400']
+    
+    # Reindex to ensure order and presence of all columns
+    # Note: The order in the target is 0100, 0200, ..., 2300, 2400
+    ordered_hour_cols = [f'pct_hourly_{i:02d}00' for i in range(1, 24)] + ['pct_hourly_2400']
+    
+    pivot_df = pivot_df.reindex(columns=ordered_hour_cols, fill_value=0)
+    
+    # 7. Reset index to make dt_strata a column
+    result_df = pivot_df.reset_index()
+    
+    # 8. Merge with dow information
+    # We need to get the dow for each dt_strata. Since dow is deterministic from date, 
+    # we can extract it from the original df grouped by dt_strata.
+    dow_df = df.groupby('dt_strata')['dow'].first().reset_index()
+    result_df = result_df.merge(dow_df, on='dt_strata', how='left')
+    
+    # 9. Add pct_hourly_2500 column
+    result_df['pct_hourly_2500'] = 0
+    
+    # 10. Define final column order
+    target_columns = ['dt_strata', 'dow'] + ordered_hour_cols + ['pct_hourly_2500']
+    
+    # 11. Select and return
+    return result_df[target_columns]
+```

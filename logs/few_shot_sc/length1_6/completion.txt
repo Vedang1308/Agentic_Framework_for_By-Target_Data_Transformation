@@ -1,0 +1,48 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Source and Target Schemas**:
+   - Source has columns: `Company`, `Rate`, `Rate Code`, `Date`, and hourly columns `Hr 1` through `Hr 24`.
+   - Target has columns: `cst` and hourly columns `1:00` through `24:00`.
+   - The row count is preserved (1-to-1 mapping), implying no aggregation or filtering is needed, just transformation of existing rows.
+
+2. **Transform Date Column (`Date` -> `cst`)**:
+   - Source `Date` is in format `%m/%d/%Y` (e.g., '1/1/2014').
+   - Target `cst` is in format `%a %m/%d/%Y` (e.g., 'Wed 01/01/2014').
+   - Action: Parse `Date` to datetime using `pd.to_datetime`. Format it to string using `dt.strftime('%a %m/%d/%Y')`. Assign to new column `cst`.
+
+3. **Transform Hourly Columns (`Hr X` -> `X:00`)**:
+   - Source columns are named `Hr 1`, `Hr 2`, ..., `Hr 24`.
+   - Target columns are named `1:00`, `2:00`, ..., `24:00`.
+   - Action: Create a mapping dictionary to rename `Hr {i}` to `{i}:00` for `i` in 1..24. Apply `df.rename(columns=...)`.
+
+4. **Select and Order Columns**:
+   - The target requires specific column order: `cst` followed by `1:00` through `24:00`.
+   - Action: Define a list `target_cols` containing `['cst']` and the generated hour strings. Return `df[target_cols]`.
+
+5. **Data Type Verification**:
+   - Source hourly columns are `float64`. Target hourly columns are `float64`. No conversion needed.
+   - Source `Date` is `object`. Target `cst` is `object`. String formatting handles this.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse Date and format as 'Day Month/Day/Year' (e.g., 'Wed 01/01/2014')
+    dt = pd.to_datetime(df['Date'])
+    df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+    
+    # 2. Rename hourly columns from 'Hr X' to 'X:00'
+    rename_dict = {}
+    for i in range(1, 25):
+        rename_dict[f'Hr {i}'] = f'{i}:00'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define target columns in correct order
+    target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    
+    # 4. Return the transformed dataframe with exact target schema
+    return df[target_cols]
+```

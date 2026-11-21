@@ -1,0 +1,161 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Date/Time**: The source has a `timestamp` column in string format ('%Y-%m-%d %H:%M:%S'). The target requires a `datetime` column in the same format. We can simply copy or rename this column, ensuring the format remains consistent. Since the sample shows identical formats, direct assignment is sufficient.
+
+2.  **Map Source Columns to Target Columns**: We need to identify which source columns correspond to which target columns based on semantic meaning and naming conventions.
+    *   `hvac`: Likely the sum of cooling and heating components. Source has `AC COMPRESSOR WHS [emon ch3,4]` and `AIR HANDLER WHS [emon ch5,6]`. In some rows (like site 35), these might be high values (32767 indicates error/missing). Let's look at the target sample. Target `hvac` values are large (e.g., 98301, 33878). Source `AC COMPRESSOR` and `AIR HANDLER` are small in site 19 (0, 16) but high in site 35 (32767, 8). Wait, looking at site 19 target sample: `hvac` is 33878. Source `AC COMPRESSOR` is 0, `AIR HANDLER` is 16. This doesn't sum up. Let's look closer.
+    *   Let's re-examine the target sample rows.
+        *   Row 5 (2015-11-13 22:00:00): Target `hvac`=33878. Source for site 19 (which seems to correspond to these dates based on the source sample having 2015-11-14) isn't directly aligned by index in the provided snippet, but let's look at the structure.
+        *   Actually, let's look at the column names again.
+        *   `water_heating`: Source `WATER HEATER WHS [emon ch7,8]`. Target sample has 32767 or 6. Source has 7 or 0. Close enough (likely integer rounding or slight offset).
+        *   `refrigerator`: Source `Primary Fridge WHS [emon ch12]` and `2nd Fridge WHS [emon ch13]`. Target sample has 65534 or 32824. Source has 58, 185, 123, 72 (site 19) and 1, 1 (site 35). 32767 is a sentinel value. 65534 = 2 * 32767. This suggests `refrigerator` might be the sum of `Primary Fridge` and `2nd Fridge`. If one is 32767 (error) and the other is small, the sum is ~32767. If both are 32767, sum is 65534. Let's check site 19: Primary=58, 2nd=32767. Sum = 32825. Target sample row 5 (2015-11-13 22:00:00) has `refrigerator`=32824. This matches closely (off by 1, possibly due to integer conversion or slight data variation). Row 6 (23:00) Target=32844. Source Primary=185, 2nd=32767. Sum=32952. Wait.
+        *   Let's look at `clothes_dryer`. Target sample has 65534 or 2590. Source has `DRYER WHS (1-CT) [emon ch9]` (values 3, 0) and `Dryer WHS (2-CTs) [xpod chA-9,10]` (values 0). Sum is small. But target has huge values like 65534. This suggests `clothes_dryer` might be derived from columns that have 32767.
+        *   Let's look at `pool_spa_pumps`. Target sample has 32767. Source `POOL PUMP WHS (2-CTs) [xpod chA-3,4]` has 32767. This is a direct map.
+        *   Let's look at `pool_spa_heater`. Target sample has 0. Source `SPARE4 WHS (2-CTs) [xpod chA-5,6]` has 0 or 32767.
+        *   Let's look at `interior_lighting`, `exterior_lighting`, `lighting`, `plug`. Target sample has 0 for all these in the provided rows.
+        *   Let's look at `hvac` again. Target 33878. Source `TOTAL BLDG WHS` is 32783. `Calculated Unmeasured loads` is 232. `Calculated Energy Use` is 456.
+        *   Let's reconsider the mapping based on standard building energy datasets (like the ASHRAE Great Lakes dataset or similar).
+        *   Often, `hvac` is `AC COMPRESSOR` + `AIR HANDLER`.
+        *   `water_heating` is `WATER HEATER`.
+        *   `refrigerator` is `Primary Fridge` + `2nd Fridge`.
+        *   `clothes_washer`: Source has `Wattsup Energy Washer (WHS)`? Or `SPARE1`? Target sample `clothes_washer` is 0.
+        *   `clothes_dryer`: Source `DRYER WHS (1-CT)` + `Dryer WHS (2-CTs)`?
+        *   `dishwasher`: Source `DISH WASHER WHS [emon ch11]`. Target sample 0 or 32767. Source has 0.
+        *   `cooking_range`: Source `RANGE WHS (1-CT) [emon ch10]`. Target sample 6 or 32767. Source has 6. This is a direct map.
+        *   `pool_spa_pumps`: Source `POOL PUMP WHS`. Target 32767. Source 32767. Direct map.
+        *   `pool_spa_heater`: Source `SPARE4`? Or `Minisplit`? Target 0.
+        *   `lighting`: Target 0.
+        *   `plug`: Target 0.
+
+    Let's refine the hypothesis:
+    *   `datetime`: `timestamp`
+    *   `hvac`: `AC COMPRESSOR WHS [emon ch3,4]` + `AIR HANDLER WHS [emon ch5,6]`
+    *   `water_heating`: `WATER HEATER WHS [emon ch7,8]`
+    *   `refrigerator`: `Primary Fridge WHS [emon ch12]` + `2nd Fridge WHS [emon ch13]`
+    *   `clothes_washer`: `SPARE1 WHS (1-CT) [emon ch14]`? Or `Wattsup Energy Washer`? Let's check `SPARE1`. Source site 19 `SPARE1` is 64. Target `clothes_washer` is 0. This doesn't match.
+    *   Let's look at `clothes_dryer`. Target 65534. Source `DRYER` cols are small.
+    *   There is a possibility that some target columns are sums of multiple source columns, or specific source columns map directly.
+    *   Let's look at the target sample values again.
+        *   Row 1-4: `hvac`=98301, `water`=32767, `ref`=65534, `dryer`=65534, `dish`=32767, `range`=32767, `pool_pump`=32767.
+        *   These look like sentinel values (32767) summed or individual. 65534 = 2*32767. 98301 = 3*32767.
+        *   This suggests that for those rows, the underlying source columns were all 32767 (error).
+        *   Row 5: `hvac`=33878. Source `AC`=0, `AIR`=16. Sum=16. Not 33878.
+        *   Wait, look at `TOTAL BLDG WHS` for site 19, 2015-11-14 02:00:00 is 386.
+        *   Look at `Calculated Energy Use` is 386.
+        *   Look at `Calculated Unmeasured loads` is 175.
+        *   Maybe `hvac` is not just AC+Air Handler.
+        *   Let's look at `SPARE2`, `SPARE3`, `SPARE4`.
+        *   Let's look at `Minisplit`.
+        *   Let's look at `Future use`.
+
+    Alternative Theory: The target columns are direct renames/sums of specific source columns, but the sample rows in the target might come from a different site or time where the values are different.
+    
+    Let's look at the column count.
+    Source has many columns.
+    Target has 14 columns.
+    
+    Let's try to match by name similarity:
+    *   `hvac`: `AC COMPRESSOR` + `AIR HANDLER` + `Minisplit`?
+    *   `water_heating`: `WATER HEATER`
+    *   `refrigerator`: `Primary Fridge` + `2nd Fridge`
+    *   `clothes_washer`: `Wattsup Energy Washer`? Or `SPARE1`?
+    *   `clothes_dryer`: `DRYER (1-CT)` + `Dryer (2-CTs)`
+    *   `dishwasher`: `DISH WASHER`
+    *   `cooking_range`: `RANGE`
+    *   `pool_spa_pumps`: `POOL PUMP`
+    *   `interior_lighting`: ?
+    *   `exterior_lighting`: ?
+    *   `lighting`: ?
+    *   `plug`: ?
+    *   `pool_spa_heater`: ?
+
+    Let's look at the target sample `hvac` = 33878 for 2015-11-13 22:00:00.
+    Source for site 19, 2015-11-14 02:00:00 (closest available):
+    AC=0, Air=16, Minisplit=32767. Sum = 32783.
+    Target `hvac` = 33878.
+    Difference = 1095.
+    
+    Let's look at `TOTAL BLDG WHS` = 32783.
+    
+    Let's look at another row. 2015-11-14 01:00:00. Target `hvac`=32782.
+    Source 2015-11-14 01:00:00 (not in sample, but 02:00 is).
+    
+    Let's look at the `32767` pattern.
+    If `hvac` is sum of AC, Air, Minisplit:
+    Site 19, 02:00: 0 + 16 + 32767 = 32783.
+    Target `hvac` for 00:00 is 32783.
+    Target `hvac` for 01:00 is 32782.
+    Target `hvac` for 22:00 (prev day) is 33878.
+    
+    This suggests `hvac` = `AC COMPRESSOR` + `AIR HANDLER` + `Minisplit`.
+    Let's check the math for 22:00.
+    If `hvac` is 33878, and Minisplit is likely 32767 (error), then AC+Air = 1111.
+    
+    Let's check `refrigerator`.
+    Target 32824.
+    Source Primary=58, 2nd=32767. Sum=32825.
+    Target is 32824. Off by 1.
+    Source Primary=185, 2nd=32767. Sum=32952.
+    Target 32844. Off by 108.
+    
+    This implies simple summation might not be exact, or there's a different mapping.
+    However, given the constraints and typical TbT tasks, direct mapping or simple aggregation is most likely.
+    
+    Let's look at `clothes_dryer`.
+    Target 2590.
+    Source Dryer 1-CT=3, Dryer 2-CT=0. Sum=3.
+    Target 65534.
+    Source 2nd Fridge is 32767.
+    
+    Is it possible the columns are permuted or mapped differently?
+    
+    Let's look at `pool_spa_pumps`. Target 32767. Source Pool Pump 32767. Match.
+    `cooking_range`. Target 6. Source Range 6. Match.
+    `water_heating`. Target 6. Source Water Heater 7. Close.
+    `dishwasher`. Target 0. Source Dishwasher 0. Match.
+    
+    So:
+    `pool_spa_pumps` <- `POOL PUMP WHS (2-CTs) [xpod chA-3,4]`
+    `cooking_range` <- `RANGE WHS (1-CT) [emon ch10]`
+    `dishwasher` <- `DISH WASHER WHS [emon ch11]`
+    `water_heating` <- `WATER HEATER WHS [emon ch7,8]`
+    
+    Now `hvac`.
+    If `hvac` = `AC` + `AIR` + `Minisplit`.
+    Row 00:00 Target 32783. Source AC=0, Air=16, Minisplit=32767. Sum=32783. **Exact Match**.
+    Row 01:00 Target 32782. Source (estimated) AC=0, Air=16?, Minisplit=32767?
+    
+    Now `refrigerator`.
+    Row 22:00 Target 32824. Source Primary=58, 2nd=32767. Sum=32825. Off by 1.
+    Row 23:00 Target 32844. Source Primary=185, 2nd=32767. Sum=32952. Off by 108.
+    Row 00:00 Target 32865. Source Primary=123, 2nd=32767. Sum=32890. Off by 25.
+    Row 01:00 Target 32837. Source Primary=72, 2nd=32767. Sum=32839. Off by 2.
+    
+    The offsets are weird.
+    However, notice `clothes_dryer` target is 2590, 948, 0, 2.
+    Source `DRYER` is 3, 3, 3, 3.
+    Source `Wattsup Energy Washer` is 2, 1, 1, 1.
+    
+    Let's look at `clothes_washer`. Target 0.
+    
+    Let's look at `plug`. Target 0.
+    
+    Let's look at `lighting`. Target 0.
+    
+    Let's look at `interior_lighting`. Target 0.
+    
+    Let's look at `exterior_lighting`. Target 0.
+    
+    Let's look at `pool_spa_heater`. Target 0.
+    
+    It seems many target columns are 0 in the sample.
+    
+    Let's reconsider `refrigerator`.
+    Maybe `refrigerator` is just `Primary Fridge`?
+    Target 32824 vs Source 58. No.
+    Maybe `refrigerator` is `2nd Fridge`?
+    Target 32824 vs Source 32767. No.
+    
+    What if `refrigerator` = `Primary Fridge` + `2nd Fridge` - `Calculated Unmeasured`? No.
+    
+    Let's look at the `32767` values. They are likely "bad data" markers.
+    In the target, `hvac` is 32783 (Sum of 0+16+32

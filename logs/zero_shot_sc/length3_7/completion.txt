@@ -1,0 +1,96 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Date`, `Class`, and integer columns `1` through `24` representing hourly data. The `Date` is in string format `%m/%d/%Y`.
+    *   **Target**: Contains columns `date` (string `%m/%d/%Y`) and `Hour 1` through `Hour 24`.
+    *   **Row Count Discrepancy**: The source has 182 rows, but the target has 183 rows. Looking at the target sample, it starts from `01/01/2013`. The source sample provided starts from `7/3/2013`. This suggests the target table covers a full range of dates (likely a full year or specific period) that includes dates not present in the provided source snippet. However, the instruction states the function must compute its result *solely* from the `source` argument.
+    *   **Crucial Observation**: In many TbT tasks, if the target has more rows than the source, it often implies that the source data might be incomplete in the *sample* provided for context, but the actual test input (`source` argument) will contain all necessary rows to produce the target. Alternatively, the "182 vs 183" might refer to the specific training split vs target split. Let's look closer at the data values.
+    *   **Data Mapping**:
+        *   Source column `1` maps to Target `Hour 1`.
+        *   Source column `2` maps to Target `Hour 2`.
+        *   ...
+        *   Source column `24` maps to Target `Hour 24`.
+    *   **Date Formatting**: Source `Date` is `7/3/2013`. Target `date` is `01/01/2013`. The format is consistent (`%m/%d/%Y`), just different values. The target requires the date column to be named `date` (lowercase).
+    *   **Missing Data Handling**: If the target has rows not in the source, we cannot generate them from scratch. However, standard TbT logic usually assumes the `source` passed to the function contains all the data needed to produce the `target`. The discrepancy in the prompt's "Source sample rows: 182" vs "Target rows: 183" likely indicates that the *full* source dataset (which would be passed as the argument in the real test) has 183 rows, or the target includes an aggregated/summary row.
+    *   **Re-evaluating Row Count**: Let's look at the target sample again. It lists dates like `01/01/2013`, `01/02/2013`... `07/02/2013`. The source sample lists `7/3/2013`... `12/31/2013`. These seem to be disjoint sets of dates in the *samples*. This is a strong indicator that the `source` DataFrame provided in the actual test case will contain the rows corresponding to the target dates. The transformation is likely a direct mapping/renaming.
+    *   **Is there aggregation?** The column names `Hour 1`...`Hour 24` correspond 1-to-1 with source columns `1`...`24`. There is no obvious grouping key other than `Date`. If there were multiple entries per date, we might need to aggregate. The source sample shows unique dates. The target sample shows unique dates. It is highly probable that the transformation is simply renaming columns and reformatting the date.
+    *   **Why 182 vs 183?** It is possible the target includes a header row in the count? No, "183 rows" usually means data rows. It is possible one date in the target is an aggregation of multiple source rows? Or perhaps the source has a duplicate date that needs averaging?
+    *   Let's check for duplicates in the source schema. The sample shows unique dates. If the real source has duplicates, we might need to group by `Date` and mean. However, without evidence of duplicates in the sample, and given the 1-to-1 column mapping, the safest bet is a direct rename. If the row count increases, it *could* imply an index reset or that the source was missing a row in the sample description but present in the actual data.
+    *   **Wait**, look at the target sample dates: `01/01/2013` to `07/02/2013`. Look at source sample: `7/3/2013` to `12/31/2013`. These are complementary. The prompt says "Source sample rows: 182... Target rows: 183". This implies the *entire* dataset (source + target logic) covers a specific period.
+    *   **Hypothesis**: The transformation is strictly:
+        1.  Rename `Date` to `date`.
+        2.  Rename columns `1`-`24` to `Hour 1`-`Hour 24`.
+        3.  Ensure date format is consistent (though source and target samples both use `%m/%d/%Y`, so simple string pass-through or re-formatting to ensure zero-padding might be needed? `7/3/2013` vs `01/01/2013`. The target has zero-padding `01/01`. The source sample `7/3` does not. The target requires specific formatting. We should parse the date and format it to `%m/%d/%Y` which ensures zero-padding for single digit months/days if we use `strftime`).
+        4.  Sort by date? The target is sorted by date. The source sample is not strictly sorted (jumps from July to Dec). We should sort by `date` to match the target order.
+
+2.  **Step-by-Step Implementation Plan**:
+    *   **Copy Source**: Start with `df = source.copy()`.
+    *   **Parse Date**: Convert `Date` column to datetime objects to handle sorting and formatting correctly.
+    *   **Format Date**: Convert the datetime object back to string format `%m/%d/%Y`. This will handle the zero-padding difference (e.g., `7/3/2013` -> `07/03/2013`). Note: The target sample shows `01/01/2013`. The source sample shows `7/3/2013`. The target format is clearly zero-padded.
+    *   **Rename Columns**:
+        *   Map `Date` -> `date`.
+        *   Map `1` -> `Hour 1`, ..., `24` -> `Hour 24`.
+    *   **Drop Unnecessary Columns**: Drop `Class` if it exists and is not in the target.
+    *   **Sort**: Sort the DataFrame by the `date` column to ensure the order matches the target (chronological).
+    *   **Reset Index**: Clean up the index.
+    *   **Select Columns**: Return the DataFrame with columns exactly matching the target list.
+
+3.  **Refinement on Date Formatting**:
+    *   Source: `'7/3/2013'`
+    *   Target: `'01/01/2013'`
+    *   Pandas `pd.to_datetime` can parse both.
+    *   `dt.strftime('%m/%d/%Y')` will produce zero-padded months and days. This matches the target sample `01/01/2013`.
+
+4.  **Final Check on Row Count**:
+    *   If the source has 182 rows and target has 183, and we are just renaming/reformatting, where does the extra row come from?
+    *   Possibility A: The source sample provided in the prompt is truncated, but the actual `source` argument will have 183 rows.
+    *   Possibility B: There is a missing date in the source that needs to be filled? Unlikely for this type of problem without explicit instructions on interpolation.
+    *   Possibility C: The "182" and "183" are just artifacts of the specific training/test split description and the actual data passed to `transform` will be consistent.
+    *   Given the strict instruction "compute its result SOLELY from the source argument", we cannot invent rows. We must assume the source contains all necessary data. The most robust transformation is the direct mapping and formatting.
+
+5.  **Code Construction**:
+    *   Define target columns list.
+    *   Perform transformations.
+    *   Return `df[target_columns]`.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame by renaming columns,
+    formatting dates, and sorting chronologically.
+    """
+    df = source.copy()
+    
+    # 1. Parse the Date column to datetime to handle formatting and sorting
+    # The source format is '%m/%d/%Y' (e.g., '7/3/2013')
+    df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y')
+    
+    # 2. Format the date to '%m/%d/%Y' which ensures zero-padding (e.g., '01/01/2013')
+    # This matches the target sample format.
+    df['date'] = df['Date'].dt.strftime('%m/%d/%Y')
+    
+    # 3. Rename the hour columns from integers 1-24 to 'Hour 1'-'Hour 24'
+    hour_columns = {str(i): f'Hour {i}' for i in range(1, 25)}
+    df.rename(columns=hour_columns, inplace=True)
+    
+    # 4. Select only the required columns for the target
+    # The target does not have 'Date' (original) or 'Class'
+    target_columns = [
+        'date', 'Hour 1', 'Hour 2', 'Hour 3', 'Hour 4', 'Hour 5', 'Hour 6', 
+        'Hour 7', 'Hour 8', 'Hour 9', 'Hour 10', 'Hour 11', 'Hour 12', 
+        'Hour 13', 'Hour 14', 'Hour 15', 'Hour 16', 'Hour 17', 'Hour 18', 
+        'Hour 19', 'Hour 20', 'Hour 21', 'Hour 22', 'Hour 23', 'Hour 24'
+    ]
+    
+    # 5. Sort by date to match the target's chronological order
+    # We use the parsed datetime 'Date' column for sorting, then drop it later
+    df = df.sort_values(by='Date')
+    
+    # 6. Reset index and drop the temporary 'Date' column if it's not in target_columns
+    df = df.reset_index(drop=True)
+    
+    # 7. Return the DataFrame with exact target columns
+    return df[target_columns]
+```

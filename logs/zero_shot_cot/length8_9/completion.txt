@@ -1,0 +1,151 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Company`, `Rate`, `Rate Code`, `Date`, and 24 hourly columns (`Hr 1` to `Hr 24`). The `Date` column is in string format `%m/%d/%Y`.
+    *   **Target**: Contains columns `hour` (1-24) and 12 month columns (`january` to `december`). The values appear to be aggregated sums or averages. Given the magnitude of values in the target (e.g., ~700-1000) compared to source (e.g., ~2-170), and the row count reduction (2190 -> 24), this suggests an aggregation. Let's look closer.
+    *   **Row Count Analysis**: Source has 2190 rows. Target has 24 rows (one for each hour). This implies we are aggregating across all dates and potentially other categorical columns.
+    *   **Value Analysis**:
+        *   Source `Hr 1` for `1/1/2014` is `2.43675`.
+        *   Target `january` for `hour 1` is `721.418`.
+        *   If we sum all `Hr 1` values for January across all rates/companies, do we get ~721?
+        *   Let's check the number of days in January 2014: 31 days.
+        *   There are multiple Rate/Rate Code combinations.
+        *   Let's look at the distinct values: `Rate` has 6 values, `Rate Code` has 6 values.
+        *   Actually, let's look at the structure. The target has one row per hour. The columns are months. This is a pivot/aggregation operation.
+        *   We need to melt the source data from wide format (Hr 1...Hr 24) to long format (Hour, Value).
+        *   Then, we need to extract the month from the `Date` column.
+        *   Then, we need to group by `Hour` and `Month` and aggregate the `Value`.
+        *   What is the aggregation function? Sum? Mean?
+        *   Let's estimate. If there are ~2190 rows total, and 12 months, that's ~182 rows per month. If there are 24 hours, that's ~7.5 rows per hour per month.
+        *   If the values are around 100-150 (like the T2 rate) or 2-4 (like R4), a sum of ~7-8 values would be small (e.g., 8 * 100 = 800). This matches the target magnitude (~700-1000).
+        *   Let's verify with a specific cell. Target `hour 1`, `january` = 721.418.
+        *   Source `Hr 1` values for January 2014.
+        *   The source data seems to contain daily data for multiple rate types.
+        *   The transformation likely involves:
+            1.  Parsing `Date` to datetime.
+            2.  Extracting `month` (1-12) and mapping to month names.
+            3.  Melting the `Hr 1`...`Hr 24` columns into a single `hour` column and a `value` column.
+            4.  Grouping by `hour` and `month_name`.
+            5.  Summing the `value`.
+            6.  Pivoting the result so `hour` is the index (or column) and `month_name` are the columns.
+
+2.  **Detailed Transformation Steps**:
+    *   **Step 1: Parse Date**. Convert `Date` column to datetime objects using `pd.to_datetime(source['Date'], format='%m/%d/%Y')`.
+    *   **Step 2: Extract Month**. Create a new column `month_num` from the datetime. Map `1` to `'january'`, `2` to `'february'`, etc.
+    *   **Step 3: Melt Hour Columns**. The columns `Hr 1` to `Hr 24` need to be unpivoted.
+        *   Select columns `['Date', 'Hr 1', ..., 'Hr 24']` (and potentially others if needed, but Date is key).
+        *   Use `pd.melt` or `stack`.
+        *   `id_vars=['Date']`, `value_vars=['Hr 1', ..., 'Hr 24']`.
+        *   The `variable` column will be `'Hr 1'`, etc. Extract the integer hour from this string (e.g., `'Hr 1'` -> `1`).
+        *   The `value` column will hold the numeric rate.
+    *   **Step 4: Aggregate**.
+        *   Group by `hour` (extracted from variable) and `month_name` (extracted from Date).
+        *   Apply `sum()` to the `value` column.
+        *   *Self-Correction/Verification*: Does the target represent a sum?
+            *   Let's look at `hour 1`, `january`. Value: 721.418.
+            *   If we sum all `Hr 1` values for all rows where Date is in January, we should get this number.
+            *   Given the variety of rates (R4 is ~2, T2 is ~100), and there are multiple rate codes, summing them up makes sense to get a total load/cost metric.
+    *   **Step 5: Pivot/Reshape**.
+        *   After grouping, we have a Series or DataFrame with index `(hour, month_name)` and values `sum`.
+        *   Unstack the `month_name` level to create columns for each month.
+        *   Reset index to make `hour` a column.
+    *   **Step 6: Format Output**.
+        *   Ensure column names match exactly: `['hour', 'january', 'february', ..., 'december']`.
+        *   Ensure `hour` is integer type.
+        *   Sort by `hour` if necessary (though groupby usually preserves order or we can sort explicitly).
+
+3.  **Refining the Month Mapping**:
+    *   Create a dictionary: `{1: 'january', 2: 'february', ..., 12: 'december'}`.
+    *   Apply this to the extracted month number.
+
+4.  **Refining the Hour Extraction**:
+    *   The melted variable column will look like `'Hr 1'`, `'Hr 2'`, etc.
+    *   Use `.str.extract` or `.str.split` to get the number.
+
+5.  **Final Code Structure**:
+    *   Import pandas.
+    *   Define function.
+    *   Parse dates.
+    *   Melt data.
+    *   Extract hour and month name.
+    *   GroupBy and Sum.
+    *   Unstack/Pivot.
+    *   Clean up column names and index.
+    *   Return final DataFrame.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source electricity rate data into a monthly hourly summary.
+    
+    Steps:
+    1. Parse the 'Date' column to datetime.
+    2. Extract the month name from the date.
+    3. Melt the 'Hr 1'...'Hr 24' columns into a long format with 'hour' and 'value'.
+    4. Group by 'hour' and 'month_name' and sum the values.
+    5. Pivot the data so that months are columns and hours are rows.
+    6. Format the output to match the target schema.
+    """
+    
+    # 1. Parse Date
+    df = source.copy()
+    df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y')
+    
+    # 2. Extract Month Name
+    # Map month numbers to lowercase month names
+    month_map = {
+        1: 'january', 2: 'february', 3: 'march', 4: 'april',
+        5: 'may', 6: 'june', 7: 'july', 8: 'august',
+        9: 'september', 10: 'october', 11: 'november', 12: 'december'
+    }
+    df['month_name'] = df['Date'].dt.month.map(month_map)
+    
+    # 3. Melt Hour Columns
+    # Identify hour columns
+    hour_cols = [f'Hr {i}' for i in range(1, 25)]
+    
+    # Melt the dataframe
+    # id_vars keeps 'month_name' (and Date if needed, but we only need month_name for grouping)
+    # We need to keep the month_name associated with each row
+    df_melted = df.melt(
+        id_vars=['month_name'], 
+        value_vars=hour_cols, 
+        var_name='hour_col', 
+        value_name='value'
+    )
+    
+    # Extract hour number from 'Hr 1' -> 1
+    df_melted['hour'] = df_melted['hour_col'].str.extract(r'(\d+)').astype(int)
+    
+    # 4. Aggregate
+    # Group by hour and month_name, sum the values
+    # Note: The target values look like sums of the rates across all rate types/companies for that hour/month.
+    agg_df = df_melted.groupby(['hour', 'month_name'])['value'].sum().reset_index()
+    
+    # 5. Pivot
+    # Pivot so that 'month_name' becomes columns and 'hour' is the index
+    pivot_df = agg_df.pivot(index='hour', columns='month_name', values='value')
+    
+    # 6. Format Output
+    # Reset index to make 'hour' a column
+    pivot_df = pivot_df.reset_index()
+    
+    # Ensure column order and names match target
+    target_columns = ['hour', 'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+    
+    # Fill any missing months with 0 if necessary (though data seems complete)
+    pivot_df = pivot_df.fillna(0)
+    
+    # Ensure hour is integer
+    pivot_df['hour'] = pivot_df['hour'].astype(int)
+    
+    # Select and order columns
+    result_df = pivot_df[target_columns]
+    
+    # Sort by hour to ensure 1-24 order
+    result_df = result_df.sort_values('hour').reset_index(drop=True)
+    
+    return result_df
+```

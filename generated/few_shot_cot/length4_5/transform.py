@@ -1,0 +1,45 @@
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Transform the date column
+    # Source format: '7/3/2015' (%m/%d/%Y)
+    # Target format: '2015-01-01 00:00:00' (%Y-%m-%d %H:%M:%S)
+    dt = pd.to_datetime(df['date'])
+    df['date'] = dt.dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Rename hour columns
+    # Mapping Source 'Hour i' to Target 12-hour format strings
+    # Based on the target column list order:
+    # Hour 1-11 -> 1:00 AM - 11:00 AM
+    # Hour 12 -> 12:00 AM
+    # Hour 13-23 -> 1:00 PM - 11:00 PM
+    # Hour 24 -> 12:00 PM
+    
+    rename_dict = {}
+    for i in range(1, 25):
+        src_col = f'Hour {i}'
+        if i <= 11:
+            tgt_col = f'{i}:00 AM'
+        elif i == 12:
+            tgt_col = '12:00 AM'
+        elif i <= 23:
+            tgt_col = f'{i-12}:00 PM'
+        else: # i == 24
+            tgt_col = '12:00 PM'
+        rename_dict[src_col] = tgt_col
+        
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define target columns in the exact order specified
+    target_columns = [
+        'date', 
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', 
+        '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', 
+        '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', 
+        '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM'
+    ]
+    
+    return df[target_columns]

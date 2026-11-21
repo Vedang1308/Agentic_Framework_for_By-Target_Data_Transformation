@@ -1,0 +1,165 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains metadata columns (`class`, `Description`, `analysis`, `uom`) and a `date` column in 'M/D/YYYY' format. It also has 24 value columns (`value1` to `value24`) representing hourly data.
+    *   **Target**: Contains a `date` column in ISO format 'YYYY-MM-DD HH:MM:SS' and 24 columns representing hours in 12-hour AM/PM format (e.g., '1:00 AM', '12:00 PM', etc.).
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the transformation might involve parsing dates and potentially handling missing dates or aggregating if there were multiple entries per day (though the sample shows one row per date). However, looking at the sample data, the source rows are sparse (July and Dec 2011), while the target rows are dense (Jan-July 2011). This implies the target table represents a *complete* calendar for the year 2011 (or a specific range), and the source data needs to be mapped onto this complete timeline. Wait, looking closer at the prompt: "Source sample rows: 182 rows... Target rows: 183 rows". The target sample shows dates from Jan 1, 2011. The source sample shows dates from July and Dec 2011. This is a significant discrepancy.
+    *   *Correction/Refinement*: In many TbT tasks, if the row counts differ significantly and the target contains a continuous date range, it often implies that the source data *is* the data for those specific rows, but the target might be a subset or a superset. However, the instruction says "The function must compute its result SOLELY from the `source` argument. It must NOT open or read target.csv". If the target has rows (dates) that are *not* in the source, I cannot generate them from the source alone unless there's a pattern or generation rule.
+    *   Let's re-read the samples carefully.
+        *   Source Sample: `7/3/2011`, `7/4/2011`, ... `12/31/2011`.
+        *   Target Sample: `2011-01-01`, `2011-01-02`, ... `2011-07-02`.
+    *   The target sample dates (Jan-July) are *not* present in the provided source sample rows (July-Dec). This suggests that the provided "Source Sample" is just a snippet of the full source file, or the transformation involves generating a full year's data? No, that's impossible without external knowledge.
+    *   *Alternative Hypothesis*: The "Source Sample" provided in the prompt description is just illustrative of the *schema*, not the full content. The actual `source` DataFrame passed to the function will contain the data corresponding to the target. The row count difference (182 vs 183) is small (1 row). 183 days is exactly half a year (non-leap) or close to it. 2011 is not a leap year. Jan-Jun is 181 days. Jan-Jul is 182 days.
+    *   Let's look at the target sample again. It has 8 rows shown. The dates are contiguous.
+    *   Let's look at the source sample again. It has 8 rows shown. The dates are `7/3`, `7/4`, `7/5`, `7/6`, `12/28`, `12/29`, `12/30`, `12/31`.
+    *   There is a mismatch between the *sample data* provided in the text and the *row count* note. The note says "Source sample rows: 182 rows... Target rows: 183 rows".
+    *   If the source has 182 rows and target has 183, and they represent daily data, it's likely one date is added or split.
+    *   However, usually in these benchmarks, the `source` DataFrame provided to the function *contains* the data needed to produce the `target`. If the target has dates not in the source, the task is unsolvable. Therefore, I must assume the `source` DataFrame passed to `transform()` contains the rows corresponding to the target dates. The "Source Sample" table in the prompt might be misleading or from a different slice. I will proceed by assuming the `source` DataFrame contains the exact rows needed for the target, and my job is to format them.
+    *   *Wait*, look at the target column order.
+        `['1:00 AM', ..., '12:00 AM', '1:00 PM', ..., '12:00 PM']`
+        Standard 12-hour clock order: 12 AM (midnight), 1 AM, ... 11 AM, 12 PM (noon), 1 PM, ... 11 PM.
+        The target columns are:
+        1:00 AM, 2:00 AM, ..., 11:00 AM, 12:00 AM, 1:00 PM, ..., 12:00 PM.
+        This order is peculiar. `12:00 AM` is after `11:00 AM`. `12:00 PM` is after `11:00 PM`.
+        Let's map source `value1`...`value24` to these columns.
+        Usually, `value1` is Hour 1 (1:00 AM), `value2` is Hour 2 (2:00 AM)... `value12` is Hour 12 (12:00 PM Noon).
+        Let's check the values.
+        Source `value1` for `7/3/2011` is `1.0243`.
+        Target `1:00 AM` for `2011-07-02` (which corresponds to source `7/3/2011`? No, `7/3/2011` is July 3rd. Target sample has `2011-07-02`. The values don't match up directly between the specific samples provided because they are different dates.
+        
+    *   Let's deduce the mapping from standard conventions:
+        *   `value1` -> 1:00 AM (Hour 1)
+        *   `value2` -> 2:00 AM (Hour 2)
+        *   ...
+        *   `value11` -> 11:00 AM (Hour 11)
+        *   `value12` -> 12:00 PM (Hour 12 / Noon) -- Wait, standard 12-hour clock: 12:00 PM is Noon.
+        *   `value13` -> 1:00 PM (Hour 13)
+        *   ...
+        *   `value24` -> 12:00 AM (Hour 24 / Midnight end of day) -- Or is `value24` 11:00 PM?
+        
+    *   Let's look at the Target Column List again:
+        `['1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+        
+        This list has 24 columns.
+        Indices 0-10: 1 AM to 11 AM.
+        Index 11: `12:00 AM`. (This is weird. 12 AM is midnight. It is usually Hour 0 or Hour 24).
+        Indices 12-22: 1 PM to 11 PM.
+        Index 23: `12:00 PM`. (This is Noon. Usually Hour 12).
+        
+        Let's try to match standard `value1`..`value24` to this specific ordering.
+        If `value1` is 1:00 AM, `value2` is 2:00 AM... `value11` is 11:00 AM.
+        Then what is `value12`? In the target list, `12:00 AM` is at index 11 (the 12th column).
+        Then `value13`? Target index 12 is `1:00 PM`.
+        ...
+        `value23`? Target index 22 is `11:00 PM`.
+        `value24`? Target index 23 is `12:00 PM`.
+        
+        This mapping implies:
+        `value1` -> 1:00 AM
+        ...
+        `value11` -> 11:00 AM
+        `value12` -> 12:00 AM  (Midnight? This breaks chronological order if value12 is noon usually)
+        `value13` -> 1:00 PM
+        ...
+        `value23` -> 11:00 PM
+        `value24` -> 12:00 PM  (Noon?)
+        
+        This seems highly unlikely for "HourlyLoad" data. Usually Hour 12 is Noon (12:00 PM) and Hour 24 is Midnight (12:00 AM).
+        
+        Let's look at the Target Column Order again. It is NOT chronological.
+        Chronological: 12AM, 1AM, ... 11AM, 12PM, 1PM, ... 11PM.
+        Target Order: 1AM, 2AM, ... 11AM, 12AM, 1PM, 2PM, ... 11PM, 12PM.
+        
+        Maybe the mapping is:
+        `value1` -> 1:00 AM
+        `value2` -> 2:00 AM
+        ...
+        `value11` -> 11:00 AM
+        `value12` -> 12:00 PM (Noon) -> But in target list, `12:00 PM` is the LAST column.
+        `value13` -> 1:00 PM
+        ...
+        `value23` -> 11:00 PM
+        `value24` -> 12:00 AM (Midnight) -> In target list, `12:00 AM` is the 12th column.
+        
+        Let's reconsider the Target Column List provided in the prompt:
+        `['1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+        
+        If I assume standard mapping:
+        `value1` = 1:00 AM
+        `value2` = 2:00 AM
+        ...
+        `value11` = 11:00 AM
+        `value12` = 12:00 PM (Noon)
+        `value13` = 1:00 PM
+        ...
+        `value23` = 11:00 PM
+        `value24` = 12:00 AM (Midnight)
+        
+        Then I need to map these to the target columns:
+        Target Col `1:00 AM` <- `value1`
+        Target Col `2:00 AM` <- `value2`
+        ...
+        Target Col `11:00 AM` <- `value11`
+        Target Col `12:00 AM` <- `value24`  (Midnight)
+        Target Col `1:00 PM` <- `value13`
+        ...
+        Target Col `11:00 PM` <- `value23`
+        Target Col `12:00 PM` <- `value12`  (Noon)
+        
+        Let's verify this hypothesis.
+        Source `value12` is usually Noon. Source `value24` is usually Midnight.
+        In the target schema, `12:00 AM` is placed after `11:00 AM`. `12:00 PM` is placed at the very end.
+        This specific permutation is strange but I must follow the target column names verbatim.
+        
+        So the mapping dictionary would be:
+        `value1` -> `1:00 AM`
+        `value2` -> `2:00 AM`
+        ...
+        `value11` -> `11:00 AM`
+        `value12` -> `12:00 PM`  (Wait, if I map value12 to 12:00 PM, it goes to the last column)
+        `value13` -> `1:00 PM`
+        ...
+        `value23` -> `11:00 PM`
+        `value24` -> `12:00 AM` (Wait, if I map value24 to 12:00 AM, it goes to the 12th column)
+        
+        Let's construct the rename map based on this logic:
+        
+        ```python
+        rename_map = {}
+        # 1 AM to 11 AM
+        for i in range(1, 12):
+            rename_map[f'value{i}'] = f'{i}:00 AM'
+            
+        # 12 PM is Noon (value12)
+        rename_map['value12'] = '12:00 PM'
+        
+        # 1 PM to 11 PM (value13 to value23)
+        for i in range(13, 24):
+            hour_12 = i - 12
+            rename_map[f'value{i}'] = f'{hour_12}:00 PM'
+            
+        # 12 AM is Midnight (value24)
+        rename_map['value24'] = '12:00 AM'
+        ```
+        
+        Let's double check the target column list again to ensure I have the names right.
+        Target: `['1:00 AM', ..., '11:00 AM', '12:00 AM', '1:00 PM', ..., '11:00 PM', '12:00 PM']`
+        
+        My mapping:
+        `value1`..`value11` -> `1:00 AM`..`11:00 AM` (Matches first 11 cols)
+        `value24` -> `12:00 AM` (Matches 12th col)
+        `value13`..`value23` -> `1:00 PM`..`11:00 PM` (Matches next 11 cols)
+        `value12` -> `12:00 PM` (Matches last col)
+        
+        This covers all 24 columns and maps to the exact target column names.
+        
+    2.  **Date Formatting**:
+        *   Source `date`: 'M/D/YYYY' (e.g., '7/3/2011').
+        *   Target `date`: 'YYYY-MM-DD HH:MM:SS' (e.g., '2011-01-01 00:00:00').
+        *   Action: Parse source date to datetime, then format. Since the target includes time `00:00:00`, we treat it as midnight.
+        
+    3.  **Handling Row Count / Missing Data**:
+        *   The prompt notes a row count change (182 -> 183).
+        *   If the source DataFrame passed to the function contains the necessary rows, simple transformation works.
+        *   If the source is missing a row that the target has, I cannot invent it.
+        *   However, often in these problems, if the row counts differ by 1, it might be due to a header issue or a specific aggregation. But here, the data looks like 1-to-1 daily records.
+        *   Let's assume the `source` argument contains the correct rows. The "182 vs 183" note might be a distractor or refer to the specific CSV files on disk which might have headers/footers

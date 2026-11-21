@@ -1,0 +1,102 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `date` (string, format `%m/%d/%Y %H:%M`) and `cerc_logger_1` (float). The data appears to be time-series measurements taken every 10 minutes.
+    *   **Target**: Contains `date` (string, format `%m/%d/%Y`) and 24 columns representing hourly slots (`1:00 AM` through `12:00 AM`). The row count drops significantly (74k to 521), indicating an aggregation from minute-level data to daily hourly summaries.
+
+2.  **Parse Datetime**:
+    *   Convert the source `date` column from string to pandas `datetime` objects to facilitate extraction of date and hour components.
+
+3.  **Extract Date and Hour**:
+    *   Extract the calendar date (year-month-day) to group rows by day. Format this as `%m/%d/%Y` to match the target `date` column.
+    *   Extract the hour (0-23) from the datetime to determine which hourly bucket each measurement belongs to.
+
+4.  **Map Hours to Target Column Names**:
+    *   The target columns use a 12-hour clock format with AM/PM. We need a mapping from 24-hour integers (0-23) to these specific strings.
+    *   Mapping logic:
+        *   Hour 0 (Midnight) -> `12:00 AM`
+        *   Hours 1-11 -> `1:00 AM` to `11:00 AM`
+        *   Hour 12 (Noon) -> `12:00 PM`
+        *   Hours 13-23 -> `1:00 PM` to `11:00 PM`
+    *   Create a dictionary or function to perform this mapping.
+
+5.  **Pivot/Reshape Data**:
+    *   Group the data by the extracted `date` and the mapped `hour_label`.
+    *   Aggregate the `cerc_logger_1` values. Looking at the sample data, the values in the target table appear to be averages or specific representative values for that hour. Given the density of data (every 10 mins), `mean` is the most standard aggregation for such sensor data unless specified otherwise. Let's verify with a quick mental check: if there are 6 data points per hour, the average is a robust summary.
+    *   Use `pivot_table` or `groupby` + `unstack` to reshape the data so that each row is a date, and each column is an hour label.
+
+6.  **Handle Missing Data and Ordering**:
+    *   Ensure all 24 hour columns exist in the result, even if some hours have no data (fill with NaN or 0 if appropriate, though usually NaN is safer for float data).
+    *   Reorder the columns to match the specific sequence required by the target: `1:00 AM` through `12:00 AM`. Note that `12:00 AM` (midnight) is the last column in the target list, which corresponds to hour 0.
+
+7.  **Final Formatting**:
+    *   Reset the index to make `date` a column.
+    *   Ensure the `date` column is formatted as strings `%m/%d/%Y`.
+    *   Select only the required target columns in the exact order specified.
+
+### Python Code Implementation
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms source time-series data (10-min intervals) into daily hourly summaries.
+    """
+    # 1. Parse the date column
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract date and hour
+    df['date_only'] = df['datetime'].dt.strftime('%m/%d/%Y')
+    df['hour_24'] = df['datetime'].dt.hour
+    
+    # 3. Map 24-hour format to target column names (12-hour AM/PM)
+    def map_hour_to_label(h):
+        if h == 0:
+            return '12:00 AM'
+        elif h < 12:
+            return f'{h}:00 AM'
+        elif h == 12:
+            return '12:00 PM'
+        else:
+            return f'{h-12}:00 PM'
+            
+    df['hour_label'] = df['hour_24'].apply(map_hour_to_label)
+    
+    # 4. Aggregate data
+    # Group by date and hour_label, then calculate the mean of cerc_logger_1
+    # Using mean as it's the standard aggregation for sensor data over time intervals
+    agg_df = df.groupby(['date_only', 'hour_label'])['cerc_logger_1'].mean().reset_index()
+    
+    # 5. Pivot the table
+    # Rows: date_only, Columns: hour_label, Values: cerc_logger_1
+    pivot_df = agg_df.pivot_table(index='date_only', columns='hour_label', values='cerc_logger_1')
+    
+    # 6. Define the exact target column order
+    target_columns = [
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', 
+        '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 PM', 
+        '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', 
+        '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 AM'
+    ]
+    
+    # 7. Ensure all target columns exist (fill missing with NaN)
+    for col in target_columns:
+        if col not in pivot_df.columns:
+            pivot_df[col] = np.nan
+            
+    # 8. Select and order columns
+    pivot_df = pivot_df[target_columns]
+    
+    # 9. Reset index to make 'date_only' a column named 'date'
+    pivot_df = pivot_df.reset_index()
+    pivot_df = pivot_df.rename(columns={'date_only': 'date'})
+    
+    # 10. Final selection to ensure exact schema match
+    final_columns = ['date'] + target_columns
+    result_df = pivot_df[final_columns]
+    
+    return result_df
+```

@@ -1,0 +1,24 @@
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse and Format Date
+    # Source 'Date' is like '1/1/2014', Target 'date' is '01/01/2014'
+    dt = pd.to_datetime(df['Date'])
+    df['date'] = dt.dt.strftime('%m/%d/%Y')
+    
+    # 2. Rename Hour Columns
+    # Source 'Hr 1' -> Target 'Hour 1', etc.
+    rename_dict = {}
+    for i in range(1, 25):
+        rename_dict[f'Hr {i}'] = f'Hour {i}'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define Target Columns
+    target_cols = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    
+    # 4. Return DataFrame with target columns
+    return df[target_cols]

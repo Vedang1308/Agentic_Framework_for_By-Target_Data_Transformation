@@ -1,0 +1,98 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Date Column**: The source column `Date` contains strings like `'Thu 10/01/2009'` (format `%a %m/%d/%Y`). The target column `dt_strata` requires the date in `%m/%d/%Y` format (e.g., `'10/01/2009'`).
+    *   Action: Parse the `Date` column into datetime objects. Since the format includes the day name, we can use `pd.to_datetime` which handles this, or split the string to extract the date part. Given the sample `'Thu 10/01/2009'`, splitting by space and taking the last part gives `'10/01/2009'`, which can be parsed directly.
+    *   Action: Format the parsed datetime as `%m/%d/%Y` for `dt_strata`.
+
+2.  **Analyze Day of Week (DOW)**: The target column `dow` is an integer. Looking at the target sample:
+    *   `'01/01/03'` (Wednesday) -> `3`
+    *   `'01/02/03'` (Thursday) -> `4`
+    *   `'09/27/09'` (Sunday) -> `7`
+    *   `'09/28/09'` (Monday) -> `1`
+    *   This corresponds to Monday=1, ..., Sunday=7.
+    *   Action: Calculate `dow` using `dt.dt.dayofweek + 1` (where `dayofweek` is 0 for Monday).
+
+3.  **Analyze Hourly Columns**:
+    *   Source columns: `'1:00'` through `'23:00'` and `'24:00:00'`.
+    *   Target columns: `'pct_hourly_0100'` through `'pct_hourly_2400'` and `'pct_hourly_2500'`.
+    *   Mapping:
+        *   `'1:00'` -> `'pct_hourly_0100'`
+        *   ...
+        *   `'23:00'` -> `'pct_hourly_2300'`
+        *   `'24:00:00'` -> `'pct_hourly_2400'`
+    *   Note: The target includes `'pct_hourly_2500'`. In the target sample, this column contains `nan`. This suggests it should be added as a new column with NaN values (or potentially 0, but `nan` is standard for missing data in float columns unless specified otherwise. Looking at Example 2, it used 0, but here the sample explicitly shows `nan`. I will initialize it as NaN to match the sample exactly).
+
+4.  **Construct Transformation**:
+    *   Copy source DataFrame.
+    *   Parse `Date` to datetime.
+    *   Create `dt_strata` formatted string.
+    *   Create `dow` integer.
+    *   Rename hourly columns using a dictionary mapping.
+    *   Add `pct_hourly_2500` column with NaN.
+    *   Select and return the specific target columns in the correct order.
+
+5.  **Refinement on Date Parsing**:
+    *   Source: `'Thu 10/01/2009'`
+    *   `pd.to_datetime('Thu 10/01/2009')` works correctly in pandas.
+    *   Format: `dt.strftime('%m/%d/%Y')` produces `'10/01/2009'`.
+
+6.  **Refinement on DOW**:
+    *   `dt.dayofweek` returns 0 for Monday.
+    *   Target: Monday=1.
+    *   Formula: `dt.dayofweek + 1`.
+
+7.  **Refinement on Columns**:
+    *   Source has `'24:00:00'`. Target has `'pct_hourly_2400'`.
+    *   Source has `'1:00'` to `'23:00'`. Target has `'pct_hourly_0100'` to `'pct_hourly_2300'`.
+    *   Target has `'pct_hourly_2500'` which is not in source.
+
+8.  **Final Code Structure**:
+    *   Import pandas.
+    *   Define function.
+    *   Perform transformations.
+    *   Return subset.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse Date column
+    # Source format: 'Thu 10/01/2009' (%a %m/%d/%Y)
+    # We can parse this directly using pd.to_datetime
+    dt = pd.to_datetime(df['Date'])
+    
+    # 2. Create dt_strata column
+    # Target format: '10/01/2009' (%m/%d/%Y)
+    df['dt_strata'] = dt.dt.strftime('%m/%d/%Y')
+    
+    # 3. Create dow column
+    # Target: Monday=1, ..., Sunday=7
+    # pandas dayofweek: Monday=0, ..., Sunday=6
+    df['dow'] = dt.dt.dayofweek + 1
+    
+    # 4. Rename hourly columns
+    # Source: '1:00' ... '23:00', '24:00:00'
+    # Target: 'pct_hourly_0100' ... 'pct_hourly_2300', 'pct_hourly_2400'
+    rename_dict = {}
+    for i in range(1, 24):
+        rename_dict[f'{i}:00'] = f'pct_hourly_{i:02d}00'
+    
+    # Handle the 24th hour specifically as it has seconds in source
+    if '24:00:00' in df.columns:
+        rename_dict['24:00:00'] = 'pct_hourly_2400'
+    elif '24:00' in df.columns:
+        rename_dict['24:00'] = 'pct_hourly_2400'
+        
+    df = df.rename(columns=rename_dict)
+    
+    # 5. Add pct_hourly_2500 column
+    # The target sample shows NaN for this column.
+    df['pct_hourly_2500'] = float('nan')
+    
+    # 6. Define target columns in order
+    target_columns = ['dt_strata', 'dow'] + [f'pct_hourly_{i:02d}00' for i in range(1, 26)]
+    
+    return df[target_columns]
+```

@@ -1,0 +1,191 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns like `SEASON DAY TYPE`, `HOUR`, `T_MIN_1`, `T_MAX_1`, `CONSTANT_1`, `TEMP_1`, `RH_1`, `WIND_1`, `T_MIN_2`, `T_MAX_2`, `CONSTANT_2`, `TEMP_2`, `RH_2`, `WIND_2`, `T_MIN_3`, `T_MAX_3`, `CONSTANT_3`, `TEMP_3`, `RH_3`, `WIND_3`, `PROFILE_MIN`, `PROFILE_MAX`.
+    *   **Target**: Contains `season`, `daytype`, `hour`, `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end`.
+    *   **Observation**: The source has "stacked" columns for three different temperature ranges/scenarios (indicated by suffixes `_1`, `_2`, `_3`). The target seems to flatten this structure or select specific ones. However, looking at the sample data, the target has `constant` and `coefficient` as `nan`. This suggests that for this specific benchmark, those values might not be derived from the source or are simply not present/required in the output for the rows shown. Let's look closer at the mapping.
+
+2.  **Map Source Columns to Target Columns**:
+    *   `season` and `daytype`: These are derived from the `SEASON DAY TYPE` column. For example, "June WE" -> season="SUMMER", daytype="WEEKEND". "December WE" -> season="WINTER", daytype="WEEKEND". "June WD" -> season="SUMMER", daytype="WEEKDAY".
+        *   Mapping Logic:
+            *   Months: Jan, Feb, Mar -> WINTER; Apr, May, Jun -> SPRING; Jul, Aug, Sep -> SUMMER; Oct, Nov, Dec -> AUTUMN.
+            *   Day Type: "WD" -> WEEKDAY, "WE" -> WEEKEND.
+    *   `hour`: Directly from `HOUR` column.
+    *   `temperature_range`: This likely corresponds to the difference between `T_MAX` and `T_MIN` for a specific scenario. Looking at the target sample, `temperature_range` is an integer. In the source, we have `T_MIN_1`, `T_MAX_1`, etc. Let's check the first row of source: `T_MIN_1`=68, `T_MAX_1`=75. Diff = 7. Target row 1 (Spring Weekday Hour 1) has `temperature_range`=53. This doesn't match directly.
+    *   Let's re-examine the target sample. The target rows shown are for "SPRING WEEKDAY" and "SUMMER WEEKEND". The source sample provided only shows "June WE" and "December WE". This means the source sample provided is *not* representative of the rows in the target sample. I must infer the general transformation rule.
+    *   Let's look at the structure again. The source has 3 sets of temperature data (`_1`, `_2`, `_3`). The target has single `low_end` and `high_end`.
+    *   Hypothesis: The target table is a *flattened* version where each source row generates 3 target rows? Or is it selecting one specific scenario?
+    *   Wait, the problem states "Source sample rows: 300 rows" and "Target rows: 300 rows". This implies a 1-to-1 mapping.
+    *   Let's look at the columns `low_end` and `high_end`. In the target, they are integers. In the source, `T_MIN` and `T_MAX` are floats/ints.
+    *   Let's look at `temperature_range`. In the target, it's an integer.
+    *   Let's look at `constant` and `coefficient`. In the target, they are `nan`. In the source, we have `CONSTANT_1`, `TEMP_1` (which might be coefficient?), `RH_1`, `WIND_1`.
+    *   Why are `constant` and `coefficient` nan in the target? Perhaps the transformation involves selecting specific rows or the target schema implies that for this specific "length9_3" benchmark, these fields are not populated.
+    *   Let's look at the `SEASON DAY TYPE` parsing again.
+        *   "June WE" -> SUMMER, WEEKEND.
+        *   "December WE" -> WINTER, WEEKEND.
+        *   "June WD" -> SUMMER, WEEKDAY.
+    *   The target sample has "SPRING WEEKDAY". This must come from source rows like "April WD", "May WD", "March WD".
+    *   The target sample has "SUMMER WEEKEND". This comes from "June WE", "July WE", "August WE".
+
+3.  **Determining `low_end`, `high_end`, and `temperature_range`**:
+    *   In the source, we have `T_MIN_1`, `T_MAX_1`, `T_MIN_2`, `T_MAX_2`, `T_MIN_3`, `T_MAX_3`.
+    *   In the target, we have `low_end`, `high_end`.
+    *   Let's look at the first target row: `SPRING WEEKDAY 1`, `low_end`=9, `high_end`=62.
+    *   Let's look at the source structure. Usually, in these energy load profile datasets (like ELPRO), the columns `_1`, `_2`, `_3` might represent different percentiles or scenarios (e.g., Min, Median, Max).
+    *   However, without seeing the corresponding source rows for the target sample, I have to guess the mapping.
+    *   Common pattern in these benchmarks: The target often aggregates or selects specific columns.
+    *   Let's look at `temperature_range`. Target `temperature_range` = 53 for Spring Weekday Hour 1.
+    *   If `low_end` = 9 and `high_end` = 62, then `high_end - low_end` = 53. This matches `temperature_range`.
+    *   So, `temperature_range = high_end - low_end`.
+    *   Now, which source columns map to `low_end` and `high_end`?
+    *   The source has `T_MIN_1`, `T_MAX_1`, etc.
+    *   If the mapping is 1-to-1, we need to pick one set.
+    *   Let's assume the target uses the first set (`_1`) for simplicity, or perhaps `PROFILE_MIN` and `PROFILE_MAX`?
+    *   `PROFILE_MIN` and `PROFILE_MAX` in source are around 0.6 and 2.8. These don't match 9 and 62.
+    *   `T_MIN_1` and `T_MAX_1` in the sample are 68, 75. These don't match 9, 62.
+    *   However, note that the target sample rows (Spring Weekday) are *not* in the source sample provided (June WE, December WE). The source sample is just illustrative of the schema.
+    *   Let's look at the column names again. `T_MIN_1`, `T_MAX_1`.
+    *   Is it possible that `low_end` comes from `T_MIN_1` and `high_end` from `T_MAX_1`?
+    *   Or is it possible that the source data has different scales?
+    *   Let's look at the `constant` and `coefficient` columns in the target. They are `nan`. This suggests that for this specific transformation, we might just be copying `T_MIN_1` to `low_end` and `T_MAX_1` to `high_end` (or similar), and setting `constant` and `coefficient` to NaN.
+    *   Why would `constant` and `coefficient` be NaN? Maybe the source columns `CONSTANT_1`, `TEMP_1` are not used, or the target definition for this benchmark specifically ignores them.
+    *   Let's assume the standard mapping:
+        *   `season`: Derived from `SEASON DAY TYPE`.
+        *   `daytype`: Derived from `SEASON DAY TYPE`.
+        *   `hour`: From `HOUR`.
+        *   `low_end`: From `T_MIN_1`.
+        *   `high_end`: From `T_MAX_1`.
+        *   `temperature_range`: `high_end - low_end`.
+        *   `constant`: NaN.
+        *   `coefficient`: NaN.
+
+    *   Wait, let's check if there's a different interpretation. What if `_1`, `_2`, `_3` correspond to different things?
+    *   In many ELPRO datasets, the columns are:
+        *   `_1`: Low scenario
+        *   `_2`: Medium scenario
+        *   `_3`: High scenario
+    *   If the target only has one `low_end` and `high_end`, it might be picking one scenario. Given the name `low_end` and `high_end`, it might refer to the temperature range itself.
+    *   Let's look at the target column `temperature_range`. It is an integer. `T_MIN` and `T_MAX` are often integers or floats.
+    *   If `low_end` = `T_MIN_1` and `high_end` = `T_MAX_1`, then `temperature_range` = `T_MAX_1 - T_MIN_1`.
+    *   Let's verify with the source sample: Row 1: `T_MIN_1`=68, `T_MAX_1`=75. Range=7.
+    *   If this were the target, `temperature_range` would be 7.
+    *   The target sample shows `temperature_range`=53. This is a large range. 9 to 62 is a range of 53.
+    *   This suggests that the source values for Spring Weekday Hour 1 were `T_MIN`=9 and `T_MAX`=62.
+    *   This confirms that `low_end` maps to a `T_MIN` column and `high_end` maps to a `T_MAX` column.
+    *   Which one? `_1`, `_2`, or `_3`?
+    *   Usually, if not specified, `_1` is the primary or first scenario. Let's assume `_1`.
+
+4.  **Parsing `SEASON DAY TYPE`**:
+    *   The column `SEASON DAY TYPE` contains strings like "June WE".
+    *   We need to split this into Month and DayType.
+    *   Month mapping to Season:
+        *   Dec, Jan, Feb -> WINTER
+        *   Mar, Apr, May -> SPRING
+        *   Jun, Jul, Aug -> SUMMER
+        *   Sep, Oct, Nov -> AUTUMN
+    *   DayType mapping:
+        *   WD -> WEEKDAY
+        *   WE -> WEEKEND
+
+5.  **Handling `constant` and `coefficient`**:
+    *   The target has these as `nan`. The source has `CONSTANT_1`, `TEMP_1` (likely coefficient), etc.
+    *   Since the target explicitly shows `nan` for these in the sample, and there's no obvious calculation to derive a non-null value that fits the "nan" pattern for all rows (unless the source values are always null, which they aren't in the sample), the most robust transformation is to set these columns to `NaN` (or float('nan')).
+
+6.  **Refining the Plan**:
+    *   Step 1: Parse `SEASON DAY TYPE` to extract `season` and `daytype`.
+    *   Step 2: Rename `HOUR` to `hour`.
+    *   Step 3: Select `T_MIN_1` and rename to `low_end`. Cast to int64.
+    *   Step 4: Select `T_MAX_1` and rename to `high_end`. Cast to int64.
+    *   Step 5: Calculate `temperature_range` as `high_end - low_end`. Cast to int64.
+    *   Step 6: Create `constant` and `coefficient` columns filled with `NaN`.
+    *   Step 7: Ensure column order matches target.
+
+    *   *Self-Correction/Verification*: Is it possible that `low_end` and `high_end` come from `PROFILE_MIN` and `PROFILE_MAX`?
+        *   Source `PROFILE_MIN` ~ 0.6, `PROFILE_MAX` ~ 2.8.
+        *   Target `low_end` ~ 9, `high_end` ~ 62.
+        *   No, the scales are completely different. `T_MIN`/`T_MAX` are in Fahrenheit (likely, given 68-95 range). 9-62 is also a valid Fahrenheit range for Spring.
+        *   So `T_MIN_1` -> `low_end` and `T_MAX_1` -> `high_end` is the most logical mapping.
+
+    *   *Alternative*: What if the target combines `_1`, `_2`, `_3`?
+        *   If it were a melt operation, the row count would triple. But row count is preserved (300 -> 300).
+        *   So it must be a selection. `_1` is the standard default.
+
+    *   *Data Types*:
+        *   `season`: object
+        *   `daytype`: object
+        *   `hour`: int64
+        *   `temperature_range`: int64
+        *   `constant`: float64 (since it contains NaN)
+        *   `coefficient`: float64 (since it contains NaN)
+        *   `low_end`: int64
+        *   `high_end`: int64
+
+7.  **Implementation Details**:
+    *   Use `str.split` or regex to parse `SEASON DAY TYPE`.
+    *   Map months to seasons.
+    *   Map WD/WE to WEEKDAY/WEEKEND.
+    *   Perform arithmetic for `temperature_range`.
+    *   Assign NaNs for unused columns.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # 1. Parse 'SEASON DAY TYPE' into 'season' and 'daytype'
+    # Example: "June WE" -> Month: June, Type: WE
+    parts = source['SEASON DAY TYPE'].str.split(' ', n=1, expand=True)
+    month_str = parts[0]
+    day_type_str = parts[1]
+    
+    # Map months to seasons
+    # Winter: Dec, Jan, Feb
+    # Spring: Mar, Apr, May
+    # Summer: Jun, Jul, Aug
+    # Autumn: Sep, Oct, Nov
+    month_to_season = {
+        'January': 'WINTER', 'February': 'WINTER', 'March': 'SPRING',
+        'April': 'SPRING', 'May': 'SPRING', 'June': 'SUMMER',
+        'July': 'SUMMER', 'August': 'SUMMER', 'September': 'AUTUMN',
+        'October': 'AUTUMN', 'November': 'AUTUMN', 'December': 'WINTER'
+    }
+    
+    # Map day types
+    day_type_map = {
+        'WD': 'WEEKDAY',
+        'WE': 'WEEKEND'
+    }
+    
+    df = source.copy()
+    
+    # Create season column
+    df['season'] = month_str.map(month_to_season)
+    
+    # Create daytype column
+    df['daytype'] = day_type_str.map(day_type_map)
+    
+    # 2. Map 'HOUR' to 'hour'
+    df['hour'] = df['HOUR'].astype('int64')
+    
+    # 3. Map 'T_MIN_1' to 'low_end' and 'T_MAX_1' to 'high_end'
+    # Based on the 1-to-1 row mapping and typical schema conventions, we use the _1 suffix.
+    # We convert to int64 as per target schema.
+    df['low_end'] = df['T_MIN_1'].astype('int64')
+    df['high_end'] = df['T_MAX_1'].astype('int64')
+    
+    # 4. Calculate 'temperature_range'
+    df['temperature_range'] = (df['high_end'] - df['low_end']).astype('int64')
+    
+    # 5. Set 'constant' and 'coefficient' to NaN
+    # The target sample shows these as nan. The source has values, but the target schema
+    # for this benchmark seems to ignore them or expects them to be null.
+    df['constant'] = np.nan
+    df['coefficient'] = np.nan
+    
+    # 6. Select and order columns as per target schema
+    target_columns = ['season', 'daytype', 'hour', 'temperature_range', 'constant', 'coefficient', 'low_end', 'high_end']
+    
+    return df[target_columns]
+```

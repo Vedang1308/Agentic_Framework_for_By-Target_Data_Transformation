@@ -1,0 +1,113 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a date column `CST` (format `%a %m/%d/%Y`) and 24 hourly columns named `1:00` through `24:00:00`. Each row represents a single day's hourly data.
+    *   **Target**: Contains columns `month`, `daytype`, and `hr1` through `hr24`.
+    *   **Row Count Change**: Source has 1339 rows, Target has 1340 rows. This suggests that the transformation is primarily row-to-row mapping (parsing and renaming) but might involve a slight difference in how data is filtered or aggregated, or potentially a specific edge case in the dataset (e.g., a missing day in source vs target, or an extra row added). However, looking at the sample data, the values in the target correspond to specific rows in the source. The slight row count difference (1 vs 1339) is negligible for the general logic but implies we should not assume a 1:1 join if there were grouping. Given the columns `month` and `daytype` are derived from `CST`, and `hr1`-`hr24` are renamed from the hourly columns, this is a structural transformation (reshape/parse) rather than an aggregation. The row count difference might be due to the target including a header row in the count or a specific test case nuance, but the core transformation logic remains: parse date, classify day type, rename columns.
+
+2.  **Extract `month`**:
+    *   Parse the `CST` column into a datetime object.
+    *   Extract the month name (e.g., "April", "November") from the datetime.
+
+3.  **Extract `daytype`**:
+    *   Determine if the day is a "weekday" or "weekend".
+    *   Typically, Monday-Friday are weekdays, Saturday-Sunday are weekends.
+    *   Use the parsed datetime's day of the week to classify this.
+
+4.  **Rename Hourly Columns**:
+    *   The source columns are `1:00`, `2:00`, ..., `23:00`, `24:00:00`.
+    *   The target columns are `hr1`, `hr2`, ..., `hr23`, `hr24`.
+    *   Create a mapping dictionary to rename these columns. Note the last column `24:00:00` maps to `hr24`.
+
+5.  **Construct the Result DataFrame**:
+    *   Create a new DataFrame with the extracted `month` and `daytype` columns.
+    *   Add the renamed hourly columns.
+    *   Ensure the column order matches the target: `['month', 'daytype', 'hr1', ..., 'hr24']`.
+
+6.  **Handle Data Types and Formatting**:
+    *   Ensure `month` is a string (object).
+    *   Ensure `daytype` is a string (object).
+    *   Ensure hourly columns are float64.
+
+7.  **Verification with Sample**:
+    *   Source Row: `Sat 12/01/2012` -> Month: `December`, Day: `Saturday` -> `daytype`: `weekend`.
+    *   Source Row: `Mon 12/03/2012` -> Month: `December`, Day: `Monday` -> `daytype`: `weekday`.
+    *   Check Target Sample:
+        *   Row 1: `April`, `weekday`.
+        *   Row 4: `April`, `weekend`.
+    *   The logic holds.
+
+8.  **Addressing Row Count Discrepancy**:
+    *   Since the problem states the function must generalize and not hardcode, and the transformation is clearly a row-wise mapping (each source row has 24 hours, each target row has 24 hours), the discrepancy of 1 row is likely due to the specific test set or a minor filtering condition not evident in the schema (e.g., removing duplicates or handling a specific invalid date). However, without explicit instructions to filter, we apply the transformation to all valid rows. If the source has 1339 and target 1340, it's possible the target includes a row that was split or aggregated, but given the column structure is identical (24 hours), it's most likely a simple 1:1 transformation where the row count note is a distractor or refers to index handling. We will proceed with the direct mapping. *Correction*: Actually, looking closely at the provided samples, the target sample shows `April` and `November` data. The source sample shows `December 2012` and `July 2016`. The target rows don't directly match the source rows provided in the sample snippet, which is expected for different datasets. The key is the structural transformation.
+
+    *Self-Correction on Row Count*: If the row count increases, it might imply a `pivot` or `explode` operation, but here we are going from wide (24 cols) to wide (24 cols). It's more likely a simple rename/parse. If the target has *more* rows, it could be that the source has missing days that are filled in? No, we can't generate data. It could be that the source has combined rows? No, the source has 24 hour columns. The most robust assumption is a direct row-wise transformation. The 1-row difference is likely negligible for the *logic* synthesis (e.g., maybe one row in source is malformed and dropped, or one row in target is a header counted in the benchmark stats). We will implement the direct mapping.
+
+### Python Code Implementation
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame with hourly columns into a target DataFrame
+    with 'month', 'daytype', and 'hr1'-'hr24' columns.
+    """
+    df = source.copy()
+    
+    # 1. Parse the CST column to extract date information
+    # Format is '%a %m/%d/%Y' (e.g., 'Sat 12/01/2012')
+    df['parsed_date'] = pd.to_datetime(df['CST'], format='%a %m/%d/%Y')
+    
+    # 2. Extract 'month' as full name (e.g., 'April', 'December')
+    df['month'] = df['parsed_date'].dt.strftime('%B')
+    
+    # 3. Determine 'daytype' (weekday vs weekend)
+    # weekday() returns 0 for Monday, 6 for Sunday
+    # Monday-Friday (0-4) are weekdays, Saturday-Sunday (5-6) are weekends
+    df['daytype'] = np.where(df['parsed_date'].dt.weekday < 5, 'weekday', 'weekend')
+    
+    # 4. Rename hourly columns
+    # Source columns: '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target columns: 'hr1', 'hr2', ..., 'hr23', 'hr24'
+    
+    # Identify the hourly columns
+    hour_cols = [col for col in df.columns if col != 'CST' and col != 'parsed_date' and col != 'month' and col != 'daytype']
+    
+    # Create a mapping for renaming
+    # We expect 24 columns. Let's map them sequentially.
+    # Note: The source columns might not be in strict order in the DataFrame, 
+    # but typically they are. We should map based on the column name content.
+    
+    rename_map = {}
+    for col in hour_cols:
+        # Extract the hour number from the column name
+        # Examples: '1:00' -> 1, '24:00:00' -> 24
+        # Split by ':' and take the first part
+        try:
+            hour_num = int(col.split(':')[0])
+            rename_map[col] = f'hr{hour_num}'
+        except ValueError:
+            # Fallback or skip if format is unexpected
+            pass
+            
+    df.rename(columns=rename_map, inplace=True)
+    
+    # 5. Select and order the final columns
+    target_columns = ['month', 'daytype', 'hr1', 'hr2', 'hr3', 'hr4', 'hr5', 'hr6', 'hr7', 'hr8', 'hr9', 'hr10', 'hr11', 'hr12', 'hr13', 'hr14', 'hr15', 'hr16', 'hr17', 'hr18', 'hr19', 'hr20', 'hr21', 'hr22', 'hr23', 'hr24']
+    
+    # Ensure all target columns exist and select them
+    # If any hour is missing, it will raise an error, which is appropriate for validation
+    result = df[target_columns].copy()
+    
+    # 6. Ensure correct data types
+    # month and daytype should be object (string)
+    result['month'] = result['month'].astype(str)
+    result['daytype'] = result['daytype'].astype(str)
+    
+    # Hourly columns should be float64
+    for col in target_columns[2:]: # Skip first two
+        result[col] = result[col].astype(float)
+        
+    return result[target_columns]
+```

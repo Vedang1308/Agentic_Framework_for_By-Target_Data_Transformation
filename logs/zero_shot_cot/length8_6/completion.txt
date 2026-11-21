@@ -1,0 +1,138 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Understand the Goal**: The objective is to transform a wide-format source DataFrame (daily data with hourly columns) into a wide-format target DataFrame (hourly data with monthly columns). The row count decreases from 182 to 24, suggesting an aggregation. The target has 24 rows, which corresponds to the 24 hours in a day (1-12 AM/PM mapped to 1-24 or similar, but looking at the target `hour` column, it seems to be 1-12 or 1-24? Let's check the target sample: hours are 1, 10, 11, 12, 6, 7, 8, 9. These are integers. The source has columns like "1:00 AM", "2:00 AM", ..., "12:00 AM", "1:00 PM", ..., "12:00 PM". This is a 24-hour cycle. The target `hour` column likely represents the hour of the day (1-24 or 0-23). Let's look closer at the target values. The target has `hour` 1, 6, 7, 8, 9, 10, 11, 12. It seems to only show a subset in the sample, but the problem states 24 rows. So it likely covers all 24 hours.
+
+2.  **Analyze Source Structure**:
+    *   `date`: Date string (e.g., '7/3/2014').
+    *   Hourly columns: '1:00 AM', '2:00 AM', ..., '12:00 AM', '1:00 PM', ..., '12:00 PM'. Note the order is not strictly chronological in the schema list provided, but they represent the 24 hours of a day.
+    *   `DSL`: A float column, likely not needed for the target based on the target schema.
+
+3.  **Analyze Target Structure**:
+    *   `hour`: Integer. Likely 1-24 or 0-23. Given the source has "12:00 AM" (midnight) and "12:00 PM" (noon), we need to map these to a standard 24-hour integer format. Usually, 12:00 AM is hour 0 or 24, 1:00 AM is 1, ..., 11:00 AM is 11, 12:00 PM is 12, 1:00 PM is 13, ..., 11:00 PM is 23. However, the target sample shows `hour` 1, 6, 7, 8, 9, 10, 11, 12. It doesn't show 0, 13, etc. in the snippet, but the row count is 24. Let's assume standard 1-24 or 0-23 mapping. Let's look at the aggregation.
+    *   Month columns: 'january', 'february', ..., 'december'.
+    *   Values: Floats. These look like averages. For example, `january` for `hour` 1 is 1.20916.
+
+4.  **Transformation Steps**:
+    *   **Step 1: Parse Dates**. Convert the `date` column to datetime objects to extract the month.
+    *   **Step 2: Melt the Hourly Columns**. The source is wide (24 hour columns). We need to unpivot/melt these columns into a long format with columns: `date`, `hour_label`, `value`.
+    *   **Step 3: Map Hour Labels to Integers**. Convert labels like "1:00 AM" to integer hours.
+        *   12:00 AM -> 0 (or 24? Let's check standard conventions. Often 12 AM is 0. 1 AM is 1. ... 11 AM is 11. 12 PM is 12. 1 PM is 13. ... 11 PM is 23.)
+        *   Let's verify with the target. If the target has 24 rows, it likely has hours 0-23 or 1-24. The sample shows 1, 6, 7, 8, 9, 10, 11, 12. It's missing 0, 2-5, 13-24 in the snippet. But the count is 24.
+        *   Let's assume the mapping:
+            *   12:00 AM -> 0
+            *   1:00 AM -> 1
+            *   ...
+            *   11:00 AM -> 11
+            *   12:00 PM -> 12
+            *   1:00 PM -> 13
+            *   ...
+            *   11:00 PM -> 23
+    *   **Step 4: Extract Month**. From the parsed `date`, extract the month number (1-12) and map it to the month name (lowercase).
+    *   **Step 5: Aggregate**. Group by `hour` and `month_name`. Calculate the mean of the `value` column.
+    *   **Step 6: Pivot**. Pivot the aggregated data so that `hour` is the index, `month_name` are the columns, and the values are the means.
+    *   **Step 7: Format Output**.
+        *   Reset index to make `hour` a column.
+        *   Ensure column names match exactly: 'hour', 'january', ..., 'december'.
+        *   Sort by `hour` if necessary (though the target sample isn't sorted, the final return should probably be sorted or just have the correct columns). The target sample shows hours 1, 10, 11, 12, 6, 7, 8, 9. This is not sorted. However, the instruction says "Return a DataFrame with the same schema and contents as target.csv". Usually, order doesn't matter for equality checks in pandas if indices are aligned, but it's safer to sort by hour for determinism.
+        *   Handle missing values: If a month has no data for a specific hour, it should be NaN. The target sample shows `nan` for august-december. This implies the source data might only cover certain months (Jan-Jul in the sample). The aggregation should naturally produce NaNs for missing combinations.
+
+5.  **Refining Hour Mapping**:
+    *   Source columns: '1:00 AM', '2:00 AM', ..., '11:00 AM', '12:00 PM', '1:00 PM', ..., '11:00 PM', '12:00 AM'.
+    *   Let's create a mapping dictionary.
+    *   `12:00 AM` is midnight. In 24-hour format, this is 0.
+    *   `1:00 AM` is 1.
+    *   ...
+    *   `11:00 AM` is 11.
+    *   `12:00 PM` is noon. In 24-hour format, this is 12.
+    *   `1:00 PM` is 13.
+    *   ...
+    *   `11:00 PM` is 23.
+
+6.  **Refining Month Mapping**:
+    *   Extract month number from date.
+    *   Map 1 -> 'january', 2 -> 'february', ..., 12 -> 'december'.
+
+7.  **Implementation Details**:
+    *   Use `pd.melt` to unpivot.
+    *   Use `pd.to_datetime` for date parsing.
+    *   Use `groupby` and `mean`.
+    *   Use `pivot` or `unstack`.
+    *   Rename columns to match target.
+    *   Select columns in the correct order.
+
+8.  **Edge Cases**:
+    *   The source might have different years. The aggregation is by month name, so years are ignored (all Januaries are averaged together).
+    *   The `DSL` column is ignored.
+
+Let's write the code.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    # Define the target column names
+    target_columns = ['hour', 'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+    
+    # 1. Parse the date column
+    source = source.copy()
+    source['date'] = pd.to_datetime(source['date'], format='%m/%d/%Y')
+    
+    # 2. Identify hour columns (all columns except 'date' and 'DSL')
+    hour_cols = [col for col in source.columns if col not in ['date', 'DSL']]
+    
+    # 3. Melt the dataframe to long format
+    # id_vars=['date'], value_vars=hour_cols
+    df_long = source.melt(id_vars=['date'], value_vars=hour_cols, var_name='hour_label', value_name='value')
+    
+    # 4. Map hour labels to 24-hour integer format
+    # 12:00 AM -> 0, 1:00 AM -> 1, ..., 11:00 AM -> 11, 12:00 PM -> 12, 1:00 PM -> 13, ..., 11:00 PM -> 23
+    def map_hour(label):
+        label = label.strip()
+        if 'AM' in label:
+            hour = int(label.split(':')[0])
+            if hour == 12:
+                return 0
+            else:
+                return hour
+        else: # PM
+            hour = int(label.split(':')[0])
+            if hour == 12:
+                return 12
+            else:
+                return hour + 12
+                
+    df_long['hour'] = df_long['hour_label'].apply(map_hour)
+    
+    # 5. Extract month name from date
+    # Map month number to lowercase name
+    month_map = {
+        1: 'january', 2: 'february', 3: 'march', 4: 'april', 5: 'may', 6: 'june',
+        7: 'july', 8: 'august', 9: 'september', 10: 'october', 11: 'november', 12: 'december'
+    }
+    df_long['month'] = df_long['date'].dt.month.map(month_map)
+    
+    # 6. Aggregate by hour and month
+    # Calculate mean value for each hour-month combination
+    df_agg = df_long.groupby(['hour', 'month'])['value'].mean().reset_index()
+    
+    # 7. Pivot to wide format
+    # Index: hour, Columns: month, Values: value
+    df_pivot = df_agg.pivot(index='hour', columns='month', values='value')
+    
+    # 8. Reset index to make 'hour' a column
+    df_pivot = df_pivot.reset_index()
+    
+    # 9. Ensure all month columns are present, even if empty (NaN)
+    for month in month_map.values():
+        if month not in df_pivot.columns:
+            df_pivot[month] = np.nan
+            
+    # 10. Select and order columns as per target
+    df_result = df_pivot[target_columns]
+    
+    # 11. Sort by hour for deterministic output (optional but good practice)
+    df_result = df_result.sort_values('hour').reset_index(drop=True)
+    
+    return df_result
+```

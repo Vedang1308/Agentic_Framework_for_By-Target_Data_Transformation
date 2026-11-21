@@ -1,0 +1,115 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Input and Output**:
+   - Source: `date` (datetime string with minutes), `cerc_logger_1` (float). Row count is high (~75k), suggesting multiple measurements per day/hour.
+   - Target: `date` (date string YYYY-MM-DD or MM/DD/YYYY), plus 24 columns representing hours of the day in 12-hour format (1:00 AM to 12:00 AM). Row count is low (~521), suggesting one row per unique date.
+   - Transformation involves: Parsing dates, extracting the calendar date, determining the hour of the day, mapping 24-hour time to 12-hour AM/PM labels, aggregating values (likely mean) for each hour per day, and pivoting the data from long to wide format.
+
+2. **Parse Datetime**:
+   - Convert the source `date` column to pandas datetime objects. The format is `%m/%d/%Y %H:%M`.
+
+3. **Extract Features**:
+   - Extract the calendar date (`YYYY-MM-DD` or formatted as `%m/%d/%Y`) for grouping and the final `date` column.
+   - Extract the hour of the day (0-23) to determine which target column the value belongs to.
+
+4. **Map Hours to Target Columns**:
+   - The target columns are named "1:00 AM", "2:00 AM", ..., "12:00 PM", ..., "11:00 PM", "12:00 AM".
+   - Mapping logic:
+     - Hour 0 (00:00-00:59) -> "12:00 AM"
+     - Hour 1 (01:00-01:59) -> "1:00 AM"
+     - ...
+     - Hour 11 (11:00-11:59) -> "11:00 AM"
+     - Hour 12 (12:00-12:59) -> "12:00 PM"
+     - Hour 13 (13:00-13:59) -> "1:00 PM"
+     - ...
+     - Hour 23 (23:00-23:59) -> "11:00 PM"
+
+5. **Aggregate Data**:
+   - Group by the extracted calendar date and the mapped hour label.
+   - Calculate the mean of `cerc_logger_1` for each group. This handles the reduction from ~75k rows to ~521 rows (assuming ~24 hours * ~22 days/month * ~10 months or similar density).
+
+6. **Pivot/Reshape**:
+   - Unpivot the grouped data so that each unique hour label becomes a column.
+   - Reset index to make `date` a column again.
+
+7. **Format Output**:
+   - Ensure the `date` column is formatted as `%m/%d/%Y`.
+   - Ensure all 24 target columns exist. If any hour is missing for a specific date, fill with NaN (or potentially 0, but typically NaN for missing data unless specified otherwise; looking at the sample, values are dense, so NaN fill is standard).
+   - Reorder columns to match the exact target schema: `date` followed by the 24 hour columns in chronological order.
+
+8. **Final Selection**:
+   - Return the DataFrame with columns strictly matching the target list.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column
+    # Source format: '7/28/2019 4:50' -> %m/%d/%Y %H:%M
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %I:%M %p', errors='coerce')
+    # If the above fails due to AM/PM ambiguity in parsing, try standard 24h format if possible, 
+    # but the sample '4:50' usually implies 24h or ambiguous. 
+    # Let's look at sample: '7/28/2019 4:50'. 
+    # pd.to_datetime is flexible. Let's try generic parsing first.
+    if df['datetime'].isna().all():
+        df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M', errors='coerce')
+        
+    # 2. Extract calendar date for grouping and final output
+    df['cal_date'] = df['datetime'].dt.strftime('%m/%d/%Y')
+    
+    # 3. Extract hour (0-23)
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 4. Map hour to target column names
+    # 0 -> 12:00 AM
+    # 1-11 -> 1:00 AM - 11:00 AM
+    # 12 -> 12:00 PM
+    # 13-23 -> 1:00 PM - 11:00 PM
+    
+    def map_hour_to_label(h):
+        if pd.isna(h):
+            return np.nan
+        h = int(h)
+        if h == 0:
+            return '12:00 AM'
+        elif h == 12:
+            return '12:00 PM'
+        elif 1 <= h < 12:
+            return f'{h}:00 AM'
+        elif 13 <= h < 24:
+            return f'{h-12}:00 PM'
+        return np.nan
+
+    df['hour_label'] = df['hour'].apply(map_hour_to_label)
+    
+    # 5. Group by calendar date and hour label, then aggregate (mean)
+    # We drop rows where datetime parsing failed or hour is invalid
+    df_valid = df.dropna(subset=['cal_date', 'hour_label'])
+    
+    grouped = df_valid.groupby(['cal_date', 'hour_label'])['cerc_logger_1'].mean().reset_index()
+    
+    # 6. Pivot to wide format
+    df_pivot = grouped.pivot(index='cal_date', columns='hour_label', values='cerc_logger_1').reset_index()
+    
+    # 7. Define target columns
+    target_hour_cols = [
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM',
+        '12:00 PM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 AM'
+    ]
+    
+    # Rename the index column 'cal_date' to 'date'
+    df_pivot = df_pivot.rename(columns={'cal_date': 'date'})
+    
+    # Ensure all target columns exist, filling missing ones with NaN
+    for col in target_hour_cols:
+        if col not in df_pivot.columns:
+            df_pivot[col] = np.nan
+            
+    # 8. Select and order columns verbatim
+    target_columns = ['date'] + target_hour_cols
+    
+    return df_pivot[target_columns]
+```

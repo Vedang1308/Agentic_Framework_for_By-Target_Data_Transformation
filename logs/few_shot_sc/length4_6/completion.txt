@@ -1,0 +1,199 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Date Transformation**:
+    *   Source column `Date` is in format `M/D/YYYY` (e.g., '1/1/2014').
+    *   Target column `date` is in format `YYYY-MM-DD HH:MM:SS` (e.g., '2014-01-01 00:00:00').
+    *   Action: Parse `Date` to datetime using `pd.to_datetime`, then format using `.dt.strftime('%Y-%m-%d %H:%M:%S')`.
+
+2.  **Analyze Hourly Column Mapping**:
+    *   Source columns are named `Hr 1` through `Hr 24`.
+    *   Target columns are named `1:00 AM`, `2:00 AM`, ..., `12:00 AM`, `1:00 PM`, ..., `12:00 PM`.
+    *   Mapping Logic:
+        *   `Hr 1` -> `1:00 AM`
+        *   `Hr 2` -> `2:00 AM`
+        *   ...
+        *   `Hr 11` -> `11:00 AM`
+        *   `Hr 12` -> `12:00 PM` (Noon)
+        *   `Hr 13` -> `1:00 PM`
+        *   ...
+        *   `Hr 23` -> `11:00 PM`
+        *   `Hr 24` -> `12:00 AM` (Midnight)
+    *   Note on Target Column Order: The provided target schema list is `['1:00 AM', ..., '11:00 AM', '12:00 AM', '1:00 PM', ..., '12:00 PM']`. Wait, looking closely at the provided target column list in the prompt:
+        `['date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+        
+        Let's verify the mapping against standard 12-hour clock conventions usually found in these datasets:
+        *   Hour 1 (1 AM) -> 1:00 AM
+        *   Hour 12 (12 PM/Noon) -> 12:00 PM
+        *   Hour 13 (1 PM) -> 1:00 PM
+        *   Hour 24 (12 AM/Midnight) -> 12:00 AM
+        
+        However, the target column list in the prompt has `12:00 AM` appearing *before* `1:00 PM`.
+        Standard chronological order for 12-hour clock strings if sorted lexicographically or by time:
+        12:00 AM (Midnight, Hr 24 or Hr 0?) -> Usually Hr 24 in these datasets is midnight of the *next* day or end of day. But here `Hr 1` is 1 AM. `Hr 12` is Noon. `Hr 24` is Midnight.
+        
+        Let's look at the sample data to confirm values.
+        Source Row 1 (1/1/2014):
+        Hr 1: 2.43675
+        Hr 12: 2.4108
+        Hr 24: 2.60843
+        
+        Target Row 1 (2014-01-01...):
+        1:00 AM: 0.9188
+        12:00 PM: 0.91513 (Last column in the list provided in the prompt description? No, let's look at the list again).
+        
+        The prompt's target column list is:
+        `['date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+        
+        This order is strange. `12:00 AM` is between `11:00 AM` and `1:00 PM`.
+        Usually:
+        1:00 AM = Hr 1
+        ...
+        11:00 AM = Hr 11
+        12:00 PM = Hr 12
+        1:00 PM = Hr 13
+        ...
+        11:00 PM = Hr 23
+        12:00 AM = Hr 24
+        
+        If the target column `12:00 AM` is at index 12 (0-indexed after date), and `12:00 PM` is at the end, let's check the values.
+        
+        Source Hr 12 value: 2.4108.
+        Source Hr 24 value: 2.60843.
+        
+        Target column `12:00 PM` (last one): 0.91513.
+        Target column `12:00 AM` (13th col): 0.93132.
+        
+        Let's check the ratio.
+        Target 1:00 AM (0.9188) / Source Hr 1 (2.43675) ≈ 0.377
+        Target 12:00 PM (0.91513) / Source Hr 12 (2.4108) ≈ 0.379
+        Target 12:00 AM (0.93132) / Source Hr 24 (2.60843) ≈ 0.357
+        
+        Wait, the values in the target sample don't seem to be a simple scalar multiple of the source sample values provided in the text.
+        Source Sample Row 1: `2.43675` for Hr 1.
+        Target Sample Row 1: `0.9188` for 1:00 AM.
+        
+        Source Sample Row 5 (12/28/2014):
+        Hr 1: 105.69
+        Target Row 5 (12/28/2014):
+        1:00 AM: 1.15562
+        
+        Ratio: 1.15562 / 105.69 ≈ 0.0109
+        
+        Let's look at the first row again.
+        0.9188 / 2.43675 ≈ 0.377.
+        
+        The ratios are inconsistent. This implies the target values might be derived from a different subset, or there is a calculation involved, OR the sample rows provided in the prompt text for Source and Target do not correspond to the same logical entity/row index in a direct 1-to-1 mapping of the *same* underlying data, but rather just illustrate the schema.
+        
+        HOWEVER, in TbT tasks, usually the transformation is structural (renaming, reshaping, formatting) unless there's an obvious arithmetic operation (like unit conversion).
+        
+        Let's look at the column names again.
+        Source: `Hr 1` ... `Hr 24`.
+        Target: `1:00 AM` ... `12:00 PM`.
+        
+        The task is likely just renaming and reordering. The discrepancy in values might be due to the sample rows being from different contexts or the prompt containing synthetic/sample data that doesn't perfectly align numerically, but the *schema transformation* is the key.
+        
+        Let's assume the standard mapping:
+        Hr 1 -> 1:00 AM
+        Hr 2 -> 2:00 AM
+        ...
+        Hr 11 -> 11:00 AM
+        Hr 12 -> 12:00 PM
+        Hr 13 -> 1:00 PM
+        ...
+        Hr 23 -> 11:00 PM
+        Hr 24 -> 12:00 AM
+        
+        Now, let's look at the target column order provided in the prompt:
+        `['date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+        
+        This order places `12:00 AM` (Midnight, Hr 24) between `11:00 AM` and `1:00 PM`. This is non-chronological.
+        Chronological order would be:
+        12:00 AM (Midnight start), 1:00 AM ... 11:00 AM, 12:00 PM (Noon), 1:00 PM ... 11:00 PM.
+        
+        The provided list is:
+        1:00 AM ... 11:00 AM, [12:00 AM], 1:00 PM ... 11:00 PM, [12:00 PM].
+        
+        This suggests `12:00 AM` corresponds to `Hr 24` and `12:00 PM` corresponds to `Hr 12`.
+        
+        Let's construct the mapping dictionary based on this specific column order requirement.
+        
+        1. `Hr 1` -> `1:00 AM`
+        2. `Hr 2` -> `2:00 AM`
+        ...
+        11. `Hr 11` -> `11:00 AM`
+        12. `Hr 24` -> `12:00 AM`  (Note: Skipped 12-23)
+        13. `Hr 13` -> `1:00 PM`
+        ...
+        23. `Hr 23` -> `11:00 PM`
+        24. `Hr 12` -> `12:00 PM`
+        
+        Let's double check this weird ordering. Is it possible `12:00 AM` is `Hr 12`? No, 12:00 AM is midnight. 12:00 PM is noon.
+        In many electricity datasets, `Hr 1` is 1:00 AM. `Hr 12` is 12:00 PM (Noon). `Hr 24` is 12:00 AM (Midnight).
+        
+        So the mapping is:
+        - AM Hours (1-11): `Hr 1`..`Hr 11` -> `1:00 AM`..`11:00 AM`
+        - Midnight: `Hr 24` -> `12:00 AM`
+        - PM Hours (1-11): `Hr 13`..`Hr 23` -> `1:00 PM`..`11:00 PM`
+        - Noon: `Hr 12` -> `12:00 PM`
+        
+        The target column list in the prompt is:
+        `['date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+        
+        So I need to rename the columns and then select them in this exact order.
+
+3.  **Implementation Steps**:
+    *   Copy source DataFrame.
+    *   Parse `Date` column to datetime.
+    *   Create `date` column formatted as `%Y-%m-%d %H:%M:%S`.
+    *   Define a rename mapping for `Hr X` to the corresponding 12-hour format string.
+    *   Apply rename.
+    *   Define the target column list verbatim as provided.
+    *   Return the DataFrame with only these columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse and format the date
+    dt = pd.to_datetime(df['Date'])
+    df['date'] = dt.dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Map source hourly columns to target 12-hour format columns
+    # Source: Hr 1 (1 AM) ... Hr 11 (11 AM), Hr 12 (12 PM/Noon), Hr 13 (1 PM) ... Hr 23 (11 PM), Hr 24 (12 AM/Midnight)
+    # Target columns requested in specific order:
+    # 1:00 AM ... 11:00 AM, 12:00 AM, 1:00 PM ... 11:00 PM, 12:00 PM
+    
+    rename_dict = {}
+    
+    # AM Hours: 1 to 11
+    for i in range(1, 12):
+        rename_dict[f'Hr {i}'] = f'{i}:00 AM'
+        
+    # Midnight: Hr 24 -> 12:00 AM
+    rename_dict['Hr 24'] = '12:00 AM'
+    
+    # PM Hours: 1 to 11 (Source Hr 13 to 23)
+    for i in range(1, 12):
+        source_hr = i + 12
+        rename_dict[f'Hr {source_hr}'] = f'{i}:00 PM'
+        
+    # Noon: Hr 12 -> 12:00 PM
+    rename_dict['Hr 12'] = '12:00 PM'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define target columns in the exact order specified
+    target_columns = [
+        'date', 
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', 
+        '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', 
+        '12:00 AM', 
+        '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', 
+        '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', 
+        '12:00 PM'
+    ]
+    
+    return df[target_columns]
+```

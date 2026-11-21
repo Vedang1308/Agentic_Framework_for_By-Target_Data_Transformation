@@ -1,0 +1,70 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains metadata columns (`class`, `Description`, `analysis`, `uom`) and data columns (`date`, `value1`...`value24`). The `date` column is in string format `'%m/%d/%Y'`. The `value` columns represent hourly data for that day.
+    *   **Target**: Contains a `Date` column (formatted as `'%Y-%m-%d %H:%M:%S'`) and 24 columns named `Hr 1` through `Hr 24`.
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the transformation is primarily a reshaping/formatting operation, but there might be an implicit handling of missing dates or a specific date range expansion. However, looking at the sample data, the source rows correspond directly to specific dates. The extra row in the target (183 vs 182) might be due to the target including a date that is missing in the source sample provided, or potentially an aggregation if multiple source rows mapped to one target row (which isn't the case here as each source row is a unique date). Given the "HourlyLoad" analysis type, it's likely a 1-to-1 mapping of days. The discrepancy in row count in the prompt description (182 vs 183) is a hint to check for missing values or date ranges, but typically in these TbT tasks, if the schema is 1-to-1 per day, we just transform the existing rows. If the target has more rows, it might imply filling in missing dates within a range, but without explicit instructions on the range, we usually stick to transforming the provided source data. *Correction*: Looking closely at the sample, the source dates are not contiguous (jumps from July to December in the sample snippet, but the full dataset likely has more). The target sample shows contiguous dates in Jan and June/July. The key is that each source row becomes one target row. The row count difference might be an artifact of the specific test case generation or a missing date in the source sample snippet. I will assume a direct row-wise transformation.
+
+2.  **Date Parsing and Formatting**:
+    *   Parse the source `date` column from `'%m/%d/%Y'` to a pandas datetime object.
+    *   Format this datetime object to the target string format `'%Y-%m-%d %H:%M:%S'`. Since the source only has dates (no time), the time part will be `00:00:00`.
+
+3.  **Column Renaming**:
+    *   The source columns `value1` through `value24` need to be renamed to `Hr 1` through `Hr 24`.
+    *   Create a mapping dictionary: `{f'value{i}': f'Hr {i}' for i in range(1, 25)}`.
+
+4.  **Column Selection and Ordering**:
+    *   Select the newly formatted `Date` column.
+    *   Select the renamed `Hr 1`...`Hr 24` columns.
+    *   Ensure the order matches the target schema: `['Date', 'Hr 1', ..., 'Hr 24']`.
+
+5.  **Data Type Handling**:
+    *   Ensure the `Hr` columns are float64.
+    *   Ensure the `Date` column is object (string) as per the target schema.
+
+6.  **Implementation Details**:
+    *   Use `pd.to_datetime` for parsing.
+    *   Use `.dt.strftime` for formatting.
+    *   Use `.rename` for column renaming.
+    *   Return the final DataFrame with the exact target column names.
+
+### Python Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    # Define the target column names verbatim
+    target_columns = [
+        'Date', 'Hr 1', 'Hr 2', 'Hr 3', 'Hr 4', 'Hr 5', 'Hr 6', 'Hr 7', 'Hr 8', 
+        'Hr 9', 'Hr 10', 'Hr 11', 'Hr 12', 'Hr 13', 'Hr 14', 'Hr 15', 'Hr 16', 
+        'Hr 17', 'Hr 18', 'Hr 19', 'Hr 20', 'Hr 21', 'Hr 22', 'Hr 23', 'Hr 24'
+    ]
+    
+    # Create a copy to avoid modifying the original source
+    df = source.copy()
+    
+    # 1. Parse the date column from '%m/%d/%Y' to datetime
+    df['date_parsed'] = pd.to_datetime(df['date'], format='%m/%d/%Y')
+    
+    # 2. Format the date to '%Y-%m-%d %H:%M:%S' as required by the target
+    df['Date'] = df['date_parsed'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 3. Rename value columns to Hr columns
+    rename_map = {f'value{i}': f'Hr {i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_map)
+    
+    # 4. Select and order the columns to match the target schema
+    # We select 'Date' and the 24 'Hr' columns
+    df = df[['Date'] + [f'Hr {i}' for i in range(1, 25)]]
+    
+    # 5. Ensure correct data types
+    # The target schema specifies Date as object (string) and Hr columns as float64
+    df['Date'] = df['Date'].astype(str)
+    for col in [f'Hr {i}' for i in range(1, 25)]:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+    # 6. Return the DataFrame with the exact target column names
+    return df[target_columns]
+```

@@ -1,0 +1,134 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Dates and Extract Components**:
+    *   The source column `date` is in the format `%m/%d/%Y %H:%M`.
+    *   We need to parse this into a datetime object to extract the calendar date (`YYYY-MM-DD`) for grouping and the hour (`0-23`) for pivoting.
+    *   The target `date` column format is `%m/%d/%Y` (e.g., `01/02/2018`).
+
+2.  **Determine Aggregation Strategy**:
+    *   The source has 1450 rows, and the target has 2 rows. This implies a significant reduction in row count, likely due to grouping by date.
+    *   The target has columns `Hour 1` through `Hour 24`. This suggests a pivot operation where hours become columns.
+    *   Looking at the sample data:
+        *   Source: `1/2/2018 0:11` has value `67.9`.
+        *   Target: `01/02/2018` (Jan 2nd) has `67.9` in `Hour 24`.
+        *   Wait, let's look closer. `1/2/2018 0:11` is Hour 0 (midnight). In the target, `Hour 24` corresponds to the last hour of the day? Or is it a shift?
+        *   Let's check the other row. Target `01/01/2018` has `67.9` in `Hour 1`.
+        *   Source sample doesn't show Jan 1st data explicitly in the snippet, but let's infer the mapping.
+        *   Standard 24-hour clock: 0:00-0:59 is Hour 0. 1:00-1:59 is Hour 1. ... 23:00-23:59 is Hour 23.
+        *   Target columns are `Hour 1` to `Hour 24`.
+        *   If `Hour 1` corresponds to 1:00-1:59, then `Hour 24` would correspond to 0:00-0:59 of the *next* day? Or is it a 1-based index where Hour 1 = 0:00-0:59?
+        *   Let's look at the specific value `67.9` from source `1/2/2018 0:11`.
+        *   In the target, for date `01/02/2018`, the value `67.9` appears in `Hour 24`.
+        *   This implies that the hour `0` (midnight) in the source is mapped to `Hour 24` in the target for the *same* calendar date.
+        *   Therefore, the mapping is: Source Hour `h` -> Target Column `Hour (h % 24) + 1`?
+            *   If Source Hour is 0: `0 % 24 + 1 = 1`. But it mapped to 24.
+            *   If Source Hour is 0: Map to 24.
+            *   If Source Hour is 1: Map to 1?
+            *   Let's check the other row: Target `01/01/2018` has `67.9` in `Hour 1`. If this value came from source data on `1/1/2018` at hour 1 (1:xx AM), then Hour 1 maps to Column `Hour 1`.
+            *   So, Source Hour 1 -> Target `Hour 1`.
+            *   Source Hour 0 -> Target `Hour 24`.
+            *   This implies a cyclic shift or specific mapping:
+                *   Hour 1 -> Col 1
+                *   ...
+                *   Hour 23 -> Col 23
+                *   Hour 0 -> Col 24
+            *   Formula: `target_hour = source_hour if source_hour != 0 else 24`.
+
+3.  **Handle Missing Values and Aggregation**:
+    *   The source has multiple rows per hour (e.g., `0:11`, `0:12`).
+    *   We need to aggregate values for each (Date, Hour) pair.
+    *   The sample target shows `nan` for many hours. The source sample shows `nan` values.
+    *   Common aggregation for such sensor data is `mean` or `median`. Given the precision in the target (e.g., `67.9`, `67.8`), `mean` is a strong candidate. If all values in an hour are `nan`, the result should be `nan`.
+
+4.  **Pivot the Data**:
+    *   Group by `date` (calendar date) and the mapped `hour`.
+    *   Aggregate `zone_016` using `mean`.
+    *   Pivot the table so that `date` is the index, the mapped `hour` becomes columns (`Hour 1`...`Hour 24`), and the values are the aggregated metrics.
+
+5.  **Format Output**:
+    *   Ensure the `date` column is formatted as `MM/DD/YYYY`.
+    *   Ensure column names are exactly `Hour 1`, `Hour 2`, ..., `Hour 24`.
+    *   Sort the index or rows if necessary (though order isn't strictly defined, usually chronological is best).
+    *   Return the DataFrame with the specific target columns.
+
+### Python Code Implementation
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame.
+    
+    Steps:
+    1. Parse the 'date' column into datetime.
+    2. Extract the calendar date and the hour of the day.
+    3. Map source hours to target column indices (Hour 1-24).
+       - Source Hour 0 (midnight) -> Target 'Hour 24'
+       - Source Hour 1-23 -> Target 'Hour 1'-'Hour 23'
+    4. Group by calendar date and mapped hour, aggregating 'zone_016' with mean.
+    5. Pivot the data to create columns for each hour.
+    6. Format the date column as 'MM/DD/YYYY'.
+    7. Reorder columns to match the target schema.
+    """
+    
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Parse dates
+    # Format: '%m/%d/%Y %H:%M'
+    df['parsed_date'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract components
+    df['calendar_date'] = df['parsed_date'].dt.date
+    df['source_hour'] = df['parsed_date'].dt.hour
+    
+    # 3. Map source hour to target hour column name
+    # Logic derived from sample:
+    # Source 1/2/2018 0:11 (Hour 0) -> Target 01/02/2018 Hour 24
+    # Assumption: Source Hour 1 -> Target Hour 1, ..., Source Hour 23 -> Target Hour 23
+    def map_hour(h):
+        if h == 0:
+            return 24
+        else:
+            return h
+            
+    df['target_hour'] = df['source_hour'].apply(map_hour)
+    
+    # 4. Aggregate
+    # Group by calendar_date and target_hour, take the mean of zone_016
+    aggregated = df.groupby(['calendar_date', 'target_hour'])['zone_016'].mean().reset_index()
+    
+    # 5. Pivot
+    # Index: calendar_date, Columns: target_hour, Values: zone_016
+    pivoted = aggregated.pivot_table(index='calendar_date', columns='target_hour', values='zone_016')
+    
+    # Reset index to make date a column again
+    pivoted = pivoted.reset_index()
+    
+    # Rename columns: target_hour ints become 'Hour X' strings
+    pivoted.columns.name = None # Remove column name index
+    new_cols = []
+    for col in pivoted.columns:
+        if col == 'calendar_date':
+            new_cols.append('date')
+        else:
+            new_cols.append(f'Hour {int(col)}')
+    pivoted.columns = new_cols
+    
+    # 6. Format date column
+    # Convert calendar_date (date object) to string MM/DD/YYYY
+    pivoted['date'] = pd.to_datetime(pivoted['date']).dt.strftime('%m/%d/%Y')
+    
+    # 7. Define target columns and reorder
+    target_columns = ['date', 'Hour 1', 'Hour 2', 'Hour 3', 'Hour 4', 'Hour 5', 'Hour 6', 'Hour 7', 'Hour 8', 'Hour 9', 'Hour 10', 'Hour 11', 'Hour 12', 'Hour 13', 'Hour 14', 'Hour 15', 'Hour 16', 'Hour 17', 'Hour 18', 'Hour 19', 'Hour 20', 'Hour 21', 'Hour 22', 'Hour 23', 'Hour 24']
+    
+    # Ensure all target columns exist, filling missing ones with NaN if necessary (though pivot should handle structure)
+    for col in target_columns:
+        if col not in pivoted.columns:
+            pivoted[col] = np.nan
+            
+    # Select and return
+    return pivoted[target_columns]
+```

@@ -1,0 +1,122 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Date/Time**: The source column `date` is a string in the format `%m/%d/%Y %H:%M`. We need to parse this into a pandas datetime object to extract the date and hour components.
+2.  **Extract Date and Hour**:
+    *   Extract the calendar date (year, month, day) from the parsed datetime. This will serve as the grouping key.
+    *   Extract the hour of the day (0-23). The target columns are labeled `Hr 1` to `Hr 24`. This implies a 1-based indexing for hours.
+        *   Hour 0 (00:00 - 00:59) corresponds to `Hr 1`.
+        *   Hour 1 (01:00 - 01:59) corresponds to `Hr 2`.
+        *   ...
+        *   Hour 23 (23:00 - 23:59) corresponds to `Hr 24`.
+        *   Therefore, the target hour index is `hour + 1`.
+3.  **Format Date Column**: The target `Date` column requires the format `%m/%d/%Y`. We will format the extracted date accordingly.
+4.  **Aggregate Data**:
+    *   The source has multiple readings per hour (e.g., every 10 minutes). The target has one value per hour per day.
+    *   We need to group by the formatted `Date` and the calculated `Hour Index` (1-24).
+    *   We need to aggregate the `cerc_logger_1` values. Looking at the sample data:
+        *   Source: `7/28/2019 4:50` -> 24.562, `7/28/2019 5:00` -> 24.625, `7/28/2019 5:10` -> 24.562, `7/28/2019 5:20` -> 24.562.
+        *   Let's check the target for a specific date/hour to determine the aggregation function (mean, median, min, max, first, last).
+        *   The problem statement doesn't explicitly state the aggregation, but "mean" is the most common default for sensor data unless specified otherwise. Let's look at the row count change: 74,848 rows to 521 rows.
+        *   521 days * 24 hours = 12,504 potential slots.
+        *   74,848 / 12,504 ≈ 6 readings per hour on average. This aligns with 10-minute intervals (6 per hour).
+        *   Let's assume **mean** aggregation as it's standard for smoothing sensor data. If the values were constant, mean/median/min/max would be similar. If they vary, mean is the safest bet for "representative" value.
+5.  **Pivot/Reshape**:
+    *   After grouping and aggregating, we will have a DataFrame with columns: `Date`, `Hour_Index`, `cerc_logger_1`.
+    *   We need to pivot this so that `Date` is the index, `Hour_Index` becomes the columns (`Hr 1` to `Hr 24`), and the values are the aggregated `cerc_logger_1`.
+6.  **Rename Columns**:
+    *   The pivot will likely create integer column names (1, 2, ..., 24).
+    *   We need to rename these to `Hr 1`, `Hr 2`, ..., `Hr 24`.
+7.  **Reset Index and Finalize**:
+    *   Reset the index so `Date` becomes a regular column.
+    *   Ensure the column order matches the target exactly: `['Date', 'Hr 1', ..., 'Hr 24']`.
+    *   Handle any missing values if necessary (though with full days, it might not be needed, but `fillna` or ensuring all 24 hours exist is good practice). Given the target has 521 rows, it likely represents a contiguous or specific set of days. We should ensure we only return rows that have data.
+
+### Implementation Details
+
+*   **Parsing**: `pd.to_datetime(source['date'], format='%m/%d/%Y %H:%M')`
+*   **Hour Calculation**: `dt.hour + 1`
+*   **Date Formatting**: `dt.strftime('%m/%d/%Y')`
+*   **GroupBy**: `groupby(['Date', 'Hour_Index']).mean()`
+*   **Pivot**: `unstack('Hour_Index')`
+*   **Renaming**: Map integers 1-24 to strings "Hr 1"-"Hr 24".
+
+Let's double-check the aggregation with a hypothetical example.
+If source has:
+`5/8/2019 0:00` -> 24.25
+`5/8/2019 0:10` -> 24.25
+...
+Target `Hr 1` for `05/08/2019` is `24.25`.
+This suggests the values might be constant or the mean is taken.
+
+Let's write the code.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame with 'date' and 'cerc_logger_1' into a target DataFrame
+    with 'Date' and hourly aggregated columns 'Hr 1' through 'Hr 24'.
+    """
+    # 1. Parse the date column
+    # The format is '%m/%d/%Y %H:%M'
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract Date and Hour
+    # Target Date format is '%m/%d/%Y'
+    df['Date'] = df['datetime'].dt.strftime('%m/%d/%Y')
+    
+    # Target Hours are 1-indexed (Hr 1 corresponds to hour 0, Hr 24 to hour 23)
+    df['Hour_Index'] = df['datetime'].dt.hour + 1
+    
+    # 3. Aggregate
+    # Group by Date and Hour_Index, and calculate the mean of cerc_logger_1
+    # Using mean as it's the standard aggregation for sensor data over time intervals
+    aggregated = df.groupby(['Date', 'Hour_Index'])['cerc_logger_1'].mean().reset_index()
+    
+    # 4. Pivot
+    # Pivot the table so that Hour_Index becomes columns
+    pivoted = aggregated.pivot(index='Date', columns='Hour_Index', values='cerc_logger_1')
+    
+    # 5. Rename Columns
+    # The columns are currently integers 1-24. We need to rename them to 'Hr 1', 'Hr 2', etc.
+    pivoted.columns = [f'Hr {col}' for col in pivoted.columns]
+    
+    # 6. Reset Index to make Date a column
+    result = pivoted.reset_index()
+    
+    # 7. Define target columns
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # 8. Ensure all target columns exist (in case some hours are missing in data)
+    # Fill missing hours with NaN if necessary, though pivot usually handles this by creating NaNs
+    for col in target_columns:
+        if col not in result.columns:
+            result[col] = np.nan
+            
+    # 9. Select and order columns
+    result = result[target_columns]
+    
+    # 10. Sort by Date? The target sample seems sorted by Date descending or arbitrary.
+    # The problem doesn't specify sort order, but usually, we preserve the order of appearance or sort.
+    # Looking at the target sample: 05/08, 05/07, 03/10... it's not strictly sorted.
+    # However, groupby usually preserves the order of first appearance or sorts.
+    # To be safe and deterministic, we can sort by Date descending or just return as is.
+    # Given the "general" requirement, standard groupby/pivot behavior is acceptable.
+    # Let's sort by Date descending to match the sample's apparent trend (newer dates first)?
+    # Sample: 05/08/2019, 05/07/2019, 03/10/2018...
+    # It looks like it might be sorted by Date descending.
+    # Let's parse the Date back to datetime for sorting if needed, but string sort works for MM/DD/YYYY if consistent.
+    # Actually, MM/DD/YYYY string sort is NOT chronological.
+    # 05/08/2019 vs 03/10/2018.
+    # Let's just return the result. The specific row order in the target sample might just be a subset.
+    # I will sort by Date descending to match the visual pattern of the sample (latest first).
+    
+    # Convert Date to datetime for proper sorting
+    result['Date_dt'] = pd.to_datetime(result['Date'], format='%m/%d/%Y')
+    result = result.sort_values('Date_dt', ascending=False).drop(columns=['Date_dt'])
+    
+    return result[target_columns]
+```

@@ -1,0 +1,137 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `date` (string, format `%m/%d/%Y %H:%M`) and `zone_016` (float). The data appears to be time-series data with minute-level granularity (or similar small intervals).
+    *   **Target**: Contains `date` (string, format `%m/%d/%Y`) and columns `Hour 1` through `Hour 24`.
+    *   **Transformation Goal**: Aggregate the minute-level data into hourly buckets for each day. The row count drops significantly (1450 -> 2 in the sample), indicating a `groupby` operation on the date.
+
+2.  **Parse Dates and Extract Components**:
+    *   Convert the source `date` column to datetime objects using `pd.to_datetime`.
+    *   Extract the calendar date (year-month-day) to group by. Let's call this `group_date`.
+    *   Extract the hour of the day (0-23) from the datetime. Note that the target columns are `Hour 1` to `Hour 24`. In standard 24-hour time, hour 0 corresponds to 12 AM (start of the day), and hour 23 corresponds to 11 PM. However, looking at the target sample:
+        *   Target `Hour 24` has value `67.9` for date `01/02/2018`.
+        *   Source for `1/2/2018` has values like `67.9` at `0:11`, `0:12`, etc.
+        *   This implies that source hour `0` maps to target `Hour 24`? Or does it map to `Hour 1`?
+        *   Let's look at the second target row: `01/01/2018`. `Hour 1` is `67.9`, `Hour 24` is `67.9`.
+        *   Let's re-examine the source sample. It only shows `1/2/2018` and `1/3/2018`.
+        *   Wait, the target sample shows `01/02/2018` and `01/01/2018`. The source sample shows `1/2/2018` and `1/3/2018`. There is a mismatch in the specific dates shown in the "Source Table Sample" vs "Desired Target Table Sample" in the prompt description vs the actual data logic.
+        *   Let's look at the mapping logic generally. Usually, "Hour 1" corresponds to the first hour of the day (00:00-00:59) or the first hour of business?
+        *   Let's look at the target column names: `Hour 1` ... `Hour 24`.
+        *   Standard convention in many datasets: Hour 1 = 00:00-00:59, Hour 2 = 01:00-01:59, ..., Hour 24 = 23:00-23:59.
+        *   Let's verify with the source data `1/2/2018 0:11`. This is hour 0. If Hour 1 = 00:00, then this data should go into `Hour 1`.
+        *   In the target sample for `01/02/2018`, `Hour 1` is `nan` and `Hour 24` is `67.9`. This is contradictory if Hour 1 = 00:00.
+        *   Alternative convention: Hour 1 = 01:00-01:59, ..., Hour 24 = 00:00-00:59? This is rare.
+        *   Another possibility: The target sample provided in the prompt text might be illustrative or from a different specific case, but the *schema* is what matters. However, the prompt says "Desired Target Table Sample".
+        *   Let's look closer at the target sample for `01/01/2018`. `Hour 1` is 67.9. `Hour 24` is 67.9.
+        *   Let's look at the source sample again. `1/2/2018 0:11` is 67.9.
+        *   If the target row `01/02/2018` corresponds to source `1/2/2018`, then the value 67.9 (from hour 0) ended up in `Hour 24`.
+        *   This suggests a mapping where Source Hour 0 -> Target `Hour 24`. Source Hour 1 -> Target `Hour 1`? Or Source Hour 0 -> Target `Hour 1`?
+        *   If Source Hour 0 -> Target `Hour 24`, then Source Hour 1 -> Target `Hour 1`? That would mean the day starts at Hour 1 (01:00) and ends at Hour 24 (00:00 next day)? No, that's a 24-hour span but shifted.
+        *   Let's consider the standard "Hour 1 = 1 AM" convention used in some energy/load datasets.
+            *   Hour 1: 01:00-01:59
+            *   ...
+            *   Hour 23: 23:00-23:59
+            *   Hour 24: 00:00-00:59 (Midnight)
+        *   If this is the case:
+            *   Source `0:11` (Hour 0) falls in 00:00-00:59. This maps to `Hour 24`.
+            *   This matches the target sample where `01/02/2018` has `67.9` in `Hour 24` (assuming the source data for that day was mostly in the 00:xx range).
+            *   Let's check `01/01/2018` in target. `Hour 1` is 67.9. This would imply source data for `1/1/2018` had values in the 01:00-01:59 range.
+        *   This mapping (Hour 1 = 1 AM, Hour 24 = 12 AM) is a strong candidate given the specific placement of the `67.9` value in `Hour 24` for the date where source shows `0:11`.
+
+3.  **Define Aggregation Logic**:
+    *   Group by the calendar date (`group_date`).
+    *   For each group, we need to calculate the mean (or sum? usually mean for load profiles, but let's check values. Source 67.9, Target 67.9. If there are multiple rows, mean is likely. If only one row, mean is same). The prompt doesn't specify aggregation function, but `mean` is standard for "profile" generation from high-frequency data. `sum` would likely result in much larger numbers if there are 60 minutes per hour. Given the values are similar (67.9 -> 67.9), it's likely `mean` or the sample just has one representative row. I will use `mean`.
+    *   Create a pivot table or use `groupby` + `pivot`.
+    *   Map source hour `h` to target column name:
+        *   If `h == 0`: Column `Hour 24`
+        *   Else: Column `Hour {h}` (where h is 1..23)
+        *   Wait, if h=1, it goes to `Hour 1`. If h=23, it goes to `Hour 23`.
+        *   So the mapping is: `target_hour = h if h > 0 else 24`.
+
+4.  **Implementation Steps**:
+    *   Parse `date` to datetime.
+    *   Extract `date_part` (YYYY-MM-DD) for grouping.
+    *   Extract `hour` (0-23).
+    *   Map `hour` to `target_hour_label`: `1` if hour==1, ..., `23` if hour==23, `24` if hour==0.
+    *   Group by `date_part` and `target_hour_label`.
+    *   Aggregate `zone_016` using `mean`.
+    *   Pivot the data so `date_part` is the index, `target_hour_label` are columns, and values are the aggregated `zone_016`.
+    *   Rename columns to `Hour 1`, `Hour 2`, ..., `Hour 24`.
+    *   Format `date_part` to `%m/%d/%Y`.
+    *   Reset index and rename the date column to `date`.
+    *   Ensure all 24 hour columns exist (fill NaN if missing).
+    *   Sort columns to match target order: `date`, `Hour 1` ... `Hour 24`.
+
+5.  **Refining the Hour Mapping**:
+    *   Source Hour 0 -> Target `Hour 24`
+    *   Source Hour 1 -> Target `Hour 1`
+    *   Source Hour 2 -> Target `Hour 2`
+    *   ...
+    *   Source Hour 23 -> Target `Hour 23`
+
+6.  **Code Construction**:
+    *   Use `pd.to_datetime`.
+    *   Create a helper function or map for the hour renaming.
+    *   Use `groupby(['date_part', 'mapped_hour'])['zone_016'].mean()`.
+    *   Use `.unstack()` to pivot.
+    *   Rename columns.
+    *   Format date.
+    *   Select and order columns.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    # 1. Parse the date column
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'])
+    
+    # 2. Extract date part for grouping and hour for bucketing
+    df['date_part'] = df['datetime'].dt.date
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 3. Map source hour (0-23) to target hour label (1-24)
+    # Convention inferred from sample: 
+    # Source Hour 0 (00:xx) -> Target 'Hour 24'
+    # Source Hour 1 (01:xx) -> Target 'Hour 1'
+    # ...
+    # Source Hour 23 (23:xx) -> Target 'Hour 23'
+    def map_hour(h):
+        if h == 0:
+            return 24
+        else:
+            return h
+            
+    df['target_hour'] = df['hour'].apply(map_hour)
+    
+    # 4. Aggregate by date and target hour
+    # Using mean as the aggregation function, consistent with typical load profile transformations
+    # and the fact that sample values (67.9) remain similar (implying no multiplication by 60).
+    agg_df = df.groupby(['date_part', 'target_hour'])['zone_016'].mean().reset_index()
+    
+    # 5. Pivot the table
+    # Index: date_part, Columns: target_hour, Values: zone_016
+    pivot_df = agg_df.pivot(index='date_part', columns='target_hour', values='zone_016')
+    
+    # 6. Rename columns to 'Hour 1', 'Hour 2', ..., 'Hour 24'
+    pivot_df.columns = [f'Hour {int(col)}' for col in pivot_df.columns]
+    
+    # 7. Ensure all 24 hour columns exist, filling missing ones with NaN
+    expected_hours = [f'Hour {i}' for i in range(1, 25)]
+    for col in expected_hours:
+        if col not in pivot_df.columns:
+            pivot_df[col] = np.nan
+            
+    # 8. Format the date index to '%m/%d/%Y'
+    pivot_df.index = pd.to_datetime(pivot_df.index).strftime('%m/%d/%Y')
+    
+    # 9. Reset index to make 'date' a column
+    pivot_df = pivot_df.reset_index()
+    pivot_df = pivot_df.rename(columns={'index': 'date'})
+    
+    # 10. Select and order columns verbatim
+    target_columns = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    
+    return pivot_df[target_columns]
+```

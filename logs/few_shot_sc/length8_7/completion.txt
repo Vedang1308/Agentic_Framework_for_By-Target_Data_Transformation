@@ -1,0 +1,81 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Source Structure**: The source table contains a 'Date' column and 24 columns labeled '1' through '24', representing hourly data for each day. The row count is 182 (likely a year's worth of daily data).
+2. **Analyze Target Structure**: The target table has 24 rows, one for each hour (1-24). The columns are 'hour' and the 12 months ('january' through 'december').
+3. **Identify Transformation Logic**:
+    - The transformation requires pivoting the data from "long" format (daily rows with hourly columns) to "wide" format (hourly rows with monthly columns).
+    - Specifically, for each hour `h` (1-24), we need to calculate the average value across all days for each month.
+    - First, parse the 'Date' column into a datetime object to extract the month.
+    - Melt the dataframe to convert the 24 hourly columns into a single 'hour' column and a 'value' column. This creates a long format: (Date, Hour, Value).
+    - Extract the month name from the 'Date' column.
+    - Group by 'hour' and 'month_name'.
+    - Calculate the mean of the 'value' for each group.
+    - Pivot or reshape the result so that 'hour' is the index (or a column) and the months are the columns.
+    - Rename the month columns to lowercase as required by the target schema.
+    - Ensure the 'hour' column is integer type.
+    - Sort by 'hour' to match typical output expectations (though the sample shows unsorted, standard practice is often sorted, but let's check the sample order. The sample shows 1, 10, 11, 12, 6, 7... which is not sorted. However, usually, deterministic outputs are sorted or follow the order of appearance. Given the ambiguity, sorting by hour is the most robust generalization unless specific ordering is implied. Let's look at the sample again. It seems random. I will sort by hour to be safe and deterministic, or just return as is. Actually, looking at the sample, it's just a subset. I will sort by 'hour' ascending to ensure a canonical order).
+4. **Implementation Details**:
+    - Parse `Date` using `pd.to_datetime`.
+    - Extract month name using `.dt.month_name()`.
+    - Melt columns `1`-`24` into `variable` (hour) and `value`.
+    - Convert `variable` to integer.
+    - Group by `hour` and `month_name`, aggregate with `mean`.
+    - Pivot so `hour` is index, `month_name` are columns, `value` is data.
+    - Reset index.
+    - Rename columns to lowercase.
+    - Select and order columns: `hour` followed by months.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the Date column
+    df['Date'] = pd.to_datetime(df['Date'])
+    
+    # 2. Extract month name from the Date
+    df['month_name'] = df['Date'].dt.month_name()
+    
+    # 3. Melt the hourly columns (1-24) into a long format
+    # Identify the hourly columns
+    hour_cols = [str(i) for i in range(1, 25)]
+    
+    df_melted = df.melt(
+        id_vars=['month_name'], 
+        value_vars=hour_cols, 
+        var_name='hour', 
+        value_name='value'
+    )
+    
+    # 4. Convert hour to integer
+    df_melted['hour'] = df_melted['hour'].astype(int)
+    
+    # 5. Group by hour and month, calculate the mean
+    # Note: We assume we want the average value for that hour across all days in that month
+    grouped = df_melted.groupby(['hour', 'month_name'])['value'].mean().reset_index()
+    
+    # 6. Pivot the data so months become columns
+    df_pivoted = grouped.pivot(index='hour', columns='month_name', values='value').reset_index()
+    
+    # 7. Rename columns to lowercase
+    df_pivoted.columns.name = None # Remove column axis name
+    rename_map = {col: col.lower() for col in df_pivoted.columns}
+    df_pivoted = df_pivoted.rename(columns=rename_map)
+    
+    # 8. Define target columns
+    target_columns = ['hour', 'january', 'february', 'march', 'april', 'may', 'june', 
+                      'july', 'august', 'september', 'october', 'november', 'december']
+    
+    # 9. Ensure all target columns exist (fill missing months with NaN if any)
+    for col in target_columns:
+        if col not in df_pivoted.columns:
+            df_pivoted[col] = np.nan
+            
+    # 10. Sort by hour to ensure deterministic order
+    df_pivoted = df_pivoted.sort_values('hour').reset_index(drop=True)
+    
+    # 11. Return the final dataframe with exact target columns
+    return df_pivoted[target_columns]
+```

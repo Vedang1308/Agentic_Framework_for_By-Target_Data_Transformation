@@ -1,0 +1,179 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains daily data with columns for each hour of the day (`PCT_HOURLY_0100` to `PCT_HOURLY_2500`). The column `DT_STRATA` contains dates in `MM/DD/YYYY` format.
+    *   **Target**: Contains 24 rows (one for each hour 1-24) and 12 columns (one for each month). The values appear to be aggregated percentages.
+    *   **Transformation Goal**: Pivot the data from a "long" format (rows per day, columns per hour) to a "wide" format (rows per hour, columns per month), aggregating the values.
+
+2.  **Determine Aggregation Logic**:
+    *   The target has 24 rows corresponding to hours 1 through 24.
+    *   The target has 12 columns corresponding to months January through December.
+    *   The source has 25 hourly columns (`0100` to `2500`). Note that `2500` is likely a placeholder or midnight/end-of-day marker, but the target only goes up to hour 24. Looking at the sample data, `PCT_HOURLY_2500` is always 0. We should focus on hours 1-24.
+    *   The mapping from source column names to target hours:
+        *   `PCT_HOURLY_0100` -> Hour 1
+        *   `PCT_HOURLY_0200` -> Hour 2
+        *   ...
+        *   `PCT_HOURLY_2400` -> Hour 24
+    *   The mapping from source date to target months:
+        *   Extract the month from `DT_STRATA`.
+        *   Map month numbers (1-12) to month names (january-december).
+
+3.  **Step-by-Step Implementation Plan**:
+    *   **Parse Dates**: Convert `DT_STRATA` to a datetime object to extract the month.
+    *   **Select Relevant Columns**: Identify the 24 hourly columns (`PCT_HOURLY_0100` to `PCT_HOURLY_2400`). Ignore `PCT_HOURLY_2500` as it's zero and not in the target hour range.
+    *   **Melt/Reshape**: Transform the DataFrame from wide to long format.
+        *   Keep `DT_STRATA` (or the extracted month) as an identifier.
+        *   Melt the hourly columns so that each row represents a specific (Date, Hour) combination with its value.
+        *   Extract the hour number from the column name (e.g., `0100` -> `1`).
+    *   **Extract Month**: Create a new column `month_name` based on the month number extracted from `DT_STRATA`.
+    *   **Group and Aggregate**:
+        *   Group by `hour` and `month_name`.
+        *   Calculate the mean (or sum? Let's check the values).
+        *   *Check Aggregation Type*: The source values are small percentages (e.g., 0.0007). The target values are also small (e.g., 0.0026). If we sum 30 days of 0.0007, we get ~0.021. If we average, we get ~0.0007. The target value 0.0026 is roughly 4x the source value. This suggests it might be a sum over a subset or an average over a different period?
+        *   Let's look closer. Source row 1 (July 2, 2016) Hour 1 value: 0.000701. Target July Hour 1 value: 0.001444.
+        *   Source row 2 (July 3, 2016) Hour 1 value: 0.000761.
+        *   Source row 3 (July 4, 2016) Hour 1 value: 0.000696.
+        *   Average of these 3: (0.000701 + 0.000761 + 0.000696) / 3 ≈ 0.000719. This is still half of 0.001444.
+        *   Wait, the target values are roughly double the individual daily values.
+        *   Let's check if it's a sum of specific days? Or maybe the source data provided is just a sample and the aggregation is a simple **mean** across all available data for that hour/month?
+        *   Let's re-read the values.
+        *   Target July Hour 1: 0.00144457.
+        *   Source July 2 Hour 1: 0.000701052.
+        *   Source July 3 Hour 1: 0.000761146.
+        *   Source July 4 Hour 1: 0.000696722.
+        *   Source July 5 Hour 1: 0.00109101.
+        *   Average of these 4: (0.000701 + 0.000761 + 0.000696 + 0.001091) / 4 = 0.003249 / 4 = 0.000812. Still not 0.00144.
+        *   Is it possible the target is a **sum**? Sum of 4 days = 0.003249. No.
+        *   Let's look at December.
+        *   Target Dec Hour 1: 0.00171257.
+        *   Source Dec 28 Hour 1: 0.00115639.
+        *   Source Dec 29 Hour 1: 0.00115262.
+        *   Source Dec 30 Hour 1: 0.00112626.
+        *   Source Dec 31 Hour 1: 0.00120159.
+        *   Average: (0.001156 + 0.001152 + 0.001126 + 0.001201) / 4 = 0.004635 / 4 = 0.001158.
+        *   The target value 0.001712 is higher than the average.
+        *   Let's check if there are other rows in the source not shown. The source has 5673 rows. The sample shows 8 rows.
+        *   If the aggregation is **mean**, the result should be close to the average of all days in that month.
+        *   If the aggregation is **sum**, the result would be much larger (e.g., 30 * 0.001 = 0.03).
+        *   Let's look at the magnitude again.
+        *   Maybe the source values are not percentages but something else? No, column name is `PCT_HOURLY`.
+        *   Let's reconsider the "Hour" mapping.
+        *   Source `PCT_HOURLY_0100` is Hour 1.
+        *   Target `hour` 1.
+        *   Is it possible the target is the **sum** of the values for that hour across all days, divided by something?
+        *   Or is it possible the target values are actually **sums** of a subset?
+        *   Let's look at the difference between Target and Source Average.
+        *   July Hour 1 Target: 0.001444. Source Avg (sample): 0.000812. Ratio: ~1.77.
+        *   Dec Hour 1 Target: 0.001712. Source Avg (sample): 0.001158. Ratio: ~1.47.
+        *   This inconsistency suggests the sample rows are not representative of the full month's average, or the aggregation is not a simple mean of the visible rows.
+        *   However, in TbT tasks, **Mean** is the most common aggregation for "average percentage" type data. **Sum** is common for counts. Given the column name `PCT`, Mean is the statistically sound choice for "average percentage". The discrepancy is likely due to the sample rows being a tiny fraction of the 5673 rows (which cover multiple years/strata). The 5673 rows likely cover many months. The target represents the global average for that hour/month across all data.
+        *   Therefore, the operation is: **Group by Hour and Month, then take the Mean**.
+
+    *   **Pivot**:
+        *   After melting, we have columns: `month_name`, `hour`, `value`.
+        *   Pivot table: Index=`hour`, Columns=`month_name`, Values=`value`, Aggfunc=`mean`.
+    *   **Format Output**:
+        *   Rename columns to lowercase month names.
+        *   Ensure column order matches target: `['hour', 'january', ..., 'december']`.
+        *   Reset index to make `hour` a column.
+        *   Sort by `hour`.
+
+4.  **Refining the Hour Extraction**:
+    *   Column names: `PCT_HOURLY_0100`, `PCT_HOURLY_0200`, ..., `PCT_HOURLY_2400`.
+    *   Extract last 4 digits, convert to int, divide by 100? Or just take first 2 digits?
+    *   `0100` -> 1. `1000` -> 10. `2400` -> 24.
+    *   Logic: `int(col_name.split('_')[-1]) // 100`.
+
+5.  **Refining the Month Extraction**:
+    *   `DT_STRATA` format `MM/DD/YYYY`.
+    *   Parse to datetime, extract `.dt.month`.
+    *   Map 1->'january', 2->'february', etc.
+
+6.  **Code Construction**:
+    *   Import pandas.
+    *   Define `transform` function.
+    *   Parse dates.
+    *   Melt the dataframe.
+    *   Extract hour and month.
+    *   Group and mean.
+    *   Pivot/Unstack.
+    *   Clean up column names and order.
+    *   Return.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame containing daily hourly percentages
+    into a target DataFrame with average percentages per hour per month.
+    """
+    # 1. Parse the date column to extract the month
+    source = source.copy()
+    source['DT_STRATA'] = pd.to_datetime(source['DT_STRATA'], format='%m/%d/%Y')
+    source['month_num'] = source['DT_STRATA'].dt.month
+    
+    # Map month numbers to lowercase month names
+    month_map = {
+        1: 'january', 2: 'february', 3: 'march', 4: 'april',
+        5: 'may', 6: 'june', 7: 'july', 8: 'august',
+        9: 'september', 10: 'october', 11: 'november', 12: 'december'
+    }
+    source['month_name'] = source['month_num'].map(month_map)
+    
+    # 2. Identify hourly columns and melt the dataframe
+    # Columns are PCT_HOURLY_0100 to PCT_HOURLY_2500
+    # We only care about 0100 to 2400 for hours 1-24
+    hourly_cols = [col for col in source.columns if col.startswith('PCT_HOURLY_')]
+    
+    # Filter to only include hours 1-24 (0100-2400)
+    # 2500 is typically 0 or end-of-day and not in target
+    valid_hourly_cols = [col for col in hourly_cols if col.endswith('00') and int(col.split('_')[-1]) <= 2400]
+    
+    # Melt the dataframe
+    df_melted = source.melt(
+        id_vars=['month_name'],
+        value_vars=valid_hourly_cols,
+        var_name='hour_col',
+        value_name='value'
+    )
+    
+    # 3. Extract hour number from column name
+    # e.g., 'PCT_HOURLY_0100' -> 1
+    df_melted['hour'] = df_melted['hour_col'].apply(lambda x: int(x.split('_')[-1]) // 100)
+    
+    # 4. Aggregate: Mean value for each hour and month
+    # Group by hour and month_name, then calculate the mean
+    df_agg = df_melted.groupby(['hour', 'month_name'])['value'].mean().reset_index()
+    
+    # 5. Pivot to wide format
+    # Index: hour, Columns: month_name, Values: value
+    df_pivot = df_agg.pivot(index='hour', columns='month_name', values='value')
+    
+    # 6. Clean up and format
+    # Reset index to make 'hour' a column
+    df_pivot = df_pivot.reset_index()
+    
+    # Ensure column names are strings and match target exactly
+    df_pivot.columns.name = None # Remove column index name
+    
+    # Define target columns
+    target_columns = ['hour', 'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+    
+    # Ensure all target month columns exist (fill NaN with 0 if a month is missing for an hour)
+    for col in target_columns[1:]:
+        if col not in df_pivot.columns:
+            df_pivot[col] = 0.0
+            
+    # Select and order columns
+    df_result = df_pivot[target_columns]
+    
+    # Sort by hour to ensure correct order (1-24)
+    df_result = df_result.sort_values('hour').reset_index(drop=True)
+    
+    # Ensure hour is integer
+    df_result['hour'] = df_result['hour'].astype(int)
+    
+    return df_result
+```

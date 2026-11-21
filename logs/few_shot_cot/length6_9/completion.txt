@@ -1,0 +1,108 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Source and Target Schemas**:
+   - Source: `date` (string, format '%m/%d/%Y %H:%M'), `zone_016` (float).
+   - Target: `Date` (string, format '%m/%d/%Y'), `Hr 1` through `Hr 24` (float).
+   - Observation: The source has many rows per day (minute-level granularity), while the target has one row per day with 24 hourly columns. This implies a pivot/resampling operation.
+
+2. **Parse Datetime**:
+   - Convert the `date` column to a pandas datetime object using `pd.to_datetime`.
+   - Extract the date part (year, month, day) to group by.
+   - Extract the hour part (0-23) to determine which target column (`Hr 1` to `Hr 24`) the data belongs to. Note that target columns are 1-indexed (Hr 1 corresponds to hour 0, Hr 24 corresponds to hour 23).
+
+3. **Handle Missing Values and Aggregation**:
+   - The source data contains `nan` values.
+   - Since we are aggregating minute-level data into hourly buckets, we need to decide on an aggregation function. Looking at the target sample:
+     - For `01/02/2018`, `Hr 1` is `67.9`. The source shows `67.9` for minutes 0:11-0:14.
+     - For `01/01/2018`, `Hr 1` is `67.9`, `Hr 2` is `67.9`, etc.
+     - Typically, for this type of sensor data, if multiple values exist for an hour, we might take the mean, median, or first/last. However, looking at the target row for `01/02/2018`, only `Hr 1` has a value, and the rest are `nan`. This suggests that if no data exists for a specific hour, it remains `nan`. If data exists, it seems to be a representative value. Given the source has constant values for short periods, `mean` or `first` are likely candidates. Let's look closer. The source sample for 1/2/2018 only shows minutes 0:11-0:14. These all fall into Hour 0 (which maps to Hr 1). The value is 67.9. The target has 67.9 for Hr 1.
+     - For 1/1/2018, the target has values for all hours. The source sample doesn't show 1/1/2018 data, but we can infer that for each hour, there are multiple minute readings.
+     - A common approach for "filling" hourly buckets from minute data is to take the mean of the available minutes for that hour. If no minutes exist, it stays NaN.
+
+4. **Pivot/Reshape**:
+   - Group by the extracted Date and Hour.
+   - Aggregate the `zone_016` values. `mean()` is a robust choice for sensor data to smooth out noise, but `first()` or `last()` might also work if the data is constant. Let's assume `mean()` as it's standard for aggregation unless specified otherwise. However, looking at the target values for 1/1/2018, they change gradually (67.9, 67.9, 67.8...). This looks like a time series.
+   - Create a pivot table where:
+     - Index: Date
+     - Columns: Hour (0-23)
+     - Values: `zone_016`
+   - Rename the columns from 0-23 to 'Hr 1'-'Hr 24'.
+
+5. **Format Output**:
+   - Reset the index to make 'Date' a column.
+   - Format the 'Date' column as '%m/%d/%Y'.
+   - Ensure the column order matches the target: `Date`, `Hr 1`, ..., `Hr 24`.
+   - Handle any potential sorting. The target sample shows `01/02/2018` then `01/01/2018`. This is reverse chronological order? Or just arbitrary? The prompt says "generalize". Usually, we sort by date ascending or keep original order. Let's check the target sample again. Row 1: 01/02/2018. Row 2: 01/01/2018. This is descending date order. I will sort by Date descending to match the sample, or just return the grouped result. Standard practice is often ascending, but if the sample is descending, I should probably match it. However, without explicit instruction, ascending is safer. But wait, the sample *is* the ground truth for the test case. If the test case expects descending, I should do descending. Let's look at the source sample: 1/2/2018 comes before 1/3/2018. The target has 1/2 before 1/1. This is weird. 1/2 is after 1/1. So 1/2, 1/1 is descending. I will sort by Date descending.
+
+6. **Refinement on Aggregation**:
+   - If I use `mean()`, and there are NaNs in the source, `mean()` ignores them by default.
+   - If an hour has no data, the pivot will result in NaN.
+
+7. **Implementation Steps**:
+   - Parse `date` to datetime.
+   - Extract `date_part` (date only) and `hour` (0-23).
+   - Group by `date_part` and `hour`, aggregate `zone_016` using `mean`.
+   - Unstack/pivot to get hours as columns.
+   - Rename columns to `Hr 1`...`Hr 24`.
+   - Format `date_part` to string.
+   - Sort by Date descending (to match sample).
+   - Select and return columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column
+    df['datetime'] = pd.to_datetime(df['date'])
+    
+    # 2. Extract date and hour components
+    df['date_only'] = df['datetime'].dt.date
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 3. Group by date and hour, and aggregate the zone_016 values
+    # Using mean to aggregate minute-level data into hourly buckets.
+    # If an hour has no data, it will be NaN.
+    grouped = df.groupby(['date_only', 'hour'])['zone_016'].mean()
+    
+    # 4. Pivot the data to have hours as columns
+    # The index will be date_only, columns will be hour (0-23)
+    pivoted = grouped.unstack(level='hour')
+    
+    # 5. Rename columns from 0-23 to 'Hr 1'-'Hr 24'
+    # Hour 0 -> Hr 1, Hour 1 -> Hr 2, ..., Hour 23 -> Hr 24
+    new_columns = {h: f'Hr {h+1}' for h in range(24)}
+    pivoted = pivoted.rename(columns=new_columns)
+    
+    # 6. Reset index to make date_only a column
+    pivoted = pivoted.reset_index()
+    
+    # 7. Format the date column as '%m/%d/%Y'
+    pivoted['Date'] = pd.to_datetime(pivoted['date_only']).dt.strftime('%m/%d/%Y')
+    
+    # 8. Drop the temporary date_only column if it exists (it was reset to index)
+    # Actually, reset_index creates a column named 'date_only'. We want 'Date'.
+    # We created 'Date' above. We can drop 'date_only'.
+    pivoted = pivoted.drop(columns=['date_only'])
+    
+    # 9. Define target columns
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # 10. Ensure all target columns exist (fill missing hours with NaN if necessary)
+    for col in target_columns:
+        if col not in pivoted.columns:
+            pivoted[col] = pd.NA
+            
+    # 11. Sort by Date descending to match the sample order (01/02/2018 before 01/01/2018)
+    # Convert Date to datetime for sorting, then back to string if needed, 
+    # but since we formatted it, we can sort by the string if format is consistent, 
+    # or better, sort by the original date_only before formatting.
+    # Let's re-add date_only for sorting, then drop it.
+    pivoted['date_sort'] = pd.to_datetime(pivoted['Date'])
+    pivoted = pivoted.sort_values('date_sort', ascending=False)
+    pivoted = pivoted.drop(columns=['date_sort'])
+    
+    # 12. Return the dataframe with exact target columns
+    return pivoted[target_columns]
+```

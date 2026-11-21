@@ -1,0 +1,207 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains timestamped energy consumption data for various household appliances and systems (HVAC, water heater, dryers, fridges, etc.). The data is at an hourly granularity. There are multiple sites, but the target does not distinguish by site, implying aggregation across all sites or that the target represents a specific aggregate view. Given the row count reduction from ~1.3M to 288, and the target columns `month` and `hour`, the target is likely an aggregation of data grouped by `month` and `hour` across all available data (or potentially all sites, though usually in these benchmarks, if `site` isn't in the target, we aggregate across it).
+    *   **Target**: Columns are `month`, `hour`, `HVAC`, `domestic_water_heating`, `major_appliances`, `lighting`, `miscellaneous_plug_loads`, `Total`. The values are large integers/floats, suggesting summation of energy values (likely in Watt-hours or similar units, given the source names like "WHS" and "Whr").
+
+2.  **Identify Target Column Mappings**:
+    *   `month`: Extracted from the `timestamp` column.
+    *   `hour`: Extracted from the `timestamp` column.
+    *   `HVAC`: Needs to be mapped from source columns related to HVAC. Likely candidates: `AC COMPRESSOR WHS [emon ch3,4]`, `AIR HANDLER WHS [emon ch5,6]`, `Minisplit WHS (2-CTs) [xpod chA-7,8]`.
+    *   `domestic_water_heating`: Likely `WATER HEATER WHS [emon ch7,8]`.
+    *   `major_appliances`: Likely a sum of large appliances. Candidates: `DRYER WHS (1-CT) [emon ch9]`, `RANGE WHS (1-CT) [emon ch10]`, `DISH WASHER WHS [emon ch11]`, `Primary Fridge WHS [emon ch12]`, `2nd Fridge WHS [emon ch13]`, `Dryer WHS (2-CTs) [xpod chA-9,10]`, `Wattsup Energy Washer (WHS)`. Note: The source has multiple dryer entries.
+    *   `lighting`: This is tricky. There is no explicit "Lighting" column. However, `Calculated Unmeasured loads (Whr)` or `Calculated Energy Use (Whr)` might contain it, or it might be 0 if not measured. Looking at the target sample, `lighting` is always 0. This suggests either there are no lighting sensors or the mapping is empty/zero. Let's look for any column that could be lighting. If none, initialize as 0.
+    *   `miscellaneous_plug_loads`: Likely `SPARE1`, `SPARE2`, `SPARE3`, `SPARE4`, `POOL PUMP`, or other unclassified loads. Or perhaps `Calculated Unmeasured loads`.
+    *   `Total`: Likely `TOTAL BLDG WHS [emon ch1,2]` or the sum of the categories. The target `Total` values are significantly smaller than the sum of the other columns in the sample? Let's check the sample.
+        *   Target Row 1: HVAC ~1.7e8, Dom Water ~1.7e7, Major ~2.1e8, Misc ~1.1e8. Sum ~5.1e8. Total is 2.3e7. This doesn't match a simple sum.
+        *   Wait, let's look at the source sample values. They are small (e.g., 386, 544). The target values are huge (1.7e8). This implies aggregation over many hours/rows.
+        *   Let's re-examine the `Total` column in the target. In the source, `TOTAL BLDG WHS [emon ch1,2]` is the main total meter.
+        *   Let's check the relation between source totals and target totals.
+        *   If we sum `TOTAL BLDG WHS` for a specific month/hour across all sites/rows, do we get the target `Total`?
+        *   Let's look at the target `lighting` being 0. This is a strong hint. If there's no lighting column, it stays 0.
+        *   What about `miscellaneous_plug_loads`?
+        *   Let's look at the "Calculated" columns. `Calculated Unmeasured loads (Whr)` and `Calculated Energy Use (Whr)`.
+        *   Often in these datasets, "Major Appliances" includes Fridge, Dishwasher, Dryer, Range. "HVAC" includes AC, Air Handler, Minisplit. "Domestic Water Heating" is Water Heater.
+        *   "Miscellaneous" might be the remaining plug loads (Spares, Pool Pump, Washer).
+        *   "Lighting" is often not measured or part of "Unmeasured". Since target lighting is 0, we might assume it's not mapped or explicitly 0.
+
+3.  **Refining Mappings based on Common Energy Breakdowns**:
+    *   **HVAC**: `AC COMPRESSOR` + `AIR HANDLER` + `Minisplit`.
+    *   **Domestic Water Heating**: `WATER HEATER`.
+    *   **Major Appliances**: `DRYER (1-CT)` + `RANGE` + `DISH WASHER` + `Primary Fridge` + `2nd Fridge` + `Dryer (2-CTs)` + `Wattsup Energy Washer`.
+    *   **Lighting**: 0 (as per target sample).
+    *   **Miscellaneous Plug Loads**: This is the residual or specific plug loads. Candidates: `SPARE1`, `SPARE2`, `SPARE3`, `SPARE4`, `POOL PUMP`. Also `Wattsup Energy Ent.Ctr`?
+    *   **Total**: `TOTAL BLDG WHS`.
+
+    Let's verify the "Total" vs Sum of parts.
+    In the target sample, `Total` is ~2.3e7. The sum of HVAC, DW, Major, Misc is much larger.
+    Wait, look at the target sample again:
+    `HVAC`: 1.7e8
+    `Total`: 2.3e7
+    This is weird. Usually Total >= Sum of parts.
+    Is it possible the units are different? Or maybe the `Total` in the target is actually `Calculated Energy Use`?
+    Let's look at source row 1:
+    `TOTAL BLDG WHS`: 386
+    `Calculated Energy Use (Whr)`: 386
+    `Calculated Unmeasured loads (Whr)`: 175
+    
+    If we aggregate `TOTAL BLDG WHS`, we get the building total.
+    If we sum the components, we should get close to the building total.
+    
+    Let's look at the target values again.
+    Row 1: Month 1, Hour 19.
+    HVAC: 1.72993e+08
+    Total: 2.32249e+07
+    
+    This discrepancy is massive. The "Total" is *smaller* than the HVAC component alone.
+    This suggests that the `Total` column in the target might NOT be the sum of the other columns, nor the `TOTAL BLDG WHS` column directly if the other columns are also derived from the same source data.
+    
+    Alternative hypothesis: The target columns are not sums of the source columns directly, but perhaps averages? Or maybe the source columns are being mapped differently.
+    
+    Let's look at the source data again.
+    `TOTAL BLDG WHS [emon ch1,2]`
+    `AC COMPRESSOR ...`
+    
+    If I sum `AC COMPRESSOR` for Month 1, Hour 19 across all sites, do I get 1.7e8?
+    If I sum `TOTAL BLDG WHS` for Month 1, Hour 19 across all sites, do I get 2.3e7?
+    
+    It is highly likely that `Total` corresponds to `TOTAL BLDG WHS [emon ch1,2]`.
+    And `HVAC` corresponds to the sum of HVAC components.
+    
+    Why is HVAC > Total?
+    Maybe the "HVAC" column in the target includes something else? Or maybe there is a unit conversion?
+    Or maybe the "Total" in the target is actually `Calculated Unmeasured loads`? No, that's usually smaller.
+    
+    Let's look at the `lighting` column. It is 0.
+    
+    Let's reconsider the column mappings.
+    Maybe `Total` is `Calculated Energy Use (Whr)`?
+    
+    Let's look at the distinct values.
+    Source `TOTAL BLDG WHS` has values like 386, 544.
+    Target `Total` has values like 2.3e7.
+    
+    If there are ~1300 rows per hour per month?
+    1300 * 400 (avg value) = 520,000.
+    To get 2.3e7, we need ~50,000 rows.
+    The source has 1.3M rows.
+    1.3M / (12 months * 24 hours) = ~4500 rows per month-hour bin.
+    4500 * 400 = 1.8e6.
+    
+    The target values are 1e8. This is 100x larger.
+    Did I miss a unit conversion?
+    Source columns are "WHS" (Watt-Hours? Or Watts?). "Whr" (Watt-Hours).
+    If source is Watts and target is Watt-Hours, and the interval is 1 hour, then 1 Watt * 1 Hour = 1 Wh. No change.
+    If source is kW, then 1 kW = 1000 W.
+    
+    Let's look at `TOTAL BLDG WHS` name. "WHS" often stands for "Watt-Hour Sum" or similar in eMonitor datasets.
+    
+    Let's look at the target `miscellaneous_plug_loads`. It is float64. Others are int64.
+    
+    Let's try to map the columns based on standard categories in the "OpenEI" or "eMonitor" datasets which this resembles.
+    
+    Standard Mapping:
+    - **HVAC**: AC Compressor, Air Handler, Minisplit.
+    - **Domestic Water Heating**: Water Heater.
+    - **Major Appliances**: Fridge 1, Fridge 2, Dishwasher, Dryer 1, Dryer 2, Range, Washer.
+    - **Lighting**: Often not measured or separate. Here 0.
+    - **Miscellaneous**: Pool Pump, Spares, Entertainment Center, etc.
+    - **Total**: Total Building Load.
+    
+    If the sum of components > Total, it's possible there is overlap or double counting in my manual mapping, OR the `Total` in the target is actually a different metric.
+    
+    However, looking at the target sample:
+    `HVAC`: 1.7e8
+    `Total`: 2.3e7
+    
+    This is physically impossible if Total = Sum(Parts) and Parts are positive.
+    Unless... the `Total` column in the target is **NOT** the building total.
+    
+    Could `Total` be `Calculated Unmeasured loads`?
+    In source row 1: Unmeasured = 175. Total = 386.
+    If we aggregate Unmeasured, would it be 2.3e7?
+    
+    Let's look at the column `Calculated Energy Use (Whr)`.
+    In source row 1: 386. Same as Total.
+    
+    Is it possible the target `Total` is `Calculated Unmeasured loads`?
+    Let's check the magnitude.
+    If `HVAC` is 1.7e8, and `Unmeasured` is 2.3e7.
+    
+    Let's look at the source data again.
+    `SPARE1`, `SPARE2`, etc. have values like 64, 0, 32767.
+    32767 is a common "error" or "null" value in these datasets (max int16).
+    
+    **Crucial Step: Handling 32767**
+    The source data contains `32767` in many columns (Fridge 2, Spares, etc.). This is likely a placeholder for missing/invalid data. We must filter these out or treat them as NaN before aggregation. If we sum them, they will skew the results massively.
+    
+    **Re-evaluating the "Total" vs "HVAC" discrepancy**
+    If we filter out 32767, the sums will be lower.
+    
+    Let's assume the standard mapping:
+    1.  Parse timestamp.
+    2.  Group by `month` and `hour`.
+    3.  Define categories:
+        *   `HVAC`: `AC COMPRESSOR` + `AIR HANDLER` + `Minisplit`
+        *   `domestic_water_heating`: `WATER HEATER`
+        *   `major_appliances`: `DRYER (1-CT)` + `RANGE` + `DISH WASHER` + `Primary Fridge` + `2nd Fridge` + `Dryer (2-CTs)` + `Wattsup Energy Washer`
+        *   `lighting`: 0
+        *   `miscellaneous_plug_loads`: `SPARE1` + `SPARE2` + `SPARE3` + `SPARE4` + `POOL PUMP` + `Wattsup Energy Ent.Ctr` + `Future use...` (if valid)
+        *   `Total`: `TOTAL BLDG WHS`
+    
+    Why is Target Total < Target HVAC?
+    Maybe the target `Total` is **NOT** `TOTAL BLDG WHS`.
+    Could `Total` be `Calculated Unmeasured loads`?
+    Or maybe `Total` is `Calculated Energy Use`?
+    
+    Let's look at the target column `miscellaneous_plug_loads`. It is `float64`.
+    In the source, `Wattsup Energy Ent.Ctr` and `Wattsup Energy Washer` are floats? No, they look like integers in the sample.
+    
+    Let's look at the target sample values again.
+    `HVAC`: 1.7e8
+    `miscellaneous_plug_loads`: 1.1e8
+    
+    If `Total` was the sum, it would be ~5e8.
+    The target `Total` is 2.3e7.
+    
+    Is it possible that `Total` in the target corresponds to `Calculated Unmeasured loads (Whr)`?
+    Let's check the source column `Calculated Unmeasured loads (Whr)`.
+    Row 1: 175.
+    Row 2: 208.
+    
+    If we sum these up, do we get 2.3e7?
+    
+    Let's try a different angle. Look at the column names in the target: `HVAC`, `domestic_water_heating`, `major_appliances`, `lighting`, `miscellaneous_plug_loads`, `Total`.
+    This looks like a standard end-use breakdown.
+    
+    In many eMonitor datasets, the "Total" meter is the reference.
+    If the breakdown sums to more than the total, it's an error in mapping or data.
+    
+    However, there is one specific column in the source: `Calculated Unmeasured loads (Whr)`.
+    And `Calculated Energy Use (Whr)`.
+    
+    Let's look at the target `Total` value: 2.32249e+07.
+    Let's look at the target `HVAC` value: 1.72993e+08.
+    
+    Wait, could the `Total` column in the target actually be **`Calculated Unmeasured loads`**?
+    And the other columns are the measured loads?
+    
+    If so, `Total` (Unmeasured) = 2.3e7.
+    `HVAC` (Measured) = 1.7e8.
+    
+    This is plausible. The "Total" label in the target might be misleading or refer to "Total Unmeasured". But the column name is just `Total`.
+    
+    Alternatively, could `Total` be `Calculated Energy Use`?
+    In the source, `Calculated Energy Use` == `TOTAL BLDG WHS` (386 vs 386).
+    
+    Let's look at the `miscellaneous_plug_loads` being float64.
+    Which source columns are float64?
+    `eMonitor Temp`, `Wattsup Cumulative...`, `PointSix Temp`, `HOBO LOGGER...`.
+    The energy columns are float64 in schema but integer values in sample.
+    
+    Let's assume the mapping is:
+    - `HVAC`: Sum of AC, Air Handler, Minisplit.
+    - `domestic_water_heating`: Water Heater.
+    - `major_appliances`: Fridge, Dish, Dryer, Range, Washer.
+    - `lighting`: 0.
+    - `miscellaneous_plug_loads`:

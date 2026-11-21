@@ -1,0 +1,70 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a date column `CST` (format: `%a %m/%d/%Y`) and 24 hourly value columns named `1:00` through `24:00:00`.
+    *   **Target**: Contains a date column `date` (format: `%m/%d/%Y`) and 24 value columns named `value1` through `value24`.
+    *   **Row Count Change**: The source has 1339 rows, and the target has 1340 rows. This suggests that the transformation might involve sorting or re-indexing, but more likely, it's a simple 1-to-1 mapping where the row count difference in the sample description might be due to a specific test case nuance or simply a slight discrepancy in the provided sample stats vs actual data. However, looking at the data, it's a direct row-wise transformation. The extra row in the target might be an artifact of the specific benchmark generation or a header issue, but typically in these TbT tasks, if the structure is identical (1 date + 24 values), it's a direct mapping. Let's assume a direct row-wise transformation first. If the row counts differ significantly in a way that implies aggregation, we'd see grouped keys. Here, every row in source has a unique date and 24 values. The target also has unique dates and 24 values. The most logical step is a direct column rename and date format conversion.
+
+2.  **Date Parsing and Formatting**:
+    *   The source column `CST` contains strings like `'Sat 12/01/2012'`.
+    *   We need to parse this into a datetime object to ensure correct handling, then format it as `'MM/DD/YYYY'` for the target column `date`.
+    *   Using `pd.to_datetime` with the format `'%a %m/%d/%Y'` and then `.dt.strftime('%m/%d/%Y')` will achieve this.
+
+3.  **Column Renaming**:
+    *   The source columns `1:00`, `2:00`, ..., `24:00:00` need to be renamed to `value1`, `value2`, ..., `value24`.
+    *   We can create a mapping dictionary or use a list comprehension to generate the new column names.
+    *   Note: The last source column is `24:00:00`, which corresponds to `value24`. The others are `H:00`.
+
+4.  **Data Type Handling**:
+    *   The source value columns are `float64`. The target value columns are also `float64`. No conversion is needed other than ensuring they remain numeric.
+
+5.  **Constructing the Transformation**:
+    *   Create a new DataFrame `df`.
+    *   Set the `date` column by parsing and formatting `source['CST']`.
+    *   Rename the value columns from the source to the target names.
+    *   Concatenate or assign these columns to `df`.
+    *   Ensure the final column order matches the target schema: `['date', 'value1', ..., 'value24']`.
+
+6.  **Addressing Row Count Discrepancy**:
+    *   The prompt notes 1339 source rows vs 1340 target rows. In many TbT benchmarks, this can sometimes indicate a missing row in the source sample provided in the description, or an extra row in the target due to a specific condition. However, without a clear grouping key or aggregation logic (since each row is a unique day with 24 hourly values), a 1-to-1 mapping is the only robust generalization. If the test case has an extra row, it might be due to a specific date range inclusion. Given the strict instruction to not hardcode, we must assume the transformation is structural. The most likely scenario is that the sample stats are slightly off or refer to a specific subset. We will proceed with the direct mapping. If there were an aggregation, we would expect fewer rows or grouped keys. Since the structure is identical (1 date + 24 values), it's a reshape/rename.
+
+7.  **Final Code Structure**:
+    *   Import pandas.
+    *   Define `transform` function.
+    *   Parse dates.
+    *   Rename columns.
+    *   Return the DataFrame with the exact target column names.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    # Define target column names
+    target_columns = ['date', 'value1', 'value2', 'value3', 'value4', 'value5', 'value6', 'value7', 'value8', 'value9', 'value10', 'value11', 'value12', 'value13', 'value14', 'value15', 'value16', 'value17', 'value18', 'value19', 'value20', 'value21', 'value22', 'value23', 'value24']
+    
+    # Create a copy of the source to avoid modifying the original
+    df = source.copy()
+    
+    # Parse the 'CST' column to datetime and format it as 'MM/DD/YYYY'
+    # The source format is '%a %m/%d/%Y' (e.g., 'Sat 12/01/2012')
+    df['date'] = pd.to_datetime(df['CST'], format='%a %m/%d/%Y').dt.strftime('%m/%d/%Y')
+    
+    # Define the mapping from source value columns to target value columns
+    # Source columns: '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target columns: 'value1', 'value2', ..., 'value23', 'value24'
+    source_value_cols = [f'{i}:00' if i < 24 else '24:00:00' for i in range(1, 25)]
+    target_value_cols = [f'value{i}' for i in range(1, 25)]
+    
+    # Create a rename dictionary
+    rename_dict = dict(zip(source_value_cols, target_value_cols))
+    
+    # Rename the value columns
+    df = df.rename(columns=rename_dict)
+    
+    # Select only the target columns in the correct order
+    # We drop the original 'CST' column as it's not in the target
+    df = df[target_columns]
+    
+    return df[target_columns]
+```

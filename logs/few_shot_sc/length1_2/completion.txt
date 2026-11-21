@@ -1,0 +1,181 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source has columns: `class`, `Description`, `analysis`, `date`, `value1`...`value24`, `uom`.
+    *   Target has columns: `cst`, `1:00`...`24:00`.
+    *   The source contains daily hourly data in wide format (`value1` to `value24`).
+    *   The target also contains daily hourly data in wide format (`1:00` to `24:00`).
+
+2.  **Determine Row Mapping**:
+    *   Source sample shows dates like '7/3/2011'. Target sample shows 'Sat 01/01/2011'.
+    *   The row count changes from 182 to 183. This suggests that the source might be missing a specific day present in the target, or the target includes an extra day (like the start of the year).
+    *   Looking at the samples: Source has '7/3/2011' but Target has 'Sat 01/01/2011' as the first row. The target seems to cover a full year or a specific range starting from Jan 1st.
+    *   However, the instruction says "The function must compute its result SOLELY from the `source` argument." and "Do NOT hardcode target rows". This implies we cannot generate rows that don't exist in the source unless there's an implicit aggregation or index alignment.
+    *   Let's look closer at the "Notice: Row count changes from 182 to 183". 182 days is exactly half a year (non-leap). 183 days is half a year + 1 (leap year or just +1 day).
+    *   Wait, the source sample provided in the prompt is `training_0.csv`. The target sample is `target.csv`. The prompt asks to transform the *source* into the *target*.
+    *   If the source has 182 rows and target has 183, and I cannot read the target file, how can I generate the 183rd row?
+    *   Re-reading the prompt constraints: "The function must compute its result SOLELY from the `source` argument."
+    *   Perhaps the source *actually* has the data for all 183 days, but the sample shown is just a subset? Or maybe the "182 rows" note refers to the specific `training_0.csv` file provided in the sample, but the general transformation should handle whatever is in `source`.
+    *   Let's look at the dates. Source sample: 7/3/2011, 7/4/2011... 12/31/2011. This is July to December. That's 6 months. July (31) + Aug (31) + Sep (30) + Oct (31) + Nov (30) + Dec (31) = 184 days. The sample shows 182 rows? Maybe some days are missing in the sample snippet or the source file.
+    *   Target sample: Starts at 01/01/2011.
+    *   This looks like a case where the source and target might be different subsets of a larger dataset, OR the source provided in the "Benchmark Case" description is actually the *input* to the function, and the *output* must match the target schema.
+    *   Crucially, in TbT tasks, if the row counts differ significantly and no aggregation key is obvious, it's often a re-indexing or date-range expansion. But without external knowledge, we can only transform existing rows.
+    *   Let's look at the columns. `value1` corresponds to `1:00`. `value2` to `2:00`, etc.
+    *   The primary transformation is renaming columns and formatting the date.
+    *   Is it possible the source *is* the target data but shuffled or filtered? No, the dates are different.
+    *   Let's reconsider the "Row count changes" hint. If I simply transform the source rows, I will get N rows. If the target has N+1, and I can't read the target, I can't create the missing row.
+    *   *Correction*: In many of these benchmarks, the "Source" provided in the prompt description is `training_0.csv` and the "Target" is `target.csv`. The function `transform(source)` is tested on `test_0.csv`. The schema of `test_0.csv` will be the same as `training_0.csv`. The expected output for `test_0.csv` will follow the same transformation logic as `training_0.csv` -> `target.csv`.
+    *   If `training_0.csv` has 182 rows and `target.csv` has 183, there is a mismatch in the *training example* itself regarding row count if it's a 1-to-1 mapping.
+    *   However, looking at the data:
+        Source: 7/3/2011 ...
+        Target: 1/1/2011 ...
+        These are completely different dates. This implies that the `source` DataFrame passed to the function in the *test* case will likely have the dates that need to be formatted. The samples provided in the prompt are just illustrative of the *schema* and *formatting*.
+        Actually, wait. If the source is `training_0.csv` and target is `target.csv`, and they have different dates, then the transformation isn't just a row-wise mapping.
+        BUT, looking at Example 1, 2, 3, they are row-wise transformations.
+        Let's look at the values.
+        Source 7/3/2011 value1: 1.0243.
+        Target Sat 07/02/2011 value1: 0.8341.
+        Target Sat 07/02/2011 is 7/2/2011.
+        Source has 7/3/2011.
+        It seems the source and target samples in the prompt are just random slices or different datasets entirely?
+        No, usually in these benchmarks, the `source` input to the function is the data that needs to be transformed. The `target` is the expected output.
+        If the source sample dates (July-Dec) are different from target sample dates (Jan-Dec), it suggests the `source` variable in the function might contain the data corresponding to the `target`'s time period, just in a different format.
+        
+        Let's assume the standard row-wise transformation:
+        1. Parse `date` column.
+        2. Format to `%a %m/%d/%Y` for `cst`.
+        3. Rename `value1`..`value24` to `1:00`..`24:00`.
+        4. Select columns.
+        
+        Why the row count difference?
+        Maybe the source has duplicate dates that need aggregation?
+        Distinct values for `class`, `Description`, `analysis`, `uom` are singletons. This suggests no grouping by these.
+        If there are multiple rows per date, we might need to aggregate (e.g., mean).
+        Let's check if the source sample has duplicate dates. The sample shows unique dates.
+        
+        Let's look at the "182 to 183" hint again.
+        If the source has 182 rows and target 183, and it's a 1-to-1 transform, it's impossible without generating data.
+        However, if the source has *duplicates* that get aggregated into fewer rows, the count would decrease. Here it increases.
+        
+        Alternative hypothesis: The "Source" in the prompt description is `training_0.csv`. The "Target" is `target.csv`. The function is tested on `test_0.csv`.
+        If `test_0.csv` has the same schema as `training_0.csv`, and the transformation is consistent, then `test_0.csv` -> `test_target.csv` should follow the same logic.
+        
+        Is it possible the `date` column in source needs to be expanded? No.
+        
+        Let's look at the values again.
+        Source `7/3/2011` `value1` = 1.0243.
+        Target `Sat 07/02/2011` `1:00` = 0.8341.
+        Target `Sun 07/03/2011` (which would be the next row if sorted) ... wait, the target sample starts at 01/01.
+        
+        There is a high chance that the `source` DataFrame provided to the function `transform(source)` will actually contain the rows corresponding to the target dates, just formatted differently. The samples in the prompt might be misleading if they are from different files (`training` vs `target`).
+        
+        Let's assume the simplest valid transformation:
+        1.  Create `cst` from `date`.
+        2.  Rename `value` columns to hour columns.
+        3.  Return.
+        
+        If the row count differs in the *test* case, it might be due to the source having extra rows or the target having extra rows. But since I must return `df[target_columns]`, and I can only use `source`, I will perform the row-wise transformation. If the source has 182 rows, the output will have 182 rows. If the benchmark expects 183, there might be a missing row in the source that I cannot generate.
+        
+        However, often "Row count changes" hints at a `reset_index` or an aggregation.
+        Could it be that the source has an index that needs to be preserved or added?
+        
+        Let's look at the column names again.
+        Source: `value1`, `value2`...
+        Target: `1:00`, `2:00`...
+        
+        Transformation steps:
+        1.  Copy source.
+        2.  Parse `date` to datetime.
+        3.  Format `date` as `%a %m/%d/%Y` -> `cst`.
+        4.  Rename `value{i}` to `{i}:00`.
+        5.  Select `cst` and the 24 hour columns.
+        6.  Sort by `cst`? The target sample is sorted by date. It's good practice to sort if the order isn't guaranteed, but pandas preserves order unless specified. The target sample is sorted. The source sample is sorted.
+        
+        What about the 182 vs 183?
+        If the source is `training_0.csv` and it has 182 rows, and `target.csv` has 183, maybe `target.csv` includes a header or an extra row? Or maybe `training_0.csv` is missing a day?
+        Regardless, the code must be general. I will implement the row-wise mapping.
+        
+        One detail: The target column names are strings like '1:00'.
+        
+        Code Structure:
+        ```python
+        import pandas as pd
+
+        def transform(source: pd.DataFrame) -> pd.DataFrame:
+            df = source.copy()
+            
+            # 1. Format date
+            # Source date format is %m/%d/%Y
+            dt = pd.to_datetime(df['date'])
+            df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+            
+            # 2. Rename value columns
+            rename_map = {}
+            for i in range(1, 25):
+                rename_map[f'value{i}'] = f'{i}:00'
+            
+            df = df.rename(columns=rename_map)
+            
+            # 3. Select target columns
+            target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+            
+            # Optional: Sort by date if required? 
+            # The target sample is sorted. The source sample is sorted.
+            # It is safer to sort by the datetime to ensure deterministic order matching target if source is unordered.
+            # However, 'cst' is string. We can sort by the underlying datetime or just assume source order is correct.
+            # Given "Sat 01/01/2011" is first, sorting by date is likely expected.
+            
+            # Let's sort by the original date column to be safe, then drop it? 
+            # Or just return the columns. 
+            # Usually, if the source is sorted, the target is sorted. 
+            # I will add a sort by 'cst' just in case, but string sorting of 'Sat 01/01...' works chronologically if format is fixed? 
+            # '%a %m/%d/%Y' -> 'Sat 01/01/2011'. 
+            # String sort: 'Fri' < 'Mon' < 'Sat' ... 
+            # 'Sat 01/01' vs 'Sun 01/02'. 'Sat' < 'Sun'. 
+            # 'Mon 01/03' vs 'Tue 01/04'. 'Mon' < 'Tue'.
+            # But 'Fri 12/31' vs 'Sat 01/01'. 'Fri' < 'Sat'. 
+            # String sorting of '%a %m/%d/%Y' is NOT chronological. 
+            # I should sort by the datetime object before formatting or create a temp column.
+            
+            df['dt_sort'] = dt
+            df = df.sort_values('dt_sort')
+            df = df.drop(columns=['dt_sort', 'date', 'class', 'Description', 'analysis', 'uom'])
+            
+            return df[target_cols]
+        ```
+        
+        Wait, if I drop `date`, I need to make sure I don't drop it before sorting.
+        
+        Let's refine the sorting.
+        The target sample is clearly sorted by date.
+        The source sample is sorted by date.
+        I will sort by the parsed datetime to ensure the output matches the target's chronological order.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # Parse the date column to datetime
+    dt = pd.to_datetime(df['date'])
+    
+    # Create the 'cst' column with format '%a %m/%d/%Y'
+    df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+    
+    # Rename value columns to hour format '1:00', '2:00', ..., '24:00'
+    rename_dict = {f'value{i}': f'{i}:00' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    
+    # Sort by date to match the target's chronological order
+    # We use the parsed datetime 'dt' for sorting, then drop it
+    df['dt_sort_key'] = dt
+    df = df.sort_values('dt_sort_key')
+    df = df.drop(columns=['dt_sort_key'])
+    
+    # Define target columns
+    target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    
+    # Select only the target columns
+    return df[target_cols]
+```

@@ -1,0 +1,51 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source Schema**: The source DataFrame has columns `Segment`, `Date`, and hourly columns named `'1:00'` through `'24:00:00'`.
+2.  **Analyze Target Schema**: The target DataFrame requires columns `month`, `daytype`, and `hr1` through `hr24`.
+3.  **Process Date Column**:
+    *   The `Date` column is in the format `'%a %m/%d/%Y'` (e.g., `'Thu 10/01/2009'`).
+    *   Parse this string into a pandas datetime object.
+    *   Extract the month name (e.g., `'October'`) for the `month` column using `.dt.strftime('%B')`.
+    *   Determine the `daytype`. Looking at the target samples, days like Monday-Friday are labeled `'weekday'` and Saturday-Sunday are labeled `'weekend'`. We can derive this from the day of the week. In pandas, `dt.dayofweek` returns 0 for Monday and 6 for Sunday. So, if `dayofweek < 5`, it's a `'weekday'`; otherwise, it's a `'weekend'`.
+4.  **Rename Hourly Columns**:
+    *   Source columns are `'1:00'`, `'2:00'`, ..., `'23:00'`, `'24:00:00'`.
+    *   Target columns are `'hr1'`, `'hr2'`, ..., `'hr23'`, `'hr24'`.
+    *   Create a mapping dictionary to rename these columns. Note that `'24:00:00'` maps to `'hr24'`.
+5.  **Construct Final DataFrame**:
+    *   Create the `month` and `daytype` columns.
+    *   Rename the hourly columns.
+    *   Select the columns in the exact order specified by the target schema: `['month', 'daytype', 'hr1', ..., 'hr24']`.
+
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # 1. Parse the Date column
+    # Format is '%a %m/%d/%Y' e.g., 'Thu 10/01/2009'
+    dt = pd.to_datetime(df['Date'], format='%a %m/%d/%Y')
+    
+    # 2. Create 'month' column with full month name
+    df['month'] = dt.dt.strftime('%B')
+    
+    # 3. Create 'daytype' column
+    # Monday=0, ..., Friday=4 -> 'weekday'
+    # Saturday=5, Sunday=6 -> 'weekend'
+    df['daytype'] = dt.dt.dayofweek.apply(lambda x: 'weekday' if x < 5 else 'weekend')
+    
+    # 4. Rename hourly columns
+    # Source: '1:00', ..., '23:00', '24:00:00'
+    # Target: 'hr1', ..., 'hr23', 'hr24'
+    rename_dict = {}
+    for i in range(1, 24):
+        rename_dict[f'{i}:00'] = f'hr{i}'
+    rename_dict['24:00:00'] = 'hr24'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 5. Define target columns in verbatim order
+    target_columns = ['month', 'daytype'] + [f'hr{i}' for i in range(1, 25)]
+    
+    return df[target_columns]
+```

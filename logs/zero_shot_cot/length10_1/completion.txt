@@ -1,0 +1,144 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains detailed electricity usage breakdowns (e.g., `electricity_heating_kwh`, `electricity_cooling_kwh`, `electricity_refrigerator_kwh`, etc.) along with metadata (`time`, `eiaid`, etc.).
+    *   **Target**: Contains aggregated categories (`hvac`, `water_heating`, `lighting`, etc.) and a formatted `datetime`.
+    *   **Goal**: Map source columns to target columns, performing aggregations where necessary (e.g., summing heating and cooling for HVAC, summing interior and exterior lighting).
+
+2.  **Date/Time Handling**:
+    *   The source column `time` is a string in format `YYYY-MM-DD HH:MM:SS.000`.
+    *   The target column `datetime` requires format `YYYY-MM-DD HH:MM:SS`.
+    *   **Action**: Parse `time` to datetime, then format it back to string without milliseconds.
+
+3.  **Column Mapping and Aggregation Logic**:
+    *   **`hvac`**: Typically involves heating, cooling, and associated fans/pumps. Looking at the source columns:
+        *   `electricity_heating_kwh`
+        *   `electricity_cooling_kwh`
+        *   `electricity_fans_heating_kwh`
+        *   `electricity_fans_cooling_kwh`
+        *   `electricity_pumps_heating_kwh`
+        *   `electricity_pumps_cooling_kwh`
+        *   *Note*: Central system columns (`electricity_central_system_heating_kwh`, etc.) are often subsets or specific types. In many EIA datasets, the generic `heating` and `cooling` columns might already include central systems, or they are separate. Let's look at the sample data.
+        *   Sample Row 1 (Source): `heating`=0.13, `cooling`=406631, `fans_heating`=1.07, `fans_cooling`=83543.4, `pumps_heating`=0.0001, `pumps_cooling`=0.
+        *   Sample Row 1 (Target): `hvac`=292848. Wait, the target sample row `2012-01-01 00:15:00` corresponds to a different source row than the first one shown in the source sample (which is `2012-07-02`). I need to find the source row for `2012-01-01 00:15:00`.
+        *   Let's infer the mapping from column names generally.
+        *   `hvac` = `electricity_heating_kwh` + `electricity_cooling_kwh` + `electricity_fans_heating_kwh` + `electricity_fans_cooling_kwh` + `electricity_pumps_heating_kwh` + `electricity_pumps_cooling_kwh`.
+        *   *Correction/Refinement*: Often `electricity_central_system_heating_kwh` is part of `electricity_heating_kwh`. If I sum them, I might double count. However, looking at the distinct values, `electricity_central_system_heating_kwh` is 0 in the first few rows but non-zero later. Let's assume the standard EIA breakdown where `heating` is the total. If `central_system_heating` is a subset, we shouldn't add it. If it's a separate component, we should.
+        *   Let's look at `lighting`. Target `lighting` = `interior_lighting` + `exterior_lighting`.
+        *   Source: `electricity_interior_lighting_kwh`, `electricity_exterior_lighting_kwh`.
+        *   Target `interior_lighting` and `exterior_lighting` are also present.
+        *   So, `lighting` = `interior_lighting` + `exterior_lighting`.
+        *   `pool_spa_pumps`: Source has `electricity_pool_pump_kwh` and `electricity_hot_tub_pump_kwh`. Target has `pool_spa_pumps`. Likely sum of these two.
+        *   `pool_spa_heater`: Source has `electricity_pool_heater_kwh` and `electricity_hot_tub_heater_kwh`. Target has `pool_spa_heater`. Likely sum of these two.
+        *   `water_heating`: Source has `electricity_water_systems_kwh`. This is the most direct mapping.
+        *   `refrigerator`: Source `electricity_refrigerator_kwh`.
+        *   `clothes_washer`: Source `electricity_clothes_washer_kwh`.
+        *   `clothes_dryer`: Source `electricity_clothes_dryer_kwh`.
+        *   `dishwasher`: Source `electricity_dishwasher_kwh`.
+        *   `cooking_range`: Source `electricity_cooking_range_kwh`.
+        *   `plug`: Source `electricity_plug_loads_kwh`.
+
+    *   **Re-evaluating HVAC**:
+        *   Let's check the values for a specific row if possible. The target sample starts at `2012-01-01`. The source sample provided starts at `2012-07-02`. I cannot directly verify the sum for the first target row using the provided source snippet.
+        *   However, standard EIA-923 or similar datasets usually define:
+            *   `hvac` = Heating + Cooling + Fans (Heating/Cooling) + Pumps (Heating/Cooling).
+            *   Does it include "Central System" specific columns? Usually, `electricity_heating_kwh` is the total heating. `electricity_central_system_heating_kwh` is a breakdown. Adding them would be double counting.
+            *   Let's assume: `hvac` = `electricity_heating_kwh` + `electricity_cooling_kwh` + `electricity_fans_heating_kwh` + `electricity_fans_cooling_kwh` + `electricity_pumps_heating_kwh` + `electricity_pumps_cooling_kwh`.
+
+4.  **Constructing the DataFrame**:
+    *   Create a new DataFrame `df`.
+    *   Set `datetime` from `source['time']`.
+    *   Calculate `hvac` as the sum of relevant heating/cooling/fan/pump columns.
+    *   Map `water_heating` from `electricity_water_systems_kwh`.
+    *   Map `refrigerator` from `electricity_refrigerator_kwh`.
+    *   Map `clothes_washer` from `electricity_clothes_washer_kwh`.
+    *   Map `clothes_dryer` from `electricity_clothes_dryer_kwh`.
+    *   Map `dishwasher` from `electricity_dishwasher_kwh`.
+    *   Map `cooking_range` from `electricity_cooking_range_kwh`.
+    *   Calculate `pool_spa_pumps` = `electricity_pool_pump_kwh` + `electricity_hot_tub_pump_kwh`.
+    *   Map `interior_lighting` from `electricity_interior_lighting_kwh`.
+    *   Map `exterior_lighting` from `electricity_exterior_lighting_kwh`.
+    *   Calculate `lighting` = `interior_lighting` + `exterior_lighting`.
+    *   Map `plug` from `electricity_plug_loads_kwh`.
+    *   Calculate `pool_spa_heater` = `electricity_pool_heater_kwh` + `electricity_hot_tub_heater_kwh`.
+
+5.  **Final Formatting**:
+    *   Ensure column names match exactly.
+    *   Return the DataFrame.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Handle Datetime
+    # Source 'time' is like '2012-07-02 00:15:00.000'
+    # Target 'datetime' is '2012-01-01 00:15:00'
+    # We parse to datetime and then format to string without milliseconds
+    df['datetime'] = pd.to_datetime(df['time']).dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Map and Aggregate Columns
+    
+    # HVAC: Sum of heating, cooling, and their associated fans and pumps
+    # Note: We assume 'electricity_heating_kwh' and 'electricity_cooling_kwh' are totals 
+    # and do not double-count 'central_system' variants which are likely breakdowns.
+    hvac_cols = [
+        'electricity_heating_kwh',
+        'electricity_cooling_kwh',
+        'electricity_fans_heating_kwh',
+        'electricity_fans_cooling_kwh',
+        'electricity_pumps_heating_kwh',
+        'electricity_pumps_cooling_kwh'
+    ]
+    df['hvac'] = df[hvac_cols].sum(axis=1)
+    
+    # Water Heating
+    df['water_heating'] = df['electricity_water_systems_kwh']
+    
+    # Refrigerator
+    df['refrigerator'] = df['electricity_refrigerator_kwh']
+    
+    # Clothes Washer
+    df['clothes_washer'] = df['electricity_clothes_washer_kwh']
+    
+    # Clothes Dryer
+    df['clothes_dryer'] = df['electricity_clothes_dryer_kwh']
+    
+    # Dishwasher
+    df['dishwasher'] = df['electricity_dishwasher_kwh']
+    
+    # Cooking Range
+    df['cooking_range'] = df['electricity_cooking_range_kwh']
+    
+    # Pool/Spa Pumps: Sum of pool pump and hot tub pump
+    df['pool_spa_pumps'] = df['electricity_pool_pump_kwh'] + df['electricity_hot_tub_pump_kwh']
+    
+    # Interior Lighting
+    df['interior_lighting'] = df['electricity_interior_lighting_kwh']
+    
+    # Exterior Lighting
+    df['exterior_lighting'] = df['electricity_exterior_lighting_kwh']
+    
+    # Total Lighting: Sum of interior and exterior
+    df['lighting'] = df['interior_lighting'] + df['exterior_lighting']
+    
+    # Plug Loads
+    df['plug'] = df['electricity_plug_loads_kwh']
+    
+    # Pool/Spa Heater: Sum of pool heater and hot tub heater
+    df['pool_spa_heater'] = df['electricity_pool_heater_kwh'] + df['electricity_hot_tub_heater_kwh']
+    
+    # 3. Define Target Columns
+    target_columns = [
+        'datetime', 'hvac', 'water_heating', 'refrigerator', 'clothes_washer', 
+        'clothes_dryer', 'dishwasher', 'cooking_range', 'pool_spa_pumps', 
+        'interior_lighting', 'exterior_lighting', 'lighting', 'plug', 'pool_spa_heater'
+    ]
+    
+    # 4. Return the result with exact column order
+    return df[target_columns]
+```

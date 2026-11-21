@@ -1,0 +1,90 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Strata_ID`, `Strata`, `DT_STRATA` (date string), `DOW` (day of week), and 24 hourly percentage columns named `PCT_HOURLY_0100` through `PCT_HOURLY_2400` (plus a `PCT_HOURLY_2500` which appears to be always 0 and likely unused). The data seems to represent hourly profiles for different strata on different dates.
+    *   **Target**: Contains `Date` (formatted as `%m/%d/%Y`) and 24 columns `Hr 1` through `Hr 24`.
+    *   **Observation**: The source has multiple rows per date (different Strata). The target has exactly one row per date. This implies an **aggregation** step is required. Since the target values are single floats for each hour, and the source has multiple strata values for each hour on a given date, we need to determine how to combine them.
+    *   **Hypothesis on Aggregation**: Looking at the sample data, the source values are small percentages. The target values are also small. Let's look at a specific date, e.g., `7/2/2016`. In the source, we see rows for Strata 16 on `7/2/2016`. Are there other strata for `7/2/2016`? The sample shows Strata 16 and Strata 34. Strata 34 has dates in Dec 2016. It's possible that for any given date, there might be multiple strata records, or perhaps the dataset is structured such that each date corresponds to a specific profile, or we need to average/sum them.
+    *   **Re-evaluating Aggregation**: Let's look at the target sample row for `01/01/2016`. The values are around `0.001`. The source values are also around `0.001`. If there are multiple strata per day, averaging or summing would change the magnitude significantly if there are many strata. However, typically in these "strata" datasets, a date might have one primary record or the records are mutually exclusive in time, OR the target is an average of all strata for that date.
+    *   **Key Insight**: Let's look at the column mapping. `PCT_HOURLY_0100` maps to `Hr 1`, `PCT_HOURLY_0200` to `Hr 2`, etc.
+    *   **Aggregation Logic**: If I sum or average, I need to know the count. Let's assume for a moment that the target is simply the **mean** of the hourly percentages for that date across all available strata. Or, it's possible that each date only appears once in the full dataset (unique date-strata combination where strata is constant per date? No, Strata_ID varies).
+    *   **Alternative Hypothesis**: The target table might be derived from a specific Strata? No, the target doesn't have a Strata column.
+    *   **Let's check the row counts**: Source has 5673 rows. Target has 5673 rows. This is a **1-to-1 mapping** in terms of row count. This is crucial. It means we are **not** aggregating multiple source rows into one target row. Instead, each source row maps to one target row.
+    *   **Wait, let's re-read carefully**: "Source sample rows: 5673 rows... Target rows: 5673 rows".
+    *   If it's 1-to-1, then the `DT_STRATA` in the source must correspond directly to the `Date` in the target.
+    *   But the source sample shows `DT_STRATA` like `7/2/2016` and the target sample starts with `01/01/2016`. The dates in the target sample (Jan 2016, Jun 2016, Jul 2016) are different from the source sample (Jul 2016, Dec 2016). This suggests the source sample provided is just a *subset* of the full data, and the target sample is another *subset*.
+    *   However, if the row counts are identical (5673), it strongly implies a direct row-to-row transformation.
+    *   **Mapping**:
+        *   `DT_STRATA` -> `Date` (formatting change: source is `7/2/2016`, target is `01/01/2016` i.e., zero-padded).
+        *   `PCT_HOURLY_0100` -> `Hr 1`
+        *   `PCT_HOURLY_0200` -> `Hr 2`
+        *   ...
+        *   `PCT_HOURLY_2400` -> `Hr 24`
+    *   **Why are the values different in the samples?** The samples provided in the prompt are just illustrative slices. The source slice shows Jul/Dec 2016. The target slice shows Jan/Jun/Jul 2016. They are not necessarily aligned row-by-row in the *sample display*, but the *transformation logic* must hold for the whole dataset.
+    *   **Conclusion**: The transformation is a column rename and date formatting. There is no aggregation because the row counts match exactly. The `Strata_ID`, `Strata`, `DOW`, and `PCT_HOURLY_2500` columns are dropped.
+
+2.  **Step-by-Step Transformation**:
+    *   **Step 1**: Create a copy of the source DataFrame to avoid modifying the original.
+    *   **Step 2**: Parse the `DT_STRATA` column into a datetime object to ensure consistent formatting. The format is `%m/%d/%Y`.
+    *   **Step 3**: Convert the parsed datetime back to a string in the target format `%m/%d/%Y`. Note that the target sample shows zero-padded months and days (e.g., `01/01/2016`). The source sample `7/2/2016` is not zero-padded. Standard `strftime('%m/%d/%Y')` will produce zero-padded output.
+    *   **Step 4**: Rename the hourly columns.
+        *   `PCT_HOURLY_0100` -> `Hr 1`
+        *   `PCT_HOURLY_0200` -> `Hr 2`
+        *   ...
+        *   `PCT_HOURLY_2400` -> `Hr 24`
+    *   **Step 5**: Select only the required columns: `Date` and `Hr 1` through `Hr 24`.
+    *   **Step 6**: Ensure the column order matches the target exactly.
+
+3.  **Refining the Column Mapping**:
+    *   Source: `PCT_HOURLY_0100`, `PCT_HOURLY_0200`, ..., `PCT_HOURLY_2400`.
+    *   Target: `Hr 1`, `Hr 2`, ..., `Hr 24`.
+    *   I will construct a mapping dictionary or list to rename these efficiently.
+
+4.  **Handling Edge Cases**:
+    *   The `PCT_HOURLY_2500` column exists in source but not in target. It should be dropped.
+    *   The `Strata_ID`, `Strata`, `DOW` columns should be dropped.
+
+5.  **Final Code Structure**:
+    *   Import pandas.
+    *   Define `transform` function.
+    *   Parse date.
+    *   Rename columns.
+    *   Select and return.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame by:
+    1. Formatting the 'DT_STRATA' date column to '%m/%d/%Y' and renaming to 'Date'.
+    2. Renaming 'PCT_HOURLY_XXXX' columns to 'Hr N' format.
+    3. Selecting only the required columns.
+    """
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Process the Date column
+    # Parse the date string from source format (e.g., '7/2/2016') to datetime
+    df['Date'] = pd.to_datetime(df['DT_STRATA'], format='%m/%d/%Y')
+    # Format to target format (e.g., '01/01/2016') with zero-padding
+    df['Date'] = df['Date'].dt.strftime('%m/%d/%Y')
+    
+    # 2. Rename the hourly columns
+    # Mapping from PCT_HOURLY_XXXX to Hr N
+    rename_mapping = {}
+    for hour in range(1, 25):
+        # Source column name format: PCT_HOURLY_0100, PCT_HOURLY_0200, ...
+        src_col = f"PCT_HOURLY_{hour:04d}"
+        # Target column name format: Hr 1, Hr 2, ...
+        tgt_col = f"Hr {hour}"
+        rename_mapping[src_col] = tgt_col
+        
+    df.rename(columns=rename_mapping, inplace=True)
+    
+    # 3. Define the target columns in the exact order required
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # 4. Select and return the final DataFrame
+    return df[target_columns]
+```

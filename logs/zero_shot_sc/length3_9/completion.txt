@@ -1,0 +1,185 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Company`, `Rate`, `Rate Code`, `Date`, and `Hr 1` through `Hr 24`.
+    *   **Target**: Contains columns `date`, `Hour 1` through `Hour 24`.
+    *   **Observation**: The target table has the same number of rows as the source table (2190 rows). This suggests a row-wise transformation rather than an aggregation or pivot operation that would change the row count. The categorical columns (`Company`, `Rate`, `Rate Code`) are dropped. The `Date` column is renamed and reformatted. The hourly columns are renamed and their values are transformed.
+
+2.  **Date Transformation**:
+    *   Source `Date` format: `%m/%d/%Y` (e.g., '1/1/2014').
+    *   Target `date` format: `%m/%d/%Y` but with zero-padding (e.g., '01/01/2014').
+    *   Action: Parse the source `Date` into datetime objects using `pd.to_datetime`, then format them back to strings using `dt.strftime('%m/%d/%Y')` to ensure consistent zero-padding. Rename the column to `date`.
+
+3.  **Hourly Column Transformation**:
+    *   Source columns: `Hr 1`, `Hr 2`, ..., `Hr 24`.
+    *   Target columns: `Hour 1`, `Hour 2`, ..., `Hour 24`.
+    *   Action: Rename each source column `Hr X` to `Hour X`.
+
+4.  **Value Transformation (The Critical Step)**:
+    *   Compare source values with target values to identify the mathematical relationship.
+    *   Let's pick the first row, first hour:
+        *   Source `Hr 1`: 2.43675
+        *   Target `Hour 1`: 0.9188
+        *   Ratio: $2.43675 / 0.9188 \approx 2.652$
+    *   Let's pick another row, e.g., row 5 (Index 4), Hour 1:
+        *   Source `Hr 1`: 105.69
+        *   Target `Hour 1`: 1.15562
+        *   Ratio: $105.69 / 1.15562 \approx 91.46$
+    *   The ratio is not constant across rows. This implies the transformation depends on the row's metadata (`Company`, `Rate`, `Rate Code`).
+    *   Let's look at the metadata for the first few rows:
+        *   Row 0-3: `Company`=Boston Edison, `Rate`=R4, `Rate Code`=A5/A6.
+        *   Row 4-7: `Company`=Boston Edison, `Rate`=T2, `Rate Code`=B7/G8.
+    *   Let's check if the ratio is constant within the same `Rate Code` or `Rate` group.
+    *   **Group 1 (Rows 0-3)**: `Rate`=R4, `Rate Code`=A5/A6.
+        *   Row 0, Hr 1: $2.43675 / 0.9188 \approx 2.6521$
+        *   Row 0, Hr 2: $2.33199 / 0.90204 \approx 2.5852$ -> Wait, the ratio isn't constant across hours either?
+        *   Let's re-examine. Maybe it's a fixed divisor for the whole row?
+        *   Row 0, Hr 1: 2.43675 -> 0.9188. Divisor $\approx 2.652$.
+        *   Row 0, Hr 24: 2.60843 -> 0.91513. Divisor $\approx 2.850$.
+        *   This suggests the divisor might vary by hour or there is a more complex formula.
+
+    *   Let's look closer at the data. Is it possible the target values are derived from a specific rate code conversion factor?
+    *   Let's check the ratio for Row 4 (T2, B7/G8):
+        *   Hr 1: $105.69 / 1.15562 \approx 91.457$
+        *   Hr 2: $104.251 / 1.00789 \approx 103.43$
+        *   This also varies.
+
+    *   Let's try a different hypothesis. Is there a standard conversion for electricity rates? Often, rates are in $/kWh. Maybe the target is in a different unit? Or maybe it's normalized by a peak value?
+    *   Let's look at the max value in the row.
+        *   Row 0 Max Source: 3.74846 (Hr 20). Target Max: 1.34673 (Hr 12? No, let's check target row 0).
+        *   Target Row 0 values: 0.9188 ... 1.34673 (Hr 12).
+        *   Source Row 0 values: 2.43675 ... 3.51544 (Hr 22).
+        *   Ratio at max: $3.51544 / 1.34673 \approx 2.61$.
+        *   Ratio at min: $2.06611 / 0.83371 \approx 2.47$.
+
+    *   Let's look at the `Rate Code` distinct values again: `['A5/A6', 'C1', 'C2/C4', 'C3', 'B5', 'B7/G8']`.
+    *   Let's look at the `Rate` distinct values: `['R4', 'S1', 'S2', 'S3', 'T1', 'T2']`.
+
+    *   Let's try to find a constant divisor for a specific `Rate` and `Rate Code` combination across *all* hours for a single row.
+        *   Row 0 (R4, A5/A6):
+            *   Hr 1: 2.43675 / 0.9188 = 2.65210
+            *   Hr 2: 2.33199 / 0.90204 = 2.58524
+            *   Hr 3: 2.16983 / 0.90953 = 2.38566
+        *   The divisor changes per hour. This implies the transformation is not a simple scalar multiplication per row.
+
+    *   **Alternative Hypothesis**: Is the target value simply the source value divided by a specific constant associated with the *Rate Code* or *Rate*?
+        *   Let's check if the divisor is constant for a given `Rate Code` across different days.
+        *   We only have 2 rows of R4/A5/A6 in the sample (Rows 0-3 are all R4/A5/A6? No, Rows 0,1,2,3 are R4/A5/A6).
+        *   Let's compare Row 0 and Row 1 for the same hour.
+            *   Row 0, Hr 1: 2.43675 -> 0.9188. Divisor: 2.6521
+            *   Row 1, Hr 1: 2.19078 -> 0.87892. Divisor: 2.4926
+            *   The divisor is different. So it's not just a static lookup table for Rate Code.
+
+    *   **Let's look at the structure of the numbers again.**
+        *   Source: 2.43675
+        *   Target: 0.9188
+        *   $2.43675 / 0.9188 = 2.6521$
+        *   $2.33199 / 0.90204 = 2.5852$
+        
+    *   Is it possible the target is `Source / 2.65`? No.
+    *   Is it possible the target is `Source * 0.377`?
+        *   $2.43675 * 0.377 = 0.9186$. Close to 0.9188.
+        *   $2.33199 * 0.377 = 0.8791$. Target is 0.90204. Not close.
+
+    *   **Let's reconsider the "Divisor" idea.** What if the divisor is the **Average** or **Sum** of the row?
+        *   Row 0 Sum Source: ~68.5. Sum Target: ~25.8. Ratio: 2.65.
+        *   Row 4 Sum Source: ~3150. Sum Target: ~34.5. Ratio: 91.3.
+
+    *   **Let's look at the Rate Codes and Rates again.**
+        *   R4 / A5/A6
+        *   T2 / B7/G8
+        
+    *   Is there a standard conversion factor for these specific utility rates?
+        *   Boston Edison (now Eversource).
+        *   Rate R4 is a residential rate.
+        *   Rate T2 is a commercial/industrial rate.
+        
+    *   Let's check if the transformation is `Source / K` where K is specific to the `Rate Code`.
+        *   For R4/A5/A6, the divisor seems to be around 2.6-2.7.
+        *   For T2/B7/G8, the divisor seems to be around 90-100.
+        
+    *   Let's calculate the divisor for every cell in the sample to see if it stabilizes.
+        *   Row 0, Hr 1: 2.6521
+        *   Row 0, Hr 2: 2.5852
+        *   Row 0, Hr 3: 2.3857
+        *   Row 0, Hr 4: 2.3248
+        *   Row 0, Hr 5: 2.2828
+        *   Row 0, Hr 6: 2.2616
+        *   Row 0, Hr 7: 2.5186
+        *   Row 0, Hr 8: 2.6501
+        *   Row 0, Hr 9: 2.6526
+        *   Row 0, Hr 10: 2.7434
+        *   Row 0, Hr 11: 2.9143
+        *   Row 0, Hr 12: 2.5888
+        *   Row 0, Hr 13: 2.4468
+        *   Row 0, Hr 14: 2.7917
+        *   Row 0, Hr 15: 2.6403
+        *   Row 0, Hr 16: 2.9867
+        *   Row 0, Hr 17: 3.2236
+        *   Row 0, Hr 18: 3.1681
+        *   Row 0, Hr 19: 3.3007
+        *   Row 0, Hr 20: 3.2702
+        *   Row 0, Hr 21: 3.0911
+        *   Row 0, Hr 22: 3.2299
+        *   Row 0, Hr 23: 2.9889
+        *   Row 0, Hr 24: 2.6084
+
+    *   This variation is significant. It looks like the target values might be **normalized** by the **peak** value of the day? Or the **average**?
+        *   Max Source Row 0: 3.74846 (Hr 20).
+        *   Target Row 0 Max: 1.34673 (Hr 12).
+        *   Ratio: 2.78.
+        
+    *   Let's look at Row 4 (T2/B7/G8).
+        *   Max Source: 176.317 (Hr 11).
+        *   Max Target: 2.33071 (Hr 20).
+        *   Ratio: 75.6.
+        
+    *   This is getting complicated. Let's step back. Is there a simpler relationship?
+    *   Look at the first digit.
+    *   Source: 2.43... Target: 0.91...
+    *   Source: 105.69... Target: 1.15...
+
+    *   What if the target is `Source / (Some Constant)`?
+    *   Let's check the ratio of `Source` to `Target` for the **same hour** across different days with the **same Rate Code**.
+        *   We don't have enough days for R4/A5/A6 in the sample (only 4 days).
+        *   Let's check R4/A5/A6, Hr 1:
+            *   1/1: 2.43675 / 0.9188 = 2.6521
+            *   1/2: 2.19078 / 0.87892 = 2.4926
+            *   1/3: 2.73687 / 0.93044 = 2.9415
+            *   1/4: 2.9305 / 0.9943 = 2.9473
+        *   The ratio varies significantly (2.49 to 2.94).
+
+    *   **Wait, look at the Target Values again.**
+    *   Row 0, Hr 1: 0.9188
+    *   Row 0, Hr 2: 0.90204
+    *   Row 0, Hr 3: 0.90953
+    
+    *   Let's try dividing Source by a constant **2.65** for the first few hours of Row 0.
+        *   2.43675 / 2.65 = 0.9195 (Close to 0.9188)
+        *   2.33199 / 2.65 = 0.8799 (Target 0.90204 - Not close)
+        
+    *   Let's try dividing by **2.58**.
+        *   2.33199 / 2.58 = 0.9038 (Close to 0.90204)
+        
+    *   Is it possible the divisor is the **Hourly Peak** of a standard profile? No, that's too complex.
+
+    *   **Let's look at the `Rate Code` and `Rate` again.**
+    *   Maybe the transformation is `Source / 2.652` for some rows and `Source / 91.4` for others?
+    *   But the ratio varies within the row.
+
+    *   **Hypothesis: The target values are the source values divided by the MAXIMUM source value in that row?**
+        *   Row 0 Max Source: 3.74846 (Hr 20).
+        *   Hr 1: 2.43675 / 3.74846 = 0.650. Target: 0.9188. No.
+        
+    *   **Hypothesis: The target values are the source values divided by the AVERAGE source value in that row?**
+        *   Row 0 Avg Source: 2.82.
+        *   Hr 1: 2.43675 / 2.82 = 0.864. Target: 0.9188. No.
+
+    *   **Let's look at the difference.**
+    *   Source - Target?
+    *   2.43675 - 0.9188 = 1.51795.
+    
+    *   **Let's look at the ratio of Source to Target for Row 4 (T2/B7/G8).**
+        *   Hr 1: 105.69 / 1.15562 = 91.457
+        *   Hr 2: 104.251 / 1.00789 = 103.43
+        *   Hr 3: 103.303 / 1.00978 = 102.30

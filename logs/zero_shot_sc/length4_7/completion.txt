@@ -1,0 +1,120 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Segment`, `Date`, and 24 hourly columns labeled `1:00` through `24:00:00`. The `Date` column is in format `%a %m/%d/%Y` (e.g., 'Thu 10/01/2009'). The hour columns represent a 24-hour cycle where `1:00` corresponds to 1 AM, `12:00` corresponds to 12 PM (noon), `13:00` corresponds to 1 PM, ..., `24:00:00` corresponds to 12 AM (midnight/end of day).
+    *   **Target**: Contains column `date` (format `%m/%d/%Y`) and 24 hourly columns with AM/PM labels: `1:00 AM` through `12:00 PM` (noon), then `1:00 PM` through `12:00 AM` (midnight). Note the specific order in the target column list provided: `['date', '1:00 AM', ..., '12:00 AM', '1:00 PM', ..., '12:00 PM']`. Wait, looking closely at the provided target column list: `['date', '1:00 AM', '2:00 AM', ..., '11:00 AM', '12:00 AM', '1:00 PM', ..., '12:00 PM']`. This order is slightly unusual (12 AM appears before 1 PM? No, 12 AM is midnight. Standard 12-hour clock order is 12 AM, 1 AM ... 11 AM, 12 PM, 1 PM ... 11 PM. The target list has `1:00 AM` ... `11:00 AM` then `12:00 AM` then `1:00 PM`... This seems like a specific permutation or a potential error in the prompt's column list description vs standard time. Let's look at the sample data.
+    *   **Sample Data Check**:
+        *   Source `1:00` (1 AM) -> Target `1:00 AM`
+        *   Source `12:00` (12 PM/Noon) -> Target `12:00 PM`? Or `12:00 AM`?
+        *   Let's map standard 24h to 12h AM/PM:
+            *   1:00 -> 1:00 AM
+            *   ...
+            *   11:00 -> 11:00 AM
+            *   12:00 -> 12:00 PM (Noon)
+            *   13:00 -> 1:00 PM
+            *   ...
+            *   23:00 -> 11:00 PM
+            *   24:00:00 -> 12:00 AM (Midnight)
+        *   Let's check the target column list order again: `['date', '1:00 AM', '2:00 AM', ..., '11:00 AM', '12:00 AM', '1:00 PM', ..., '12:00 PM']`.
+        *   This order puts `12:00 AM` (Midnight) between `11:00 AM` and `1:00 PM`. This is chronologically incorrect for a standard timeline but matches the specific list provided in the prompt. I must follow the **Exact Target Columns** list verbatim for the final output order, but I need to map the values correctly.
+        *   Let's re-read the target sample table headers: `1:00 AM, 2:00 AM, ..., 11:00 AM, 12:00 AM, 1:00 PM, ..., 12:00 PM`.
+        *   Actually, usually 12:00 AM is start of day. 12:00 PM is noon.
+        *   Let's look at the values.
+            *   Source `1:00` (1 AM) value 1.153. Target `1:00 AM` value 2.188 (different date, but let's check mapping logic).
+            *   Let's assume standard mapping:
+                *   Source `1:00` -> Target `1:00 AM`
+                *   Source `2:00` -> Target `2:00 AM`
+                *   ...
+                *   Source `11:00` -> Target `11:00 AM`
+                *   Source `12:00` -> Target `12:00 PM` (Noon)
+                *   Source `13:00` -> Target `1:00 PM`
+                *   ...
+                *   Source `23:00` -> Target `11:00 PM`
+                *   Source `24:00:00` -> Target `12:00 AM` (Midnight)
+        *   The target column list provided is: `['date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`.
+        *   This list places `12:00 AM` (Midnight) *before* the PM hours. This is a non-standard chronological order (usually 12 AM is first, or 12 PM is noon). It seems the list has `12:00 AM` (Midnight) inserted after `11:00 AM`. And `12:00 PM` (Noon) is at the very end.
+        *   I will map the source columns to the correct semantic target column names, then reorder the DataFrame columns to match the exact list provided.
+
+2.  **Date Transformation**:
+    *   Parse `Date` string using format `%a %m/%d/%Y`.
+    *   Format as `%m/%d/%Y`.
+    *   Rename column to `date`.
+
+3.  **Column Renaming (Mapping)**:
+    *   Create a mapping dictionary from Source Hour Columns to Target Hour Columns.
+    *   `1:00` -> `1:00 AM`
+    *   `2:00` -> `2:00 AM`
+    *   ...
+    *   `11:00` -> `11:00 AM`
+    *   `12:00` -> `12:00 PM` (Noon)
+    *   `13:00` -> `1:00 PM`
+    *   `14:00` -> `2:00 PM`
+    *   ...
+    *   `23:00` -> `11:00 PM`
+    *   `24:00:00` -> `12:00 AM` (Midnight)
+
+4.  **Data Cleaning**:
+    *   Drop the `Segment` column as it is not in the target.
+
+5.  **Reordering**:
+    *   Ensure the final DataFrame columns match the `target_columns` list exactly.
+
+### Implementation
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # 1. Define the target column order verbatim
+    target_columns = [
+        'date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', 
+        '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', 
+        '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', 
+        '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', 
+        '12:00 PM'
+    ]
+
+    # 2. Parse and Format Date
+    # Source format: 'Thu 10/01/2009' -> '%a %m/%d/%Y'
+    # Target format: '01/01/2003' -> '%m/%d/%Y'
+    df = source.copy()
+    df['date'] = pd.to_datetime(df['Date'], format='%a %m/%d/%Y').dt.strftime('%m/%d/%Y')
+    
+    # 3. Map Source Hour Columns to Target Hour Columns
+    # Source: 1:00 (1 AM) ... 12:00 (12 PM/Noon) ... 23:00 (11 PM) ... 24:00:00 (12 AM/Midnight)
+    mapping = {}
+    
+    # 1:00 to 11:00 -> 1:00 AM to 11:00 AM
+    for h in range(1, 12):
+        mapping[f'{h}:00'] = f'{h}:00 AM'
+        
+    # 12:00 -> 12:00 PM (Noon)
+    mapping['12:00'] = '12:00 PM'
+    
+    # 13:00 to 23:00 -> 1:00 PM to 11:00 PM
+    for h in range(13, 24):
+        pm_h = h - 12
+        mapping[f'{h}:00'] = f'{pm_h}:00 PM'
+        
+    # 24:00:00 -> 12:00 AM (Midnight)
+    mapping['24:00:00'] = '12:00 AM'
+
+    # 4. Rename columns and drop unused columns
+    df = df.rename(columns=mapping)
+    
+    # Drop Segment and original Date column
+    cols_to_drop = ['Segment', 'Date']
+    df = df.drop(columns=cols_to_drop, errors='ignore')
+
+    # 5. Ensure correct column order
+    # Verify all target columns are present
+    for col in target_columns:
+        if col not in df.columns:
+            raise ValueError(f"Target column {col} not found in transformed dataframe")
+            
+    df = df[target_columns]
+    
+    return df
+```

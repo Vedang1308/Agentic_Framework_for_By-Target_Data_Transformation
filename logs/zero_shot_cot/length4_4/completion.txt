@@ -1,0 +1,186 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Date`, `Class`, and numeric columns `1` through `24`. The `Date` column is in string format `'%m/%d/%Y'`. The numeric columns represent hourly data points.
+    *   **Target**: Contains column `date` and 24 time-labeled columns (`1:00 AM` through `12:00 PM`, then `1:00 PM` through `11:00 PM`, with `12:00 AM` inserted after `11:00 AM`).
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target table includes a date that is not present in the provided source sample, or the source sample is a subset. However, looking at the data, the transformation is primarily a **reshaping (pivoting/unpivoting)** and **renaming** operation. The row count difference in the benchmark description might be due to the test set having different dates or an extra row being added/removed in the specific test case. The core logic must handle the mapping of source columns `1-24` to the specific target time labels.
+
+2.  **Map Source Columns to Target Time Labels**:
+    *   The source columns `1` to `24` correspond to hours of the day.
+    *   Standard 24-hour clock mapping to 12-hour AM/PM format:
+        *   Hour 1 -> 1:00 AM
+        *   Hour 2 -> 2:00 AM
+        *   ...
+        *   Hour 11 -> 11:00 AM
+        *   Hour 12 -> 12:00 PM (Noon)
+        *   Hour 13 -> 1:00 PM
+        *   ...
+        *   Hour 23 -> 11:00 PM
+        *   Hour 24 -> 12:00 AM (Midnight)
+    *   Let's verify the target column order: `['1:00 AM', ..., '11:00 AM', '12:00 AM', '1:00 PM', ..., '11:00 PM', '12:00 PM']`.
+    *   Wait, the target column list provided is:
+        `['date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+    *   This order is slightly unusual. Let's map source column indices (1-24) to these labels:
+        *   Source `1` -> `1:00 AM`
+        *   Source `2` -> `2:00 AM`
+        *   ...
+        *   Source `11` -> `11:00 AM`
+        *   Source `12` -> `12:00 PM` (Noon). But in the target list, `12:00 PM` is the *last* column.
+        *   Source `13` -> `1:00 PM`
+        *   ...
+        *   Source `23` -> `11:00 PM`
+        *   Source `24` -> `12:00 AM` (Midnight). In the target list, `12:00 AM` is after `11:00 AM`.
+
+    *   Let's re-examine the target column list carefully:
+        1.  `1:00 AM` (Source 1)
+        2.  `2:00 AM` (Source 2)
+        3.  `3:00 AM` (Source 3)
+        4.  `4:00 AM` (Source 4)
+        5.  `5:00 AM` (Source 5)
+        6.  `6:00 AM` (Source 6)
+        7.  `7:00 AM` (Source 7)
+        8.  `8:00 AM` (Source 8)
+        9.  `9:00 AM` (Source 9)
+        10. `10:00 AM` (Source 10)
+        11. `11:00 AM` (Source 11)
+        12. `12:00 AM` (Source 24? Or Source 12?) -> Usually 12:00 AM is midnight (start of day). In many datasets, column 24 is midnight. Let's look at the values.
+        13. `1:00 PM` (Source 13)
+        14. `2:00 PM` (Source 14)
+        ...
+        24. `11:00 PM` (Source 23)
+        25. `12:00 PM` (Source 12? Noon)
+
+    *   Let's check the sample data to confirm the mapping.
+        *   Source Row 1 (7/3/2013): Col 12 is `0.82`, Col 24 is `0.96`.
+        *   Target Row for 7/3/2013 is not explicitly shown in the target sample (target sample starts 01/01/2013).
+        *   However, we can infer from standard conventions and the column names.
+        *   Standard mapping:
+            *   1-11: 1 AM - 11 AM
+            *   12: 12 PM (Noon)
+            *   13-23: 1 PM - 11 PM
+            *   24: 12 AM (Midnight)
+        *   Target Column Order:
+            *   `1:00 AM` to `11:00 AM` (Cols 1-11)
+            *   `12:00 AM` (This is likely Source Col 24)
+            *   `1:00 PM` to `11:00 PM` (Cols 13-23)
+            *   `12:00 PM` (This is likely Source Col 12)
+
+    *   Let's verify this hypothesis. If Source Col 24 is `12:00 AM` and Source Col 12 is `12:00 PM`, then the target columns are just a reordering of the source columns 1-24.
+    *   Mapping:
+        *   `1:00 AM` <- Source `1`
+        *   `2:00 AM` <- Source `2`
+        *   ...
+        *   `11:00 AM` <- Source `11`
+        *   `12:00 AM` <- Source `24`
+        *   `1:00 PM` <- Source `13`
+        *   `2:00 PM` <- Source `14`
+        *   ...
+        *   `11:00 PM` <- Source `23`
+        *   `12:00 PM` <- Source `12`
+
+3.  **Transformation Steps**:
+    *   **Step 1**: Select the `Date` column and rename it to `date`.
+    *   **Step 2**: Create a mapping dictionary from source column names (strings '1' to '24') to target column names.
+    *   **Step 3**: Rename the source DataFrame columns using this mapping.
+    *   **Step 4**: Reorder the columns to match the exact target column order.
+    *   **Step 5**: Ensure the `date` column is formatted correctly (it already is in the source, but we should ensure it's a string object as per target schema).
+    *   **Step 6**: Return the DataFrame with the specified target columns.
+
+4.  **Handling the Row Count Discrepancy**:
+    *   The problem states source has 182 rows and target has 183. This usually implies that the target might include a date that isn't in the source, or vice versa. However, the instruction says "The function must compute its result SOLELY from the `source` argument". This implies we cannot add rows that don't exist in the source.
+    *   It is possible that the "183 rows" in the target description refers to the *full* target dataset which might include a header or an extra row not present in the *sample* source provided. Or, more likely, the test case `test_0.csv` will have a different number of rows, and the transformation logic must be generic.
+    *   Since we cannot generate data out of thin air, we assume the transformation is a direct mapping. If the target has more rows, it might be that the source provided in the prompt is just a *sample* and the actual `source` argument passed to the function will contain all necessary rows. The function should just process whatever is in `source`.
+
+5.  **Refining the Column Mapping**:
+    *   Source Columns: `['1', '2', ..., '24']`
+    *   Target Columns: `['1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+    *   Mapping:
+        *   '1' -> '1:00 AM'
+        *   '2' -> '2:00 AM'
+        *   '3' -> '3:00 AM'
+        *   '4' -> '4:00 AM'
+        *   '5' -> '5:00 AM'
+        *   '6' -> '6:00 AM'
+        *   '7' -> '7:00 AM'
+        *   '8' -> '8:00 AM'
+        *   '9' -> '9:00 AM'
+        *   '10' -> '10:00 AM'
+        *   '11' -> '11:00 AM'
+        *   '24' -> '12:00 AM'  (Midnight)
+        *   '13' -> '1:00 PM'
+        *   '14' -> '2:00 PM'
+        *   '15' -> '3:00 PM'
+        *   '16' -> '4:00 PM'
+        *   '17' -> '5:00 PM'
+        *   '18' -> '6:00 PM'
+        *   '19' -> '7:00 PM'
+        *   '20' -> '8:00 PM'
+        *   '21' -> '9:00 PM'
+        *   '22' -> '10:00 PM'
+        *   '23' -> '11:00 PM'
+        *   '12' -> '12:00 PM' (Noon)
+
+6.  **Implementation Details**:
+    *   Use `df.rename()` to map the numeric columns.
+    *   Use `df[['date', ...]]` to reorder and select columns.
+    *   Ensure `date` column is preserved.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # Define the target column names verbatim
+    target_columns = [
+        'date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', 
+        '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', 
+        '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', 
+        '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', 
+        '12:00 PM'
+    ]
+    
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # Rename the 'Date' column to 'date'
+    df = df.rename(columns={'Date': 'date'})
+    
+    # Define the mapping from source numeric columns to target time labels
+    # Source columns are strings '1' through '24'
+    col_mapping = {
+        '1': '1:00 AM',
+        '2': '2:00 AM',
+        '3': '3:00 AM',
+        '4': '4:00 AM',
+        '5': '5:00 AM',
+        '6': '6:00 AM',
+        '7': '7:00 AM',
+        '8': '8:00 AM',
+        '9': '9:00 AM',
+        '10': '10:00 AM',
+        '11': '11:00 AM',
+        '24': '12:00 AM',  # Midnight
+        '13': '1:00 PM',
+        '14': '2:00 PM',
+        '15': '3:00 PM',
+        '16': '4:00 PM',
+        '17': '5:00 PM',
+        '18': '6:00 PM',
+        '19': '7:00 PM',
+        '20': '8:00 PM',
+        '21': '9:00 PM',
+        '22': '10:00 PM',
+        '23': '11:00 PM',
+        '12': '12:00 PM'   # Noon
+    }
+    
+    # Apply the column renaming
+    df = df.rename(columns=col_mapping)
+    
+    # Select and reorder columns to match the target schema exactly
+    # Ensure 'date' is the first column, followed by the time columns in the specified order
+    df = df[target_columns]
+    
+    return df[target_columns]
+```

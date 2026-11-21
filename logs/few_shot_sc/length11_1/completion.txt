@@ -1,0 +1,124 @@
+Step-by-Step Reasoning Plan:
+1.  **Parse Timestamps**: The source column `time` contains datetime strings (e.g., '2012-07-02 00:15:00.000'). We need to extract the `month` and `hour` for the target table. We parse `time` into a pandas datetime object.
+2.  **Extract Month and Hour**:
+    *   `month`: Extract the month component (1-12) from the parsed datetime.
+    *   `hour`: Extract the hour component (0-23) from the parsed datetime.
+3.  **Map Source Columns to Target Columns**: The source table has many specific electricity usage columns. The target table aggregates these into broader categories. We need to sum specific source columns to create each target column. Based on the column names and typical energy end-use categories:
+    *   `hvac`: Sum of heating, cooling, and associated fans/pumps.
+        *   Source columns: `electricity_heating_kwh`, `electricity_cooling_kwh`, `electricity_fans_heating_kwh`, `electricity_fans_cooling_kwh`, `electricity_pumps_heating_kwh`, `electricity_pumps_cooling_kwh`.
+        *   Note: `electricity_central_system_*` columns are likely subsets of the general ones or redundant. Looking at the sample data, `electricity_heating_kwh` is much larger than `electricity_central_system_heating_kwh` in some rows, but in others, the central system might be the main contributor. However, usually, in these datasets, the top-level categories (`heating`, `cooling`) are the aggregates. Let's look closer. In the sample, `electricity_heating_kwh` (0.13) vs `electricity_central_system_heating_kwh` (0). In the Dec 31 row, `electricity_heating_kwh` (185821) vs `electricity_central_system_heating_kwh` (13187). It seems `electricity_heating_kwh` is the total. Same for cooling. What about fans and pumps? `electricity_fans_heating_kwh` and `electricity_fans_cooling_kwh` are separate. `electricity_pumps_heating_kwh` and `electricity_pumps_cooling_kwh` are separate.
+        *   Hypothesis: `hvac` = `electricity_heating_kwh` + `electricity_cooling_kwh` + `electricity_fans_heating_kwh` + `electricity_fans_cooling_kwh` + `electricity_pumps_heating_kwh` + `electricity_pumps_cooling_kwh`.
+        *   Let's check the `electricity_central_system_*` columns. Often these are components. If `heating` includes central, we shouldn't double count. Given the naming convention in EIA data, `electricity_heating_kwh` is usually the total site electricity for heating. The `central_system` variants are breakdowns. So we use the top-level ones.
+    *   `water_heating`: Corresponds to `electricity_water_systems_kwh`.
+    *   `refrigerator`: Corresponds to `electricity_refrigerator_kwh`.
+    *   `clothes_washer`: Corresponds to `electricity_clothes_washer_kwh`.
+    *   `clothes_dryer`: Corresponds to `electricity_clothes_dryer_kwh`.
+    *   `dishwasher`: Corresponds to `electricity_dishwasher_kwh`.
+    *   `cooking_range`: Corresponds to `electricity_cooking_range_kwh`.
+    *   `pool_spa_pumps`: Sum of pool and spa pumps.
+        *   Source columns: `electricity_pool_pump_kwh`, `electricity_hot_tub_pump_kwh`.
+    *   `interior_lighting`: Corresponds to `electricity_interior_lighting_kwh`.
+    *   `exterior_lighting`: Corresponds to `electricity_exterior_lighting_kwh`.
+    *   `lighting`: Sum of interior and exterior lighting.
+        *   Calculation: `interior_lighting` + `exterior_lighting`.
+    *   `plug`: Corresponds to `electricity_plug_loads_kwh`.
+    *   `pool_spa_heater`: Sum of pool and spa heaters.
+        *   Source columns: `electricity_pool_heater_kwh`, `electricity_hot_tub_heater_kwh`.
+
+4.  **Handle Aggregation/Grouping**: The target table has rows for each `month` and `hour`. The source table has 15-minute intervals. We need to aggregate the source data.
+    *   Looking at the target sample, there are multiple rows for the same `month` and `hour` (e.g., month 1, hour 0 appears 4 times in the sample snippet, corresponding to the 4 quarters of the hour: 00:00, 00:15, 00:30, 00:45).
+    *   Wait, the target sample shows 4 rows for month 1, hour 0. The source has 15-minute intervals.
+    *   Does the target aggregate by sum? Or is it just a reshape?
+    *   Let's check the values.
+        *   Target Row 1 (Month 1, Hour 0): `hvac` = 292848.
+        *   Source rows for Month 1, Hour 0 (Jan 1st 00:00, 00:15, 00:30, 00:45):
+            *   We don't have the exact Jan 1st source rows in the sample (sample starts July 2, ends Jan 1). But we can infer.
+            *   Let's look at Month 7, Hour 23 in the target.
+            *   Target Row 5 (Month 7, Hour 23): `hvac` = 562255.
+            *   Source rows for July 2nd (Month 7) are not in the sample.
+            *   Source rows for Dec 31 (Month 12) are in the sample.
+            *   Let's look at the structure. The target has the *same number of rows* as the source (17568 rows).
+            *   If the row counts are identical, and the source is 15-minute intervals, and the target has `month` and `hour`, it implies the target is NOT aggregating across intervals into a single row per hour. It is likely keeping the granularity but just changing the time representation.
+            *   However, the target columns are sums of specific source columns.
+            *   Let's re-read the target sample.
+                *   Row 1: Month 1, Hour 0.
+                *   Row 2: Month 1, Hour 0.
+                *   Row 3: Month 1, Hour 0.
+                *   Row 4: Month 1, Hour 1.
+            *   This suggests that for each source row, we calculate the target columns. The `month` and `hour` are derived from the `time` column. The other columns are calculated from the source columns.
+            *   Since the row count is preserved, we do **not** groupby. We perform row-wise calculations.
+
+5.  **Refining Column Mappings**:
+    *   `hvac`: `electricity_heating_kwh` + `electricity_cooling_kwh` + `electricity_fans_heating_kwh` + `electricity_fans_cooling_kwh` + `electricity_pumps_heating_kwh` + `electricity_pumps_cooling_kwh`.
+    *   `water_heating`: `electricity_water_systems_kwh`.
+    *   `refrigerator`: `electricity_refrigerator_kwh`.
+    *   `clothes_washer`: `electricity_clothes_washer_kwh`.
+    *   `clothes_dryer`: `electricity_clothes_dryer_kwh`.
+    *   `dishwasher`: `electricity_dishwasher_kwh`.
+    *   `cooking_range`: `electricity_cooking_range_kwh`.
+    *   `pool_spa_pumps`: `electricity_pool_pump_kwh` + `electricity_hot_tub_pump_kwh`.
+    *   `interior_lighting`: `electricity_interior_lighting_kwh`.
+    *   `exterior_lighting`: `electricity_exterior_lighting_kwh`.
+    *   `lighting`: `interior_lighting` + `exterior_lighting`.
+    *   `plug`: `electricity_plug_loads_kwh`.
+    *   `pool_spa_heater`: `electricity_pool_heater_kwh` + `electricity_hot_tub_heater_kwh`.
+
+6.  **Final Construction**:
+    *   Create the new DataFrame with the calculated columns.
+    *   Ensure column order matches the target schema exactly.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # Parse the time column to extract month and hour
+    dt = pd.to_datetime(df['time'])
+    df['month'] = dt.dt.month
+    df['hour'] = dt.dt.hour
+    
+    # Define HVAC components
+    hvac_components = [
+        'electricity_heating_kwh',
+        'electricity_cooling_kwh',
+        'electricity_fans_heating_kwh',
+        'electricity_fans_cooling_kwh',
+        'electricity_pumps_heating_kwh',
+        'electricity_pumps_cooling_kwh'
+    ]
+    df['hvac'] = df[hvac_components].sum(axis=1)
+    
+    # Define other end-use categories
+    df['water_heating'] = df['electricity_water_systems_kwh']
+    df['refrigerator'] = df['electricity_refrigerator_kwh']
+    df['clothes_washer'] = df['electricity_clothes_washer_kwh']
+    df['clothes_dryer'] = df['electricity_clothes_dryer_kwh']
+    df['dishwasher'] = df['electricity_dishwasher_kwh']
+    df['cooking_range'] = df['electricity_cooking_range_kwh']
+    
+    # Pool and Spa Pumps
+    df['pool_spa_pumps'] = df['electricity_pool_pump_kwh'] + df['electricity_hot_tub_pump_kwh']
+    
+    # Lighting
+    df['interior_lighting'] = df['electricity_interior_lighting_kwh']
+    df['exterior_lighting'] = df['electricity_exterior_lighting_kwh']
+    df['lighting'] = df['interior_lighting'] + df['exterior_lighting']
+    
+    # Plug loads
+    df['plug'] = df['electricity_plug_loads_kwh']
+    
+    # Pool and Spa Heaters
+    df['pool_spa_heater'] = df['electricity_pool_heater_kwh'] + df['electricity_hot_tub_heater_kwh']
+    
+    # Select and order columns to match target schema verbatim
+    target_columns = [
+        'month', 'hour', 'hvac', 'water_heating', 'refrigerator', 
+        'clothes_washer', 'clothes_dryer', 'dishwasher', 'cooking_range', 
+        'pool_spa_pumps', 'interior_lighting', 'exterior_lighting', 
+        'lighting', 'plug', 'pool_spa_heater'
+    ]
+    
+    return df[target_columns]
+```

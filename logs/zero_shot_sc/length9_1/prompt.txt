@@ -1,0 +1,52 @@
+### Benchmark Case: length9_1
+- Source sample rows: 118273 rows (Note: test_0.csv may have different row count)
+- Target rows: 118274 rows
+- Notice: Row count changes from 118273 to 118274. Check if an aggregation, grouping, or pivoting operation is required.
+
+### Exact Target Columns (Must match verbatim):
+['season', 'daytype', 'hour', 'temperature_range', 'constant', 'coefficient', 'low_end', 'high_end']
+
+### Source Schema and Types:
+PROFILE_CLASS (object), YEAR (float64), MONTH (float64), DAY (float64), HOUR (float64), NUMBER_OF_RANGES (float64), LOW_1 (float64), HIGH_1 (float64), LOW_2 (float64), HIGH_2 (float64), LOW_3 (float64), HIGH_3 (float64), LOW_4 (float64), HIGH_4 (float64), CONSTANT (float64), COEFF_1 (float64), COEFF_2 (float64), COEFF_3 (float64), COEFF_4 (float64), LOSS_FACTOR (float64)
+
+### Target Schema and Types:
+season (object), daytype (object), hour (float64), temperature_range (float64), constant (float64), coefficient (float64), low_end (float64), high_end (float64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- YEAR: [np.float64(2013.0)]
+- NUMBER_OF_RANGES: [np.float64(2.0), np.float64(1.0), np.float64(3.0), np.float64(4.0)]
+- LOW_1: [np.float64(-999.0)]
+- HIGH_3: [np.float64(99999.0), np.float64(58.03155), np.float64(59.62576), np.float64(62.56079), np.float64(51.56334), np.float64(63.73852), np.float64(71.40931), np.float64(68.58554), np.float64(56.13514), np.float64(59.68468)]
+- LOW_4: [np.float64(58.03156), np.float64(59.62577), np.float64(62.5608), np.float64(51.56335), np.float64(63.73853), np.float64(71.40932), np.float64(68.58555), np.float64(56.13515), np.float64(59.68469)]
+- HIGH_4: [np.float64(99999.0)]
+- COEFF_4: [np.float64(0.00815419), np.float64(0.00681975), np.float64(0.01450044), np.float64(-0.01502228), np.float64(0.04812772), np.float64(0.0497467), np.float64(0.63895173), np.float64(-0.02614165), np.float64(0.0254031)]
+- LOSS_FACTOR: [np.float64(1.05364821), np.float64(1.0268241), np.float64(1.08047231)]
+
+### Source Table Sample (training_0.csv):
+| PROFILE_CLASS   |   YEAR |   MONTH |   DAY |   HOUR |   NUMBER_OF_RANGES |   LOW_1 |     HIGH_1 |    LOW_2 |   HIGH_2 |   LOW_3 |   HIGH_3 |   LOW_4 |   HIGH_4 |   CONSTANT |    COEFF_1 |     COEFF_2 |   COEFF_3 |   COEFF_4 |   LOSS_FACTOR |
+|:----------------|-------:|--------:|------:|-------:|-------------------:|--------:|-----------:|---------:|---------:|--------:|---------:|--------:|---------:|-----------:|-----------:|------------:|----------:|----------:|--------------:|
+| MP1             |   2013 |       7 |     2 |   1400 |                  2 |    -999 |    79.9855 |  79.9855 |    99999 |     nan |      nan |     nan |      nan |  381.437   | -1.66558   |   3.46169   |       nan |       nan |       1.05365 |
+| MP1             |   2013 |       7 |     2 |   1500 |                  2 |    -999 |    82.3264 |  82.3264 |    99999 |     nan |      nan |     nan |      nan |  351.924   | -1.25004   |   3.9409    |       nan |       nan |       1.05365 |
+| MP1             |   2013 |       7 |     2 |   1600 |                  2 |    -999 |    83.5343 |  83.5343 |    99999 |     nan |      nan |     nan |      nan |  371.311   | -1.54315   |   4.33549   |       nan |       nan |       1.05365 |
+| MP1             |   2013 |       7 |     2 |   1700 |                  2 |    -999 |    83.3181 |  83.3181 |    99999 |     nan |      nan |     nan |      nan |  350.669   | -1.31365   |   3.6873    |       nan |       nan |       1.05365 |
+| TR3             |   2013 |      12 |    31 |   2100 |                  2 |    -999 |    34.4122 |  34.4122 |    99999 |     nan |      nan |     nan |      nan |    8.71115 | -0.144958  |  -0.0568543 |       nan |       nan |       1.08047 |
+| TR3             |   2013 |      12 |    31 |   2200 |                  2 |    -999 |    51.6824 |  51.6824 |    99999 |     nan |      nan |     nan |      nan |    8.5451  | -0.107529  |  -0.0449002 |       nan |       nan |       1.08047 |
+| TR3             |   2013 |      12 |    31 |   2300 |                  1 |    -999 | 99999      | nan      |      nan |     nan |      nan |     nan |      nan |    7.16973 | -0.0848945 | nan         |       nan |       nan |       1.08047 |
+| TR3             |   2013 |      12 |    31 |   2400 |                  2 |    -999 |    31.9617 |  31.9617 |    99999 |     nan |      nan |     nan |      nan |    7.15976 | -0.10344   |  -0.0756937 |       nan |       nan |       1.08047 |
+
+### Desired Target Table Sample (target.csv):
+| season   | daytype   |   hour |   temperature_range |   constant |   coefficient |   low_end |   high_end |
+|:---------|:----------|-------:|--------------------:|-----------:|--------------:|----------:|-----------:|
+| SPRING   | WEEKDAY   |    100 |              100998 |    27.1451 |     -0.16849  |      -999 |      99999 |
+| SPRING   | WEEKDAY   |    200 |              100998 |    26.9635 |     -0.175995 |      -999 |      99999 |
+| SPRING   | WEEKDAY   |    300 |              100998 |    27.0194 |     -0.182207 |      -999 |      99999 |
+| SPRING   | WEEKDAY   |    400 |              100998 |    26.4835 |     -0.177137 |      -999 |      99999 |
+| FALL     | WEEKDAY   |   1000 |              100998 |   430.454  |     -3.15842  |      -999 |      99999 |
+| FALL     | WEEKDAY   |   1100 |              100998 |   345.457  |     -1.4766   |      -999 |      99999 |
+| FALL     | WEEKDAY   |   1200 |              100998 |   389.22   |     -1.98785  |      -999 |      99999 |
+| FALL     | WEEKDAY   |   1300 |              100998 |   412.239  |     -2.17242  |      -999 |      99999 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

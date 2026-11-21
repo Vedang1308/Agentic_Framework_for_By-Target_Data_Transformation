@@ -1,0 +1,69 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Date Transformation**:
+    *   Source column `date` contains strings like '7/3/2014' (format `%m/%d/%Y`).
+    *   Target column `Date` contains strings like '2014-01-01 00:00:00' (format `%Y-%m-%d %H:%M:%S`).
+    *   Action: Parse the source `date` column into datetime objects using `pd.to_datetime`. Then, format these datetime objects into the target string format using `.dt.strftime('%Y-%m-%d %H:%M:%S')`.
+
+2.  **Analyze Hourly Column Mapping**:
+    *   Source has 24 hourly columns with names like '1:00 AM', '2:00 AM', ..., '12:00 PM', '1:00 PM', ..., '11:00 PM'. Note that '12:00 AM' represents the first hour (Hour 1) and '12:00 PM' represents the twelfth hour (Hour 12).
+    *   Target has 24 hourly columns named 'Hr 1' through 'Hr 24'.
+    *   We need to map the source column names to the target column names based on the 24-hour clock logic:
+        *   '12:00 AM' -> 'Hr 1'
+        *   '1:00 AM' -> 'Hr 2'
+        *   ...
+        *   '11:00 AM' -> 'Hr 11'
+        *   '12:00 PM' -> 'Hr 12'
+        *   '1:00 PM' -> 'Hr 13'
+        *   ...
+        *   '11:00 PM' -> 'Hr 24'
+    *   Action: Create a dictionary mapping each source column name to the corresponding 'Hr X' name.
+
+3.  **Handle Extra Columns**:
+    *   Source has a column `DSL` which is not present in the target.
+    *   Action: Drop the `DSL` column or simply exclude it from the final selection.
+
+4.  **Construct Final DataFrame**:
+    *   Rename the hourly columns.
+    *   Create the new `Date` column.
+    *   Select the columns in the exact order specified by the target schema: `['Date', 'Hr 1', ..., 'Hr 24']`.
+
+5.  **Verification**:
+    *   The row count change mentioned in the prompt (182 to 183) might be due to the specific sample data provided or a slight discrepancy in the problem description vs sample. However, since the transformation is row-wise (no aggregation or grouping is indicated by the schema structure), we assume a 1-to-1 row mapping. The code will process all rows in the source.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse and format the date column
+    # Source format: '7/3/2014' (%m/%d/%Y)
+    # Target format: '2014-01-01 00:00:00' (%Y-%m-%d %H:%M:%S)
+    dt = pd.to_datetime(df['date'])
+    df['Date'] = dt.dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Map source hourly columns to target hourly columns
+    # Source columns: '12:00 AM', '1:00 AM', ..., '11:00 AM', '12:00 PM', '1:00 PM', ..., '11:00 PM'
+    # Target columns: 'Hr 1', 'Hr 2', ..., 'Hr 11', 'Hr 12', 'Hr 13', ..., 'Hr 24'
+    
+    rename_dict = {}
+    
+    # AM hours: 12:00 AM is Hr 1, 1:00 AM is Hr 2, ..., 11:00 AM is Hr 11
+    rename_dict['12:00 AM'] = 'Hr 1'
+    for i in range(1, 12):
+        rename_dict[f'{i}:00 AM'] = f'Hr {i + 1}'
+        
+    # PM hours: 12:00 PM is Hr 12, 1:00 PM is Hr 13, ..., 11:00 PM is Hr 24
+    rename_dict['12:00 PM'] = 'Hr 12'
+    for i in range(1, 12):
+        rename_dict[f'{i}:00 PM'] = f'Hr {i + 12}'
+        
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define target columns in the correct order
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # 4. Return the transformed dataframe with only the target columns
+    return df[target_columns]
+```

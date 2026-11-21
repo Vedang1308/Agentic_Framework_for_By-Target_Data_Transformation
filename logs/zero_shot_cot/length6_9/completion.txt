@@ -1,0 +1,72 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Datetime**: The source column `date` is a string in the format `%m/%d/%Y %H:%M`. We need to parse this into a proper datetime object to extract the date and hour components.
+2.  **Extract Date and Hour**:
+    *   Extract the date part (year, month, day) to group by.
+    *   Extract the hour part (0-23) to determine which "Hr X" column the data belongs to. Note that the target columns are 1-indexed ("Hr 1" to "Hr 24"), while pandas `dt.hour` is 0-indexed (0-23). So, `Hr 1` corresponds to hour 0, `Hr 2` to hour 1, ..., `Hr 24` to hour 23.
+3.  **Handle Missing Values**: The source data contains `nan` values. We should preserve these as `NaN` in the output unless an aggregation function like `mean` or `sum` is implied. Looking at the target sample, `Hr 1` for `01/02/2018` is `67.9`. In the source, there are multiple rows for `1/2/2018 0:11`, `0:12`, etc., all with value `67.9`. This suggests that for each date and hour, we need to aggregate the values. Since the values are constant within the hour in the sample, `mean`, `first`, or `last` would yield the same result. However, typically in such time-series pivoting, if there are multiple readings per hour, an average (`mean`) is a safe default, or simply taking the first non-null value. Let's look closer. The source has minute-level granularity. The target has hour-level granularity. We need to aggregate minute-level data into hour-level data. `mean` is a robust choice for sensor data like `zone_016`.
+4.  **Pivot/Reshape**:
+    *   Group by the extracted Date and Hour.
+    *   Aggregate the `zone_016` values. Given the sample shows specific values for each hour, and multiple minutes map to one hour, we will use `mean()` to aggregate. If there's only one value, mean is that value. If there are NaNs, mean ignores them (unless all are NaN).
+    *   Pivot the data so that the unique Hours become columns.
+5.  **Format Columns**:
+    *   The pivot will likely create columns named 0, 1, ..., 23.
+    *   Rename these columns to match the target schema: `Hr 1`, `Hr 2`, ..., `Hr 24`.
+6.  **Format Date Column**:
+    *   The index or a column representing the date needs to be formatted as `%m/%d/%Y` (e.g., `01/02/2018`).
+    *   Ensure the date column is named `Date`.
+7.  **Reindex and Clean**:
+    *   Ensure all 24 hour columns are present, even if some hours have no data (fill with NaN).
+    *   Sort the dataframe by Date if necessary (though the target sample isn't strictly sorted by date, it's good practice. The sample shows `01/02` then `01/01`, which is reverse chronological or just arbitrary. We will stick to the natural order or sort by date descending if that matches the sample pattern, but usually, standard ascending sort is safer unless specified. Looking at the sample: `01/02/2018` is first, `01/01/2018` is second. This is reverse chronological. I will sort by Date descending to match the sample order, although the problem doesn't explicitly demand sorting, matching the sample is a good heuristic).
+8.  **Final Output**: Return the dataframe with the exact target column names.
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # 1. Parse the date column
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract Date and Hour
+    # Target Date format is %m/%d/%Y
+    df['Date'] = df['datetime'].dt.strftime('%m/%d/%Y')
+    # Target Hours are 1-24, pandas hour is 0-23. 
+    # We map hour 0 -> 'Hr 1', hour 1 -> 'Hr 2', etc.
+    df['Hour_Label'] = df['datetime'].dt.hour + 1
+    
+    # 3. Aggregate data
+    # We group by Date and Hour_Label and take the mean of zone_016.
+    # This handles multiple minute entries per hour.
+    agg_df = df.groupby(['Date', 'Hour_Label'])['zone_016'].mean().reset_index()
+    
+    # 4. Pivot the data
+    # Rows: Date, Columns: Hour_Label, Values: zone_016
+    pivot_df = agg_df.pivot(index='Date', columns='Hour_Label', values='zone_016')
+    
+    # 5. Rename columns to match target schema 'Hr 1', 'Hr 2', ...
+    # The columns are currently integers 1-24.
+    pivot_df.columns = [f'Hr {int(col)}' for col in pivot_df.columns]
+    
+    # 6. Ensure all 24 hour columns exist, filling missing ones with NaN
+    target_hour_cols = [f'Hr {i}' for i in range(1, 25)]
+    pivot_df = pivot_df.reindex(columns=target_hour_cols)
+    
+    # 7. Reset index to make 'Date' a column
+    pivot_df = pivot_df.reset_index()
+    
+    # 8. Sort by Date descending to match the sample order (01/02 before 01/01)
+    # The sample shows 01/02/2018 then 01/01/2018.
+    pivot_df = pivot_df.sort_values(by='Date', ascending=False).reset_index(drop=True)
+    
+    # 9. Define target columns
+    target_columns = ['Date', 'Hr 1', 'Hr 2', 'Hr 3', 'Hr 4', 'Hr 5', 'Hr 6', 'Hr 7', 'Hr 8', 'Hr 9', 'Hr 10', 'Hr 11', 'Hr 12', 'Hr 13', 'Hr 14', 'Hr 15', 'Hr 16', 'Hr 17', 'Hr 18', 'Hr 19', 'Hr 20', 'Hr 21', 'Hr 22', 'Hr 23', 'Hr 24']
+    
+    # 10. Return the final dataframe
+    return pivot_df[target_columns]
+```

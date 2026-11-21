@@ -1,0 +1,108 @@
+### Reasoning Plan
+
+1.  **Analyze Source and Target Structures**:
+    *   **Source**: Contains metadata columns (`class`, `Description`, `analysis`, `uom`) and a `date` column. It also has 24 value columns (`value1` to `value24`) representing hourly data for each date.
+    *   **Target**: Contains a `cst` column (formatted date) and 24 columns named `'1:00'` to `'24:00'`.
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target table includes all dates within a specific range (likely a full year, e.g., 2011), whereas the source might be missing some dates (e.g., holidays or missing data points). Since the transformation must be general, we need to ensure we generate rows for all dates in the range covered by the source data, or simply process the existing rows if the "missing" row is an artifact of the specific sample provided vs the full test set. However, looking at the sample, the source dates are sparse (July and December 2011), while the target starts from Jan 1, 2011. This implies the target represents a complete calendar for the year(s) present in the data.
+    *   *Correction/Refinement*: In many TbT tasks, if the target has more rows than the source, it often implies a "reindex" operation where missing dates are filled with NaNs or zeros, or the source is just a subset of a larger context. However, the prompt says "transform the source DataFrame". If the source *only* has 182 rows, we cannot magically invent data for Jan 1, 2011 if it's not in the source.
+    *   *Re-evaluating the "182 vs 183" note*: The note says "Source sample rows: 182... Target rows: 183". The sample provided in the prompt shows source rows for July and Dec. The target sample shows rows starting from Jan 1. This is a contradiction if we assume the source provided is the *only* data.
+    *   *Hypothesis*: The `source` DataFrame passed to the function likely contains *all* the data needed, but the *sample* shown in the prompt description is truncated or illustrative. Or, more likely, the "182 vs 183" discrepancy is due to a specific date missing in the source sample provided in the text description but present in the actual test file, or vice versa.
+    *   *Standard Approach*: We should process the rows present in the `source`. If the target expects a complete calendar, we might need to generate a date range. However, without knowing the exact start/end dates from metadata, the safest generalizable transformation is to reshape the existing data. If the test case requires filling missing dates, the source usually contains the full range. Let's look at the target sample again. It has `Sat 01/01/2011`. The source sample *does not* have Jan 1, 2011. This suggests the source data in the *actual* test file (`test_0.csv`) will likely contain the Jan 1 row, or the transformation involves generating a complete calendar based on the min/max dates found in the source.
+    *   *Decision*: I will assume the source contains the data for the rows that appear in the target. The discrepancy in the prompt's "sample" vs "target" might be because the prompt's source sample is just a snippet, while the actual `source` argument will contain the full dataset including Jan 1. I will proceed by reshaping the source data. If the source is missing dates, I will create a complete date range from the min to max date in the source and merge/reindex to ensure all dates are present (filling with NaN if necessary), as this handles the "182 to 183" row count increase scenario robustly.
+
+2.  **Step-by-Step Transformation**:
+    *   **Parse Dates**: Convert the `date` column from string (`%m/%d/%Y`) to `datetime` objects.
+    *   **Select Value Columns**: Identify columns `value1` through `value24`.
+    *   **Rename Value Columns**: Rename `value1` to `'1:00'`, `value2` to `'2:00'`, ..., `value24` to `'24:00'`.
+    *   **Create Index**: Set the parsed `date` as the index to facilitate reindexing.
+    *   **Generate Complete Date Range**: Create a `DatetimeIndex` covering the full range from the minimum date to the maximum date in the source data (inclusive). This ensures that if the source is missing a day (like the 182 vs 183 case), it gets added.
+    *   **Reindex**: Reindex the DataFrame to this complete date range. This will add rows for missing dates with NaN values.
+    *   **Format Date Column**: Create the `cst` column by formatting the index (date) into `'%a %m/%d/%Y'`. Note: `%a` gives the abbreviated weekday name (e.g., Sat).
+    *   **Reset Index**: Reset the index to make `cst` a regular column.
+    *   **Select and Order Columns**: Ensure the final output has the columns `['cst', '1:00', ..., '24:00']` in the correct order.
+    *   **Return**: Return the final DataFrame.
+
+3.  **Refining the Date Formatting**:
+    *   Source: `7/3/2011` -> `Sat 07/03/2011`?
+    *   Target Sample: `Sat 01/01/2011`.
+    *   Python's `strftime('%a')` returns 'Sat', 'Sun', etc.
+    *   Python's `strftime('%m/%d/%Y')` returns '01/01/2011'.
+    *   Combined: `df.index.strftime('%a %m/%d/%Y')`.
+
+4.  **Handling the "182 to 183" Row Count**:
+    *   By creating a `date_range` from `min_date` to `max_date` with `freq='D'`, we guarantee that every single day in that span is present in the output. If the source had 182 days but the span is 183 days, the reindex will add the missing day. This is the most logical explanation for the row count increase.
+
+5.  **Code Construction**:
+    *   Import pandas.
+    *   Define `transform`.
+    *   Parse dates.
+    *   Define target column names for values.
+    *   Rename and select.
+    *   Set index, create date range, reindex.
+    *   Format `cst`.
+    *   Return result.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame format.
+    
+    Steps:
+    1. Parse the 'date' column to datetime.
+    2. Select and rename the value columns (value1 -> 1:00, etc.).
+    3. Set the date as the index.
+    4. Generate a complete date range from min to max date in the source to handle missing days.
+    5. Reindex the DataFrame to this complete range.
+    6. Format the date index into the 'cst' column format ('%a %m/%d/%Y').
+    7. Reset index and return the DataFrame with specified columns.
+    """
+    
+    # 1. Parse the date column
+    source = source.copy()
+    source['date'] = pd.to_datetime(source['date'], format='%m/%d/%Y')
+    
+    # 2. Define the target value columns
+    # The source has value1 to value24. Target has 1:00 to 24:00.
+    value_cols = [f'value{i}' for i in range(1, 25)]
+    target_value_cols = [f'{i}:00' for i in range(1, 25)]
+    
+    # 3. Select only the necessary columns for reshaping
+    df = source[['date'] + value_cols].copy()
+    
+    # 4. Rename the value columns
+    rename_map = {f'value{i}': f'{i}:00' for i in range(1, 25)}
+    df.rename(columns=rename_map, inplace=True)
+    
+    # 5. Set date as index
+    df.set_index('date', inplace=True)
+    
+    # 6. Handle missing dates (182 rows -> 183 rows scenario)
+    # Create a complete date range from the min date to the max date in the data
+    min_date = df.index.min()
+    max_date = df.index.max()
+    
+    # Ensure the range includes both endpoints
+    complete_date_range = pd.date_range(start=min_date, end=max_date, freq='D')
+    
+    # Reindex to fill in missing days with NaN
+    df = df.reindex(complete_date_range)
+    
+    # 7. Create the 'cst' column
+    # Format: '%a %m/%d/%Y' (e.g., Sat 01/01/2011)
+    # %a gives abbreviated weekday name
+    df['cst'] = df.index.strftime('%a %m/%d/%Y')
+    
+    # 8. Reset index to make date a regular column (though we replaced it with cst)
+    # Actually, we just need 'cst' and the value columns.
+    # The index is no longer needed as a separate column if we have 'cst'.
+    df.reset_index(drop=True, inplace=True)
+    
+    # 9. Define the final column order
+    target_columns = ['cst'] + target_value_cols
+    
+    # 10. Return the DataFrame with the exact target columns
+    return df[target_columns]
+```

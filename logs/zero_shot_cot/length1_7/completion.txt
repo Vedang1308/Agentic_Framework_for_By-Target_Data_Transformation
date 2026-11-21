@@ -1,0 +1,67 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source Columns**: `Segment`, `Date`, `1:00` through `23:00`, and `24:00:00`.
+    *   **Target Columns**: `cst`, `1:00` through `23:00`, and `24:00`.
+    *   **Observation**: The target table has the same number of rows as the source table (2465 rows). This suggests a row-wise transformation rather than an aggregation or reshaping operation that changes the row count.
+    *   **Column Mapping**:
+        *   Source `Date` -> Target `cst`. The format appears to be preserved (`%a %m/%d/%Y`).
+        *   Source `1:00` to `23:00` -> Target `1:00` to `23:00`. These column names match exactly.
+        *   Source `24:00:00` -> Target `24:00`. The column name needs to be renamed.
+        *   Source `Segment` is dropped in the target.
+
+2.  **Verify Data Values**:
+    *   Looking at the sample data, the values in the time columns (e.g., `1:00`, `2:00`) in the target correspond directly to the values in the source for the same rows. There is no indication of calculation, averaging, or filtering based on the `Segment` column (which is constant 'RS6' in the sample, but even if it varied, the row count preservation suggests we keep all rows).
+    *   The `Date` column in the source is already in the format required for `cst` (e.g., 'Thu 10/01/2009'). No parsing or reformatting is strictly necessary unless there are hidden inconsistencies, but given the "verbatim" requirement and sample match, a direct copy/rename is sufficient.
+
+3.  **Transformation Steps**:
+    *   **Step 1**: Create a copy of the source DataFrame to avoid modifying the original.
+    *   **Step 2**: Rename the `Date` column to `cst`.
+    *   **Step 3**: Rename the `24:00:00` column to `24:00`.
+    *   **Step 4**: Drop the `Segment` column as it is not present in the target.
+    *   **Step 5**: Ensure the column order matches the target schema exactly. The target schema lists `cst` first, followed by the time columns in chronological order.
+    *   **Step 6**: Return the DataFrame with the specific target columns.
+
+4.  **Refinement**:
+    *   The source column `24:00:00` is distinct from `24:00`.
+    *   The target column `cst` corresponds to source `Date`.
+    *   All other time columns `1:00` to `23:00` remain unchanged.
+
+5.  **Final Code Structure**:
+    *   Define `target_columns` list.
+    *   Perform renames.
+    *   Drop unused columns.
+    *   Select and reorder columns.
+    *   Return result.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    # Define the exact target column names
+    target_columns = [
+        'cst', '1:00', '2:00', '3:00', '4:00', '5:00', '6:00', '7:00', 
+        '8:00', '9:00', '10:00', '11:00', '12:00', '13:00', '14:00', 
+        '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00', 
+        '22:00', '23:00', '24:00'
+    ]
+    
+    # Create a copy to avoid modifying the original source
+    df = source.copy()
+    
+    # Rename 'Date' to 'cst'
+    df = df.rename(columns={'Date': 'cst'})
+    
+    # Rename '24:00:00' to '24:00'
+    df = df.rename(columns={'24:00:00': '24:00'})
+    
+    # Drop the 'Segment' column as it is not in the target
+    if 'Segment' in df.columns:
+        df = df.drop(columns=['Segment'])
+    
+    # Select and reorder columns to match the target schema exactly
+    df = df[target_columns]
+    
+    return df[target_columns]
+```

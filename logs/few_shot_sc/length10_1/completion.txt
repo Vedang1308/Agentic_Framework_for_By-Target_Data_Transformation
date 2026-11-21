@@ -1,0 +1,115 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Date/Time Column**: The source column `time` contains strings like `'2012-07-02 00:15:00.000'`. The target column `datetime` requires the format `'%Y-%m-%d %H:%M:%S'`. We need to parse the source string into a datetime object and then format it, removing the milliseconds.
+2.  **Map Source Columns to Target Columns**: We need to identify which source columns correspond to which target columns. Based on naming conventions and typical energy load disaggregation datasets (like CEL or EIA forms):
+    *   `hvac`: This is likely an aggregate of heating and cooling components. Looking at the source, we have `electricity_heating_kwh`, `electricity_cooling_kwh`, `electricity_fans_heating_kwh`, `electricity_fans_cooling_kwh`, `electricity_pumps_heating_kwh`, `electricity_pumps_cooling_kwh`. Often, "HVAC" in these summaries includes the main heating/cooling loads plus associated fans and pumps. Let's look at the sample data to verify.
+        *   Target `hvac` for `2012-01-01 00:15:00` is `292848`.
+        *   Source for that row (need to find matching row in source sample, but source sample starts at July/Dec). Let's look at the structure.
+        *   Usually, `hvac` = `electricity_heating_kwh` + `electricity_cooling_kwh` + `electricity_fans_heating_kwh` + `electricity_fans_cooling_kwh` + `electricity_pumps_heating_kwh` + `electricity_pumps_cooling_kwh`. Let's check if there are other components. Sometimes it excludes specific sub-components if they are listed separately, but here `fans` and `pumps` are specific to heating/cooling.
+        *   Let's check `water_heating`. Source has `electricity_water_systems_kwh`. Target `water_heating` matches this directly.
+        *   `refrigerator`: Source `electricity_refrigerator_kwh`.
+        *   `clothes_washer`: Source `electricity_clothes_washer_kwh`.
+        *   `clothes_dryer`: Source `electricity_clothes_dryer_kwh`.
+        *   `dishwasher`: Source `electricity_dishwasher_kwh`.
+        *   `cooking_range`: Source `electricity_cooking_range_kwh`.
+        *   `pool_spa_pumps`: Source has `electricity_pool_pump_kwh` and `electricity_hot_tub_pump_kwh`. Target likely sums these.
+        *   `interior_lighting`: Source `electricity_interior_lighting_kwh`.
+        *   `exterior_lighting`: Source `electricity_exterior_lighting_kwh`.
+        *   `lighting`: Target has `interior_lighting`, `exterior_lighting`, AND `lighting`. This suggests `lighting` is the sum of interior and exterior.
+        *   `plug`: Source `electricity_plug_loads_kwh`.
+        *   `pool_spa_heater`: Source has `electricity_pool_heater_kwh` and `electricity_hot_tub_heater_kwh`. Target likely sums these.
+    *   Let's refine `hvac`. In many EIA/CEL datasets, the "HVAC" category often aggregates the central system heating/cooling, fans, and pumps.
+        *   Components: `electricity_heating_kwh`, `electricity_cooling_kwh`, `electricity_fans_heating_kwh`, `electricity_fans_cooling_kwh`, `electricity_pumps_heating_kwh`, `electricity_pumps_cooling_kwh`.
+        *   Note: There are also `electricity_central_system_heating_kwh`, `electricity_central_system_cooling_kwh`, `electricity_central_system_pumps_heating_kwh`, `electricity_central_system_pumps_cooling_kwh`. Usually, the non-central columns are the totals or the primary ones. In the sample, `electricity_heating_kwh` is `0.13` while `electricity_central_system_heating_kwh` is `0`. This suggests the `electricity_heating_kwh` column is the total heating load. Similarly for cooling. So we should use the non-central columns.
+        *   Hypothesis: `hvac` = `electricity_heating_kwh` + `electricity_cooling_kwh` + `electricity_fans_heating_kwh` + `electricity_fans_cooling_kwh` + `electricity_pumps_heating_kwh` + `electricity_pumps_cooling_kwh`.
+    *   Let's refine `pool_spa_pumps`. Source: `electricity_pool_pump_kwh` + `electricity_hot_tub_pump_kwh`.
+    *   Let's refine `pool_spa_heater`. Source: `electricity_pool_heater_kwh` + `electricity_hot_tub_heater_kwh`.
+    *   Let's refine `lighting`. Source: `electricity_interior_lighting_kwh` + `electricity_exterior_lighting_kwh`.
+
+3.  **Construct the DataFrame**:
+    *   Create `datetime` column from `time`.
+    *   Create `hvac` by summing the 6 HVAC-related columns.
+    *   Create `water_heating` from `electricity_water_systems_kwh`.
+    *   Create `refrigerator` from `electricity_refrigerator_kwh`.
+    *   Create `clothes_washer` from `electricity_clothes_washer_kwh`.
+    *   Create `clothes_dryer` from `electricity_clothes_dryer_kwh`.
+    *   Create `dishwasher` from `electricity_dishwasher_kwh`.
+    *   Create `cooking_range` from `electricity_cooking_range_kwh`.
+    *   Create `pool_spa_pumps` by summing `electricity_pool_pump_kwh` and `electricity_hot_tub_pump_kwh`.
+    *   Create `interior_lighting` from `electricity_interior_lighting_kwh`.
+    *   Create `exterior_lighting` from `electricity_exterior_lighting_kwh`.
+    *   Create `lighting` by summing `interior_lighting` and `exterior_lighting`.
+    *   Create `plug` from `electricity_plug_loads_kwh`.
+    *   Create `pool_spa_heater` by summing `electricity_pool_heater_kwh` and `electricity_hot_tub_heater_kwh`.
+
+4.  **Final Selection**: Select the columns in the exact order specified by the target schema.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Process datetime
+    # Source 'time' is like '2012-07-02 00:15:00.000'
+    # Target 'datetime' is '2012-01-01 00:15:00'
+    df['datetime'] = pd.to_datetime(df['time']).dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Map and Aggregate Columns
+    
+    # HVAC: Sum of heating, cooling, fans, and pumps
+    hvac_cols = [
+        'electricity_heating_kwh',
+        'electricity_cooling_kwh',
+        'electricity_fans_heating_kwh',
+        'electricity_fans_cooling_kwh',
+        'electricity_pumps_heating_kwh',
+        'electricity_pumps_cooling_kwh'
+    ]
+    df['hvac'] = df[hvac_cols].sum(axis=1)
+    
+    # Water Heating
+    df['water_heating'] = df['electricity_water_systems_kwh']
+    
+    # Refrigerator
+    df['refrigerator'] = df['electricity_refrigerator_kwh']
+    
+    # Clothes Washer
+    df['clothes_washer'] = df['electricity_clothes_washer_kwh']
+    
+    # Clothes Dryer
+    df['clothes_dryer'] = df['electricity_clothes_dryer_kwh']
+    
+    # Dishwasher
+    df['dishwasher'] = df['electricity_dishwasher_kwh']
+    
+    # Cooking Range
+    df['cooking_range'] = df['electricity_cooking_range_kwh']
+    
+    # Pool/Spa Pumps: Sum of pool pump and hot tub pump
+    df['pool_spa_pumps'] = df['electricity_pool_pump_kwh'] + df['electricity_hot_tub_pump_kwh']
+    
+    # Interior Lighting
+    df['interior_lighting'] = df['electricity_interior_lighting_kwh']
+    
+    # Exterior Lighting
+    df['exterior_lighting'] = df['electricity_exterior_lighting_kwh']
+    
+    # Lighting: Sum of interior and exterior
+    df['lighting'] = df['interior_lighting'] + df['exterior_lighting']
+    
+    # Plug Loads
+    df['plug'] = df['electricity_plug_loads_kwh']
+    
+    # Pool/Spa Heater: Sum of pool heater and hot tub heater
+    df['pool_spa_heater'] = df['electricity_pool_heater_kwh'] + df['electricity_hot_tub_heater_kwh']
+    
+    # 3. Define target columns and return
+    target_columns = [
+        'datetime', 'hvac', 'water_heating', 'refrigerator', 'clothes_washer', 
+        'clothes_dryer', 'dishwasher', 'cooking_range', 'pool_spa_pumps', 
+        'interior_lighting', 'exterior_lighting', 'lighting', 'plug', 'pool_spa_heater'
+    ]
+    
+    return df[target_columns]
+```

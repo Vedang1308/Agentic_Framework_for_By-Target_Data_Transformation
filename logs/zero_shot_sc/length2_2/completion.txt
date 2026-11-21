@@ -1,0 +1,169 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Understand the Goal**: The objective is to transform a source DataFrame containing hourly energy load data (one row per day, 24 columns for each hour) into a target DataFrame that appears to be a pivot or reshaped version, but with a specific structure: one row per day, with columns for `dt_strata` (date), `dow` (day of week), and 25 percentage/hourly columns (`pct_hourly_0100` to `pct_hourly_2500`).
+
+2.  **Analyze Source Schema**:
+    *   `date`: String format 'M/D/YYYY'.
+    *   `value1` to `value24`: Floats representing hourly data. Based on typical energy data conventions, `value1` usually corresponds to 00:00-01:00 (or 1st hour of the day), `value2` to 01:00-02:00, etc. However, the target columns are named `pct_hourly_0100`, `pct_hourly_0200`, ..., `pct_hourly_2400`.
+    *   Let's map the source values to target columns.
+        *   Source `value1` -> Target `pct_hourly_0100`? Or does `value1` correspond to hour 1 (01:00)?
+        *   Standard convention: `value1` is often the first hour of the day (00:00-01:00). But the target column `pct_hourly_0100` suggests the hour ending at 01:00 or starting at 01:00.
+        *   Let's look at the sample data.
+        *   Source row `7/3/2011` has `value1=1.0243`.
+        *   Target row `7/2/2011` has `pct_hourly_0100=0.8341`. Wait, the target sample starts with `1/1/2011`. The source sample has `7/3/2011`.
+        *   Let's check the row count. Source has 182 rows. Target has 183 rows. This implies the target might include an extra row or the source sample provided is just a subset.
+        *   Let's look at the mapping of hours.
+        *   Source columns: `value1` ... `value24`.
+        *   Target columns: `pct_hourly_0100` ... `pct_hourly_2400` and `pct_hourly_2500`.
+        *   There are 24 source value columns and 25 target hourly columns.
+        *   The last target column `pct_hourly_2500` has integer type `int64` and value `0` in all sample rows. This suggests it's a placeholder or a calculated field that is always 0 in this context.
+        *   The first 24 target hourly columns likely correspond to the 24 source value columns.
+        *   Mapping hypothesis: `value1` -> `pct_hourly_0100`, `value2` -> `pct_hourly_0200`, ..., `value24` -> `pct_hourly_2400`.
+        *   Let's verify with the sample data if possible. The source sample doesn't contain `1/1/2011`, so we can't directly cross-reference values. However, the column names strongly suggest a direct 1-to-1 mapping where `valueN` maps to `pct_hourly_{N:04d}00`.
+
+3.  **Analyze Date and Day of Week**:
+    *   Source `date` is 'M/D/YYYY'.
+    *   Target `dt_strata` is 'M/D/YYYY'.
+    *   Target `dow` is an integer. In Python `pandas`, `dt.dayofweek` returns 0 for Monday, 6 for Sunday. `dt.weekday` is the same.
+    *   Let's check the target sample: `1/1/2011` has `dow=6`. January 1, 2011 was a Saturday.
+        *   If Monday=0, Saturday=5.
+        *   If Sunday=0, Saturday=6.
+        *   So `dow` seems to be 0=Sunday, 1=Monday, ..., 6=Saturday.
+        *   Pandas `dt.dayofweek` (Mon=0) would give 5 for Saturday.
+        *   Pandas `dt.weekday` (Mon=0) would give 5 for Saturday.
+        *   Excel/Python `datetime.weekday()` (Mon=0) gives 5.
+        *   Python `datetime.isoweekday()` (Mon=1) gives 6 for Saturday.
+        *   So `dow` is likely `isoweekday()` where Monday=1, Sunday=7? No, Saturday is 6.
+        *   Wait, `1/1/2011` is Saturday. `dow=6`.
+        *   `1/2/2011` is Sunday. `dow=7`? The sample shows `dow=7` for `1/2/2011`? No, sample shows `1/2/2011` has `dow=7`? Let's check the sample again.
+        *   Sample: `1/1/2011` -> `dow=6`. `1/2/2011` -> `dow=7`. `1/3/2011` -> `dow=1`.
+        *   This pattern (Sat=6, Sun=7, Mon=1) is unusual.
+        *   Let's re-read the sample carefully.
+        *   `1/1/2011` (Sat) -> 6
+        *   `1/2/2011` (Sun) -> 7
+        *   `1/3/2011` (Mon) -> 1
+        *   `1/4/2011` (Tue) -> 2
+        *   `6/29/2011` (Wed) -> 3
+        *   `6/30/2011` (Thu) -> 4
+        *   `7/1/2011` (Fri) -> 5
+        *   `7/2/2011` (Sat) -> 6
+        *   This mapping is: Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6, Sun=7.
+        *   This is exactly `dt.isoweekday()`.
+
+4.  **Handling the Extra Column (`pct_hourly_2500`)**:
+    *   The target has `pct_hourly_2500` which is always `0` (int64).
+    *   We need to add this column and fill it with 0.
+
+5.  **Handling Row Count Difference**:
+    *   Source: 182 rows. Target: 183 rows.
+    *   The target sample shows dates starting from `1/1/2011`.
+    *   The source sample shows dates starting from `7/3/2011` but also includes `12/28/2011` etc.
+    *   The source likely contains all days of the year 2011 (365 days) or a subset.
+    *   If the source has 182 rows and target has 183, there might be a missing day in the source that is filled in the target, or vice versa.
+    *   However, the instruction says "The function must compute its result SOLELY from the `source` argument". It does not say we can infer missing dates.
+    *   Usually, in these benchmarks, if the row count changes, it's due to aggregation or reshaping. Here, we are not aggregating multiple rows into one. We are transforming one row to one row.
+    *   Is it possible the source has duplicate dates? No, `date` seems unique per row in the sample.
+    *   Is it possible the target includes a summary row? The last column `pct_hourly_2500` is 0 for all rows.
+    *   Let's look at the target sample again. It has 8 rows shown.
+    *   The source sample has 8 rows shown.
+    *   The row count difference (182 vs 183) might be a red herring or due to a specific date range (e.g., Feb 29th in a leap year? 2011 is not a leap year. 2012 is. If the data spans 2011-2012, there might be 366 days).
+    *   Actually, 2011 has 365 days. 182 rows is roughly half a year.
+    *   If the source is missing one day that is in the target, we can't generate it from the source.
+    *   However, if the transformation is strictly row-wise, we should just process the rows present in the source.
+    *   Wait, look at the target columns again. `pct_hourly_0100` to `pct_hourly_2400`.
+    *   Maybe the source `value1` corresponds to `pct_hourly_0100`?
+    *   Let's assume the transformation is a direct column rename and date processing.
+    *   If the row counts differ, it might be because the source has a different set of dates than the target sample implies, or the target includes an extra row (like a total or average) which is not obvious here.
+    *   Given the constraints, I will assume the transformation applies to each row in the source. If the target has more rows, it might be that the source provided in the "Sample" is incomplete, but the function should process *all* rows in the input `source`.
+    *   Actually, looking at similar problems, sometimes the "Target" includes a row for a date that wasn't in the source sample but is in the full dataset. The function should just process the input.
+    *   I will proceed with a row-wise transformation.
+
+6.  **Implementation Steps**:
+    *   Parse `date` column to datetime.
+    *   Create `dt_strata` by formatting datetime back to 'M/D/YYYY' (or keeping as string if format matches). The source is 'M/D/YYYY', target is 'M/D/YYYY'. Pandas `dt.strftime('%m/%d/%Y')` produces 'MM/DD/YYYY'. The sample shows '1/1/2011' (no leading zeros). So we need to format without leading zeros: `%m/%d/%Y` might produce '01/01/2011'. We need to strip leading zeros or use a custom format.
+    *   Actually, `pd.to_datetime` then `dt.strftime('%-m/%-d/%Y')` on Linux, but `%-m` is not portable.
+    *   Better: Convert to string and replace leading zeros? Or just use `dt.month`, `dt.day`, `dt.year` and concatenate.
+    *   Create `dow` using `dt.isoweekday()`.
+    *   Rename `value1`...`value24` to `pct_hourly_0100`...`pct_hourly_2400`.
+    *   Add `pct_hourly_2500` column with value 0.
+    *   Sort by `dt_strata`? The target sample is sorted by date. The source sample is not sorted (7/3, 7/4, 7/5, 7/6, 12/28...). The target sample is sorted chronologically. So we should sort the result by `dt_strata` (datetime).
+
+7.  **Refining Date Formatting**:
+    *   Source: '7/3/2011'. Target: '1/1/2011'.
+    *   We need to parse the date, do the transformation, and output the date string in the same non-zero-padded format.
+    *   `pd.to_datetime(source['date'])`
+    *   To format back: `df['dt_strata'] = df['date_parsed'].dt.strftime('%m/%d/%Y').str.lstrip('0').replace('///', '/')`? No, that's messy.
+    *   Better: `df['dt_strata'] = df['date_parsed'].apply(lambda x: f"{x.month}/{x.day}/{x.year}")`.
+
+8.  **Code Structure**:
+    *   Import pandas.
+    *   Define `transform`.
+    *   Copy source to avoid modification warnings.
+    *   Parse dates.
+    *   Create `dt_strata`.
+    *   Create `dow`.
+    *   Rename value columns.
+    *   Add `pct_hourly_2500`.
+    *   Select and order columns.
+    *   Sort by `dt_strata` (using the parsed date for sorting, then drop it or keep the string).
+    *   Return.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Parse the date column
+    # The source date format is 'M/D/YYYY' (e.g., '7/3/2011')
+    df['date_parsed'] = pd.to_datetime(df['date'], format='mixed')
+    
+    # 2. Create dt_strata column
+    # Format as 'M/D/YYYY' without leading zeros
+    df['dt_strata'] = df['date_parsed'].apply(lambda x: f"{x.month}/{x.day}/{x.year}")
+    
+    # 3. Create dow column
+    # Based on sample: 1/1/2011 (Sat) -> 6, 1/2/2011 (Sun) -> 7, 1/3/2011 (Mon) -> 1
+    # This corresponds to isoweekday() where Mon=1, Sun=7
+    df['dow'] = df['date_parsed'].dt.isoweekday()
+    
+    # 4. Rename value columns to pct_hourly_XXXX
+    # value1 -> pct_hourly_0100, ..., value24 -> pct_hourly_2400
+    rename_mapping = {
+        f'value{i}': f'pct_hourly_{i:04d}00' for i in range(1, 25)
+    }
+    df.rename(columns=rename_mapping, inplace=True)
+    
+    # 5. Add pct_hourly_2500 column with 0
+    df['pct_hourly_2500'] = 0
+    
+    # 6. Define target columns in order
+    target_columns = [
+        'dt_strata', 'dow',
+        'pct_hourly_0100', 'pct_hourly_0200', 'pct_hourly_0300',
+        'pct_hourly_0400', 'pct_hourly_0500', 'pct_hourly_0600',
+        'pct_hourly_0700', 'pct_hourly_0800', 'pct_hourly_0900',
+        'pct_hourly_1000', 'pct_hourly_1100', 'pct_hourly_1200',
+        'pct_hourly_1300', 'pct_hourly_1400', 'pct_hourly_1500',
+        'pct_hourly_1600', 'pct_hourly_1700', 'pct_hourly_1800',
+        'pct_hourly_1900', 'pct_hourly_2000', 'pct_hourly_2100',
+        'pct_hourly_2200', 'pct_hourly_2300', 'pct_hourly_2400',
+        'pct_hourly_2500'
+    ]
+    
+    # 7. Sort by date
+    # We sort by the parsed date to ensure chronological order
+    df = df.sort_values(by='date_parsed').reset_index(drop=True)
+    
+    # 8. Select only the target columns
+    result = df[target_columns]
+    
+    # 9. Ensure correct types
+    # dow is int64, pct_hourly_2500 is int64, others are float64
+    result['dow'] = result['dow'].astype('int64')
+    result['pct_hourly_2500'] = result['pct_hourly_2500'].astype('int64')
+    
+    return result
+```

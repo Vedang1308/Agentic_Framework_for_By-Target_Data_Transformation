@@ -1,0 +1,142 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Structures**:
+    *   **Source**: Contains `date` (string, format `%m/%d/%Y %H:%M`) and `cerc_logger_1` (float). The data appears to be time-series measurements taken every 10 minutes (based on samples like 4:50, 5:00, 5:10).
+    *   **Target**: Contains `cst` (string, format `%a %m/%d/%Y`) and 24 columns representing hours `1:00` through `24:00`.
+    *   **Transformation Goal**: Pivot the long-format source data into a wide-format target table where each row represents a unique date, and each column represents an hour of that day. The values in the target cells are aggregated sums of the source measurements for that specific date and hour.
+
+2.  **Parse Dates and Extract Components**:
+    *   Convert the `date` column from string to `datetime` objects using `pd.to_datetime` with the format `'%m/%d/%Y %H:%M'`.
+    *   Extract the `date` part (year, month, day) to group by day. Let's call this `dt_date`.
+    *   Extract the `hour` part. Note that the target columns are `1:00` to `24:00`. Standard pandas `.dt.hour` returns 0-23.
+        *   Hour 0 (00:00 - 00:59) corresponds to the start of the day. In many 1-24 hour systems, 00:00 is often mapped to 24:00 of the previous day or 1:00 of the current day depending on convention. However, looking at the target sample, we have columns 1:00 through 24:00.
+        *   Let's look at the source sample: `1/1/2021 0:00`. This is midnight.
+        *   Let's look at the target columns: `1:00`, `2:00`, ..., `24:00`.
+        *   Standard interpretation:
+            *   1:00 column -> Hour 1 (01:00 - 01:59)
+            *   ...
+            *   23:00 column -> Hour 23 (23:00 - 23:59)
+            *   24:00 column -> Hour 0 (00:00 - 00:59) of the *next* day? Or Hour 0 of the *current* day?
+            *   Usually, in 24-hour clock representations ending in 24:00, 24:00 represents the midnight at the end of the day (which is 00:00 of the next day). However, if we are grouping by the date of the timestamp, `00:00` belongs to the date it is stamped with.
+            *   Let's check the mapping logic. If I have `1/1/2021 0:00`, does it go into `1/1/2021`'s `1:00` column or `12/31/2020`'s `24:00` column?
+            *   Looking at the target `cst` format `Sat 07/20/2019`, it seems to represent the calendar day.
+            *   If we assume the standard "1-24" hour format where 24:00 is the last hour of the day, then:
+                *   Hour 1 (1:00-1:59) -> Col `1:00`
+                *   Hour 2 (2:00-2:59) -> Col `2:00`
+                *   ...
+                *   Hour 23 (23:00-23:59) -> Col `23:00`
+                *   Hour 0 (00:00-00:59) -> Col `24:00`? Or is `1:00` actually 00:00-00:59?
+            *   Let's look at the source sample `7/28/2019 4:50`. This is hour 4. It should contribute to column `5:00` if we round up, or `4:00` if we truncate?
+            *   Wait, the source has `4:50`, `5:00`, `5:10`.
+            *   If the column `5:00` aggregates data for the 5th hour (05:00-05:59), then `4:50` (hour 4) would go to `4:00`? Or does `4:50` belong to the `5:00` slot?
+            *   Let's look at the target values. They are large numbers (e.g., 132.249). The source values are around 22-24. There are roughly 6 data points per hour (every 10 mins). $24 * 6 \approx 144$. This matches the magnitude.
+            *   So, aggregation is likely **SUM**.
+            *   Mapping of Hour to Column:
+                *   Source Hour 0 (00:00-00:59) -> Target Col `24:00`? Or `1:00`?
+                *   Source Hour 1 (01:00-01:59) -> Target Col `1:00`? Or `2:00`?
+                *   Let's assume standard 1-24 indexing where 1:00 is the first hour of the day (00:00-00:59) and 24:00 is the last (23:00-23:59)?
+                *   OR: 1:00 is 01:00-01:59 and 24:00 is 00:00-00:59 (midnight)?
+                *   Let's look at the sample target row `Sat 07/20/2019`.
+                *   Let's look at the source sample `7/28/2019`.
+                *   Without specific test data mapping, the most common convention for "1:00 ... 24:00" columns in energy/load data is:
+                    *   `1:00` = 00:00 - 00:59 (First hour of the day)
+                    *   `2:00` = 01:00 - 01:59
+                    *   ...
+                    *   `24:00` = 23:00 - 23:59 (Last hour of the day)
+                *   Let's verify this hypothesis. If `1:00` is 00:00-00:59, then source hour `0` maps to `1:00`. Source hour `1` maps to `2:00`. Source hour `23` maps to `24:00`.
+                *   Alternative hypothesis: `1:00` is 01:00-01:59. Then source hour `1` maps to `1:00`. Source hour `0` maps to `24:00` (of the previous day? or current?).
+                *   Given the column order `1:00` to `24:00`, and standard daily profiles starting at midnight, it is highly probable that:
+                    *   Column `1:00` corresponds to Hour 0 (00:00-00:59).
+                    *   Column `2:00` corresponds to Hour 1 (01:00-01:59).
+                    *   ...
+                    *   Column `24:00` corresponds to Hour 23 (23:00-23:59).
+                *   Let's proceed with this mapping: `Target_Hour = Source_Hour + 1`.
+
+3.  **Aggregation**:
+    *   Group by the extracted `dt_date` and the mapped `Target_Hour`.
+    *   Sum the `cerc_logger_1` values for each group.
+
+4.  **Pivoting**:
+    *   Pivot the aggregated data so that `dt_date` becomes the index, `Target_Hour` becomes the columns, and the values are the sums.
+    *   Fill missing values (if any hour has no data) with 0.
+
+5.  **Formatting**:
+    *   Rename the columns to match the target verbatim: `1:00`, `2:00`, ..., `24:00`.
+    *   Convert the index (`dt_date`) to the target string format `%a %m/%d/%Y`.
+    *   Reset the index to make `cst` a column.
+
+6.  **Final Selection**:
+    *   Select only the required columns in the correct order.
+
+### Python Code Implementation
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target wide-format DataFrame.
+    
+    Steps:
+    1. Parse the 'date' column into datetime objects.
+    2. Extract the date part for grouping and the hour part for pivoting.
+    3. Map the 24-hour clock (0-23) to the target 1-24 hour format (1-24).
+       Assumption: Hour 0 (00:00-00:59) maps to column '1:00', Hour 1 to '2:00', ..., Hour 23 to '24:00'.
+    4. Group by date and mapped hour, summing the 'cerc_logger_1' values.
+    5. Pivot the table to have dates as rows and hours as columns.
+    6. Format the date index as 'cst' column with format '%a %m/%d/%Y'.
+    7. Ensure all target columns are present and ordered correctly.
+    """
+    
+    # 1. Parse dates
+    # The source format is '%m/%d/%Y %H:%M'
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract date and hour
+    df['dt_date'] = df['datetime'].dt.date
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 3. Map hour to target column index (1-24)
+    # Hour 0 -> 1:00
+    # Hour 1 -> 2:00
+    # ...
+    # Hour 23 -> 24:00
+    df['target_hour'] = df['hour'] + 1
+    
+    # 4. Aggregate
+    # Group by date and target_hour, sum the values
+    agg_df = df.groupby(['dt_date', 'target_hour'])['cerc_logger_1'].sum().reset_index()
+    
+    # 5. Pivot
+    # Index: dt_date, Columns: target_hour, Values: cerc_logger_1
+    pivot_df = agg_df.pivot(index='dt_date', columns='target_hour', values='cerc_logger_1')
+    
+    # Fill NaNs with 0 (if some hours have no data)
+    pivot_df = pivot_df.fillna(0)
+    
+    # 6. Rename columns to match target format '1:00', '2:00', ... '24:00'
+    pivot_df.columns = [f"{int(col)}:00" for col in pivot_df.columns]
+    
+    # 7. Format the date index into the 'cst' column
+    # Target format: '%a %m/%d/%Y' (e.g., 'Sat 07/20/2019')
+    pivot_df.index = pd.to_datetime(pivot_df.index).strftime('%a %m/%d/%Y')
+    
+    # Reset index to make 'cst' a column
+    pivot_df = pivot_df.reset_index()
+    pivot_df = pivot_df.rename(columns={'index': 'cst'})
+    
+    # 8. Define target columns
+    target_columns = ['cst'] + [f"{h}:00" for h in range(1, 25)]
+    
+    # Ensure all target columns exist (some might be missing if no data for that hour ever)
+    for col in target_columns:
+        if col not in pivot_df.columns:
+            pivot_df[col] = 0
+            
+    # Select and order columns
+    result_df = pivot_df[target_columns]
+    
+    return result_df
+```

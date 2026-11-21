@@ -1,0 +1,58 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Segment`, `Date`, and 24 hourly columns named `1:00` through `24:00:00`. The `Date` column is a string in format `%a %m/%d/%Y` (e.g., 'Thu 10/01/2009').
+    *   **Target**: Contains columns `date` and `Hour 1` through `Hour 24`. The `date` column is a string in format `%m/%d/%Y` (e.g., '01/01/2003'). The hourly columns are renamed from the source format to `Hour N`.
+
+2.  **Date Transformation**:
+    *   The source `Date` column needs to be parsed. Since the format includes the day of the week (e.g., 'Thu'), we can use `pd.to_datetime` with the format `'%a %m/%d/%Y'` to convert it to a datetime object.
+    *   Once converted to datetime, we format it back to a string using `dt.strftime('%m/%d/%Y')` to match the target schema.
+    *   Rename the resulting column to `date`.
+
+3.  **Hourly Column Renaming**:
+    *   The source has 24 columns representing hours: `1:00`, `2:00`, ..., `23:00`, `24:00:00`.
+    *   The target requires these to be named `Hour 1`, `Hour 2`, ..., `Hour 24`.
+    *   We need to construct a mapping dictionary. Note that the last column is `24:00:00` (with seconds) while others are `H:00`.
+    *   Iterate from 1 to 24. For hours 1-23, the source column name is `f"{h}:00"`. For hour 24, it is `24:00:00`.
+    *   Create a rename dictionary: `{f"{h}:00": f"Hour {h}" for h in range(1, 24)}` and add `{"24:00:00": "Hour 24"}`.
+    *   Apply `df.rename(columns=rename_dict)`.
+
+4.  **Column Selection and Ordering**:
+    *   The target requires specific column order: `date` followed by `Hour 1` to `Hour 24`.
+    *   Drop the `Segment` column as it is not in the target.
+    *   Select the columns in the exact order specified by the target schema.
+
+5.  **Final Output**:
+    *   Return the DataFrame with the exact target column names.
+
+### Python Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the source Date column and format it to match target 'date'
+    # Source format: '%a %m/%d/%Y' (e.g., 'Thu 10/01/2009')
+    # Target format: '%m/%d/%Y' (e.g., '01/01/2003')
+    df['date'] = pd.to_datetime(df['Date'], format='%a %m/%d/%Y').dt.strftime('%m/%d/%Y')
+    
+    # 2. Rename the hourly columns from 'H:00' or '24:00:00' to 'Hour H'
+    rename_dict = {}
+    for h in range(1, 24):
+        rename_dict[f"{h}:00"] = f"Hour {h}"
+    rename_dict["24:00:00"] = "Hour 24"
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define the target columns in the correct order
+    target_columns = ['date'] + [f'Hour {h}' for h in range(1, 25)]
+    
+    # 4. Select only the required columns. 
+    # We drop 'Segment' and 'Date' implicitly by selection.
+    df = df[target_columns]
+    
+    return df[target_columns]
+```

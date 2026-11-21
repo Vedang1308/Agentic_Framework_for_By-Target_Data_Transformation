@@ -1,0 +1,50 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source columns: `Segment`, `Date`, `1:00` through `23:00`, `24:00:00`.
+    *   Target columns: `cst`, `1:00` through `24:00`.
+    *   The `Segment` column in the source is not present in the target and should be dropped.
+    *   The `Date` column in the source needs to be renamed to `cst`.
+    *   The hourly columns `1:00` through `23:00` have the same names in both source and target.
+    *   The last hourly column in the source is `24:00:00`, but in the target it is `24:00`. This column needs to be renamed.
+
+2.  **Date Handling**:
+    *   The source `Date` column contains strings like 'Thu 10/01/2009'.
+    *   The target `cst` column contains strings like 'Wed 01/01/2003'.
+    *   The format appears to be identical (`%a %m/%d/%Y`).
+    *   Since the format is the same, we can simply rename the column `Date` to `cst`. No parsing or reformatting is strictly necessary unless the internal representation needs normalization, but given the samples match the format exactly, a direct rename is sufficient and robust.
+
+3.  **Column Renaming**:
+    *   Rename `Date` -> `cst`.
+    *   Rename `24:00:00` -> `24:00`.
+    *   Keep `1:00` through `23:00` as is.
+
+4.  **Column Selection**:
+    *   Construct the list of target columns: `['cst']` + `[f'{i}:00' for i in range(1, 25)]`.
+    *   Select these columns from the transformed DataFrame.
+
+5.  **Implementation**:
+    *   Copy the source DataFrame.
+    *   Perform the renames.
+    *   Return the DataFrame with the specific target column order.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # Rename the date column to 'cst'
+    df = df.rename(columns={'Date': 'cst'})
+    
+    # Rename the last hour column from '24:00:00' to '24:00'
+    # Check if the column exists to avoid errors if schema varies slightly
+    if '24:00:00' in df.columns:
+        df = df.rename(columns={'24:00:00': '24:00'})
+    
+    # Define the target columns in the correct order
+    target_columns = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    
+    # Select and return the target columns
+    return df[target_columns]
+```

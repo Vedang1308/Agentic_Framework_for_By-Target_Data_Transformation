@@ -1,0 +1,57 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Source and Target Schemas**:
+   - Source has columns: `Segment`, `Date`, and hourly columns `1:00` through `24:00:00`.
+   - Target has columns: `date` and `value1` through `value24`.
+   - The row count is preserved (1-to-1 mapping).
+
+2. **Handle Date Column**:
+   - Source `Date` format is `%a %m/%d/%Y` (e.g., 'Thu 10/01/2009').
+   - Target `date` format is also `%a %m/%d/%Y` (e.g., 'Wed 01/01/2003').
+   - Since the format is identical, we can simply rename the source column `Date` to `date`. No parsing or reformatting is strictly necessary unless normalization is required, but given the samples match the format exactly, a direct rename is sufficient and robust.
+
+3. **Handle Hourly Value Columns**:
+   - Source columns are named `1:00`, `2:00`, ..., `23:00`, `24:00:00`.
+   - Target columns are named `value1`, `value2`, ..., `value23`, `value24`.
+   - We need to map `1:00` -> `value1`, `2:00` -> `value2`, ..., `23:00` -> `value23`, and `24:00:00` -> `value24`.
+   - Note the slight inconsistency in the source column name for the 24th hour (`24:00:00` vs `24:00`). We must handle this specific string.
+
+4. **Construct Rename Dictionary**:
+   - Create a dictionary mapping source column names to target column names.
+   - For hours 1 to 23: `f"{i}:00"` -> `f"value{i}"`.
+   - For hour 24: `"24:00:00"` -> `"value24"`.
+
+5. **Apply Transformation**:
+   - Copy the source DataFrame.
+   - Rename the columns using the constructed dictionary.
+   - Select only the target columns in the correct order: `['date', 'value1', ..., 'value24']`.
+   - Drop the `Segment` column implicitly by not including it in the final selection.
+
+6. **Final Output**:
+   - Return the transformed DataFrame with the exact target column names.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # Rename the Date column to date
+    df = df.rename(columns={'Date': 'date'})
+    
+    # Create a mapping for the hourly columns
+    # Source: '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target: 'value1', 'value2', ..., 'value23', 'value24'
+    rename_dict = {}
+    for i in range(1, 24):
+        rename_dict[f'{i}:00'] = f'value{i}'
+    rename_dict['24:00:00'] = 'value24'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # Define the target columns in the correct order
+    target_columns = ['date'] + [f'value{i}' for i in range(1, 25)]
+    
+    # Select and return only the target columns
+    return df[target_columns]
+```

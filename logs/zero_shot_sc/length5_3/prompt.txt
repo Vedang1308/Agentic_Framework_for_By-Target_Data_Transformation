@@ -1,0 +1,46 @@
+### Benchmark Case: length5_3
+- Source sample rows: 74848 rows (Note: test_0.csv may have different row count)
+- Target rows: 521 rows
+- Notice: Row count changes from 74848 to 521. Check if an aggregation, grouping, or pivoting operation is required.
+
+### Exact Target Columns (Must match verbatim):
+['date', 'value1', 'value2', 'value3', 'value4', 'value5', 'value6', 'value7', 'value8', 'value9', 'value10', 'value11', 'value12', 'value13', 'value14', 'value15', 'value16', 'value17', 'value18', 'value19', 'value20', 'value21', 'value22', 'value23', 'value24']
+
+### Datetime Format Inferences:
+- Source column 'date' has date format '%m/%d/%Y %H:%M' (sample: '7/28/2019 4:50')
+- Target column 'date' requires date format '%m/%d/%Y' (sample: '05/08/2019')
+
+### Source Schema and Types:
+date (object), cerc_logger_1 (float64)
+
+### Target Schema and Types:
+date (object), value1 (float64), value2 (float64), value3 (float64), value4 (float64), value5 (float64), value6 (float64), value7 (float64), value8 (float64), value9 (float64), value10 (float64), value11 (float64), value12 (float64), value13 (float64), value14 (float64), value15 (float64), value16 (float64), value17 (float64), value18 (float64), value19 (float64), value20 (float64), value21 (float64), value22 (float64), value23 (float64), value24 (float64)
+
+### Source Table Sample (training_0.csv):
+| date             |   cerc_logger_1 |
+|:-----------------|----------------:|
+| 7/28/2019 4:50   |          24.562 |
+| 7/28/2019 5:00   |          24.625 |
+| 7/28/2019 5:10   |          24.562 |
+| 7/28/2019 5:20   |          24.562 |
+| 12/31/2020 23:30 |          22.062 |
+| 12/31/2020 23:40 |          22.125 |
+| 12/31/2020 23:50 |          22.312 |
+| 1/1/2021 0:00    |          22.437 |
+
+### Desired Target Table Sample (target.csv):
+| date       |   value1 |   value2 |   value3 |   value4 |   value5 |   value6 |   value7 |   value8 |   value9 |   value10 |   value11 |   value12 |   value13 |   value14 |   value15 |   value16 |   value17 |   value18 |   value19 |   value20 |   value21 |   value22 |   value23 |   value24 |
+|:-----------|---------:|---------:|---------:|---------:|---------:|---------:|---------:|---------:|---------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|
+| 05/08/2019 |   24.25  |   24.25  |   23.375 |   22.875 |   22.562 |   22.5   |   22.375 |   22.437 |   22.312 |    22.312 |    22.25  |    22.25  |    22.187 |    22.187 |    22.125 |    22.687 |    23.062 |    23.437 |    23.312 |    23.375 |    23.937 |    24.062 |    24.25  |    24.25  |
+| 05/07/2019 |   24.125 |   23.75  |   23.5   |   23.312 |   23.125 |   22.875 |   22.937 |   23     |   22.875 |    22.937 |    22.937 |    22.937 |    22.875 |    22.937 |    23     |    23.312 |    23.75  |    23.375 |    23.875 |    23.562 |    24.062 |    23.937 |    23.687 |    24     |
+| 03/10/2018 |   24.5   |   24.437 |   24.312 |   24.187 |   24     |   23.812 |   23.687 |   23.562 |   23.5   |    23.375 |    23.25  |    23.187 |    23.125 |    23.062 |    23     |    23.062 |    23     |    23     |    23.062 |    23.125 |    23.062 |    23.062 |    23.187 |    23.187 |
+| 04/16/2019 |   24     |   23.375 |   23.312 |   23.25  |   23.125 |   23.062 |   23.062 |   23.062 |   22.875 |    22.937 |    23     |    22.687 |    23.062 |    22.812 |    23     |    23.437 |    23.5   |    23.812 |    23.75  |    23.875 |    24.062 |    23.937 |    24.375 |    24.25  |
+| 10/08/2018 |   23.437 |   23.437 |   23.437 |   23.312 |   23.187 |   23.375 |   23.25  |   23.25  |   23.25  |    23.187 |    23.062 |    23.125 |    23.187 |    23.125 |    23.187 |    23.875 |    23.937 |    23.75  |    24     |    24.375 |    24.562 |    24.375 |    24.687 |    25.312 |
+| 03/20/2019 |   23.812 |   23.437 |   23.187 |   22.812 |   23     |   23.187 |   22.875 |   22.875 |   22.812 |    22.937 |    23     |    22.937 |    22.875 |    22.75  |    22.812 |    23.312 |    23.687 |    23.562 |    23.687 |    24.187 |    24.187 |    24.125 |    24.062 |    23.812 |
+| 07/12/2019 |   23.312 |   23.187 |   22.875 |   22.562 |   22.562 |   22.437 |   22.312 |   22.187 |   22.125 |    22.062 |    22.062 |    22     |    22     |    22     |    22     |    22.062 |    22.187 |    22.75  |    22.937 |    22.375 |    22.125 |    22.062 |    22.062 |    22.437 |
+| 07/06/2019 |   22.312 |   22.437 |   22.312 |   22.25  |   22     |   22     |   21.937 |   21.812 |   21.875 |    21.875 |    22     |    22     |    21.875 |    21.75  |    21.812 |    21.75  |    21.875 |    21.812 |    21.812 |    21.812 |    21.812 |    21.875 |    21.937 |    21.937 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

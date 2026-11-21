@@ -1,0 +1,96 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Input/Output Schemas**:
+    *   **Source**: Columns `Date` (object, format `%m/%d/%Y`), `Class` (object, constant 'RESIDENT'), and hourly columns `1` through `24` (float64).
+    *   **Target**: Column `cst` (object, format `%a %m/%d/%Y`), and hourly columns `1:00` through `24:00` (float64).
+    *   **Row Count Change**: The source has 182 rows, but the target has 183 rows. This suggests that the target includes a date that is not present in the provided source sample, or the source sample is a subset. However, looking at the data patterns, the source data seems to be a specific class ('RESIDENT') of a broader dataset. The target data appears to be the full daily profile.
+    *   **Crucial Observation**: The prompt states "Row count changes from 182 to 183". In many TbT tasks, if the row count increases significantly or arbitrarily, it might imply merging with a base table or generating missing dates. However, usually, these transformations are deterministic based on the *provided* source. Let's look closer at the samples.
+    *   Source Sample Dates: 7/3/2013 to 12/31/2013 (partial).
+    *   Target Sample Dates: 1/1/2013 to 7/2/2013 (partial).
+    *   The source and target samples cover *different* time periods. This implies the transformation logic must be generalizable to *any* date.
+    *   Wait, the instruction says "The function must compute its result SOLELY from the `source` argument". If the target has rows not in the source, how can we generate them?
+    *   Let's re-read the "Notice": "Row count changes from 182 to 183. Check if an aggregation, grouping, or pivoting operation is required."
+    *   Actually, looking at the provided samples:
+        *   Source: `7/3/2013` ... `12/31/2013`.
+        *   Target: `1/1/2013` ... `7/2/2013`.
+    *   These are disjoint sets of dates. This is a common pattern in these benchmarks where the "Source" provided in the prompt description is just a *sample* of the file `training_0.csv`, and the "Target" is a *sample* of `target.csv`. The actual `training_0.csv` likely contains all dates present in `target.csv` (or vice versa), or the transformation is a direct mapping per row.
+    *   Hypothesis: The transformation is a direct row-wise mapping. The row count difference in the *sample* description might be due to the samples being disjoint subsets, or one file having an extra row (e.g., a header or a specific boundary date). However, standard TbT tasks usually map 1-to-1 or N-to-1.
+    *   Let's check the values.
+        *   Source `7/3/2013`: Hour 1 = 0.56.
+        *   Target `Tue 01/01/2013`: Hour 1 = 0.89.
+        *   Target `Tue 07/02/2013`: Hour 1 = 0.66. Source `7/3/2013` is Wed.
+        *   Let's check `7/2/2013` (Tue) in Source? It's not in the sample.
+        *   Let's check `1/1/2013` (Tue) in Source? Not in sample.
+    *   Since I cannot generate data from nothing, and the instruction says "compute its result SOLELY from the `source` argument", I must assume that the `source` DataFrame passed to the function will contain the rows corresponding to the target rows. The "182 vs 183" note might be a red herring or refer to a specific quirk in the full dataset (e.g., one file has a blank row, or a leap day issue).
+    *   However, there is a possibility of **aggregation**. If the source has multiple entries per day (e.g., different classes), we might need to average them. The source sample shows only `RESIDENT`. If the full source has `COMMERCIAL`, `INDUSTRIAL`, etc., and the target is an aggregate, we would group by date.
+    *   But the target schema has no `Class` column. The source has `Class`.
+    *   If the source contains multiple classes per date, and the target represents a single profile per date, we likely need to **group by Date** and **average** (or sum) the hourly columns.
+    *   Let's look at the row count again. 182 -> 183. This is a very small change. It doesn't look like a massive reduction from N classes to 1.
+    *   Let's look at the target sample values vs source sample values for matching dates if possible.
+        *   Source has `7/3/2013`. Target has `7/2/2013`.
+        *   Source has `12/31/2013`. Target does not show Dec dates.
+    *   Let's assume the standard operation: **Parse Date -> Format Date -> Rename Columns**.
+    *   Is there any calculation? The values in the source (e.g., 0.56) and target (e.g., 0.89) are different. This confirms they are different dates.
+    *   What if the source *is* the target but shifted? No.
+    *   What if the transformation involves **interpolation** or **generation**? No, "solely from source".
+    *   Conclusion: The transformation is a direct schema mapping. The row count discrepancy in the problem description likely stems from the specific samples provided being disjoint, or one dataset having a single extra row (like a 2013 vs 2012 leap year difference, or a specific boundary). The code should handle the rows present in `source`. If the target requires rows not in source, it's impossible without external data. Therefore, we assume `source` contains all necessary rows for the output, and we just format them.
+    *   Wait, could the "182 to 183" imply that we need to **add** a row? Or **remove** one?
+    *   Let's look at the dates. 2013 is not a leap year. 365 days.
+    *   If the source has 182 rows, it's roughly half a year.
+    *   If the target has 183 rows, it's also roughly half a year.
+    *   It is highly probable that the transformation is simply:
+        1.  Parse `Date` to datetime.
+        2.  Format as `%a %m/%d/%Y` for `cst`.
+        3.  Rename columns `1`..`24` to `1:00`..`24:00`.
+        4.  Drop `Class`.
+        5.  Sort by date (optional, but good practice if order matters).
+    *   Why the row count change? Perhaps the source sample provided in the text is truncated, but the actual `source` argument in the test case will have the correct rows. Or, perhaps there is a `GroupBy` involved if the source had multiple classes. But the sample only shows `RESIDENT`. If the full source has multiple classes, and the target is the "average" or "sum", the row count would decrease (N*Classes -> N). Here it increases (182->183). This suggests no grouping.
+    *   Maybe the source has a header row or index issue? No, pandas handles that.
+    *   Maybe the target includes a "Total" row? Unlikely given the schema.
+    *   I will proceed with the direct mapping hypothesis. The "182 vs 183" might be an artifact of the specific training/test split samples described in the prompt metadata, which are disjoint. The function should just transform whatever is in `source`.
+
+2.  **Date Formatting**:
+    *   Source `Date`: `'7/3/2013'`.
+    *   Target `cst`: `'Tue 01/01/2013'`.
+    *   Format string for target: `'%a %m/%d/%Y'`.
+    *   Step: `pd.to_datetime(df['Date']).dt.strftime('%a %m/%d/%Y')`.
+
+3.  **Column Renaming**:
+    *   Source: `1, 2, ..., 24`.
+    *   Target: `1:00, 2:00, ..., 24:00`.
+    *   Step: Create a mapping dict `{str(i): f"{i}:00" for i in range(1, 25)}` and `df.rename(columns=...)`.
+
+4.  **Column Selection**:
+    *   Keep `cst` and the renamed hour columns.
+    *   Drop `Class`.
+
+5.  **Final Check**:
+    *   Ensure column names match verbatim.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the 'Date' column to datetime
+    # The source format is '%m/%d/%Y' (e.g., '7/3/2013')
+    dt = pd.to_datetime(df['Date'])
+    
+    # 2. Format the date for the 'cst' column
+    # The target format is '%a %m/%d/%Y' (e.g., 'Tue 01/01/2013')
+    df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+    
+    # 3. Rename hourly columns from '1'...'24' to '1:00'...'24:00'
+    rename_dict = {}
+    for i in range(1, 25):
+        rename_dict[str(i)] = f"{i}:00"
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 4. Define the target columns verbatim
+    target_columns = ['cst'] + [f"{i}:00" for i in range(1, 25)]
+    
+    # 5. Return the dataframe with only the target columns
+    return df[target_columns]
+```

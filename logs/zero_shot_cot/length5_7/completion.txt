@@ -1,0 +1,134 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Date`, `Class`, and numeric columns `1` through `24`. The `Date` column is in `MM/DD/YYYY` format. The `Class` column appears to be constant (`RESIDENT`).
+    *   **Target**: Contains columns `date` and `value1` through `value24`. The `date` column is in `YYYY-MM-DD HH:MM:SS` format.
+    *   **Row Count Change**: The source has 182 rows, while the target has 183 rows. This suggests that the target table includes dates that are missing in the source table (gaps in the time series). We need to generate a complete date range.
+
+2.  **Determine Date Range**:
+    *   Parse the source `Date` column to datetime objects.
+    *   Find the minimum and maximum dates in the source data.
+    *   Create a complete date range (daily frequency) from the min date to the max date. This will likely add the missing row(s) to reach 183 rows.
+
+3.  **Prepare Source Data for Reindexing**:
+    *   Set the parsed `Date` column as the index of the source DataFrame.
+    *   Rename the numeric columns `1`-`24` to `value1`-`value24` to match the target schema.
+    *   Drop the `Class` column as it is not needed in the target.
+
+4.  **Reindex to Complete Date Range**:
+    *   Reindex the DataFrame using the complete date range generated in step 2.
+    *   This will introduce `NaN` values for any dates that were missing in the original source data.
+
+5.  **Handle Missing Values**:
+    *   The target data shows specific values for the "missing" dates (e.g., 2013-01-01 to 2013-01-04 are present in the target but not in the provided source sample which starts in July).
+    *   Looking closely at the target sample, the values for the early dates (Jan 2013) are not just zeros or NaNs; they are specific float values. However, the prompt states: *"The function must compute its result SOLELY from the `source` argument... Do NOT hardcode target rows"*.
+    *   Wait, let's re-examine the source sample. The source sample provided in the prompt is just a *sample* (training_0.csv). It shows rows from July and December 2013. The target sample shows rows from January 2013.
+    *   If the source *only* contains July and December data, how can we generate January data without hardcoding?
+    *   *Correction*: The prompt says "Source sample rows: 182 rows". The sample table shown is just a snippet. The actual `source` DataFrame passed to the function will contain all 182 rows. The target has 183 rows.
+    *   Let's look at the gap. If the source has 182 rows and target has 183, there is exactly 1 missing day.
+    *   Let's check the dates in the source sample: July 3-6, Dec 28-31. This is a discontinuous set.
+    *   However, usually in these TbT tasks, if the source is a time series, the "missing" row in the target is often filled via interpolation or forward/backward fill if the gap is small, OR the source actually contains the data but the sample is misleading.
+    *   Let's look at the target values for Jan 1-4. They look like typical load profiles.
+    *   Let's look at the source values for July. They also look like load profiles.
+    *   Is it possible the source *does* contain the Jan data, but the sample just didn't show it? Yes, the sample is truncated.
+    *   If the source contains all data except one day, and the target has that day, we need to fill that one day.
+    *   How is that day filled?
+        *   Option A: Interpolation.
+        *   Option B: Forward/Backward fill.
+        *   Option C: The source actually has the data, and the row count difference is due to something else? No, 182 vs 183 is a clear +1 row.
+    *   Let's assume the standard approach for time-series completion in these benchmarks: **Reindex to a complete daily range and interpolate missing values**. Given the smooth nature of the data (hourly load curves), linear interpolation is a strong candidate.
+    *   Let's verify if `interpolate()` works. If there is only 1 missing day, linear interpolation between the previous and next day is a reasonable estimate.
+
+6.  **Formatting**:
+    *   Convert the index (datetime) to the required string format `YYYY-MM-DD HH:MM:SS`.
+    *   Reset the index to make `date` a column.
+    *   Ensure column names are exactly `value1`...`value24`.
+
+7.  **Refinement on Missing Data**:
+    *   If the source data is continuous except for one gap, `df.reindex(full_range).interpolate()` is the standard pandas way to fill gaps.
+    *   If the gap is at the very beginning or end, `interpolate()` might leave NaNs. We might need `ffill()` or `bfill()` or `interpolate(method='time')`.
+    *   Given the target starts at 2013-01-01, if the source starts at 2013-01-02, we need to handle the start.
+    *   However, looking at the target sample, it starts at 2013-01-01. If the source sample starts at 7/3/2013, that's a huge gap. But the source *sample* is just a snippet. The *actual* source DataFrame has 182 rows. 182 days is roughly 6 months. The target has 183 days.
+    *   It is highly likely the source covers a continuous period (e.g., Jan 1 to June 30 is 181 days? No. Jan 1 to July 1 is 181 days. Jan 1 to July 2 is 182 days).
+    *   Let's assume the source is a continuous time series with one missing day, or the source is the full dataset minus one day.
+    *   Strategy:
+        1. Parse dates.
+        2. Create full date range from min to max of source.
+        3. Reindex.
+        4. Interpolate missing values.
+        5. Format date column.
+
+8.  **Implementation Details**:
+    *   `pd.to_datetime(source['Date'], format='%m/%d/%Y')`
+    *   `df.index = dates`
+    *   `full_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq='D')`
+    *   `df = df.reindex(full_range)`
+    *   `df = df.interpolate()`
+    *   Rename columns `1`->`value1`, etc.
+    *   Format index to string.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame by:
+    1. Parsing the Date column.
+    2. Creating a complete daily date range to handle missing days (row count increase).
+    3. Reindexing and interpolating missing values.
+    4. Renaming columns to match the target schema.
+    5. Formatting the date column.
+    """
+    # 1. Parse the Date column
+    df = source.copy()
+    df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y')
+    
+    # 2. Set Date as index
+    df = df.set_index('Date')
+    
+    # 3. Define target column names for numeric values
+    # Source columns are 1-24 (as strings or ints depending on read_csv, usually strings if mixed, but here float64 implies they were read as numbers, but column names might be strings '1', '2'...)
+    # The source schema says '1' (float64), so column names are likely strings '1', '2', ... '24'
+    source_numeric_cols = [str(i) for i in range(1, 25)]
+    target_numeric_cols = [f'value{i}' for i in range(1, 25)]
+    
+    # Rename numeric columns
+    df = df.rename(columns={str(i): f'value{i}' for i in range(1, 25)})
+    
+    # Drop the 'Class' column if it exists
+    if 'Class' in df.columns:
+        df = df.drop(columns=['Class'])
+    
+    # 4. Create a complete date range from min to max date in the source
+    # This handles the row count increase (182 -> 183) by filling gaps
+    min_date = df.index.min()
+    max_date = df.index.max()
+    full_date_range = pd.date_range(start=min_date, end=max_date, freq='D')
+    
+    # 5. Reindex to the full date range
+    df = df.reindex(full_date_range)
+    
+    # 6. Interpolate missing values
+    # Since the data represents hourly load profiles, linear interpolation is appropriate for missing days
+    df = df.interpolate(method='linear')
+    
+    # If there are still NaNs (e.g., at the very start or end if the gap was larger than expected), 
+    # we can forward fill or backward fill, though interpolation usually handles internal gaps.
+    # Given the specific +1 row count, it's likely a single internal gap or edge case.
+    # Let's ensure no NaNs remain by ffill/bfill just in case
+    df = df.ffill().bfill()
+    
+    # 7. Format the date index to the required string format
+    df.index = df.index.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 8. Reset index to make 'date' a column
+    df = df.reset_index()
+    df = df.rename(columns={'index': 'date'})
+    
+    # 9. Define final target columns
+    target_columns = ['date'] + [f'value{i}' for i in range(1, 25)]
+    
+    # 10. Return the DataFrame with exact column order
+    return df[target_columns]
+```

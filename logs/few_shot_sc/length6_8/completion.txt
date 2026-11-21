@@ -1,0 +1,82 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source Data**: The source DataFrame has columns `date` (string format `%m/%d/%Y %H:%M`) and `cerc_logger_1` (float). The data appears to be time-series measurements taken at 10-minute intervals (e.g., 4:50, 5:00, 5:10).
+2.  **Analyze Target Data**: The target DataFrame has a `Date` column (string format `%m/%d/%Y`) and 24 columns `Hr 1` through `Hr 24`. The row count drops significantly (74848 -> 521), implying an aggregation from minutes to days/hours.
+3.  **Parse Datetime**: Convert the `date` column to a pandas datetime object to extract date and hour components.
+4.  **Extract Grouping Keys**:
+    *   Create a `Date` column by formatting the parsed datetime as `%m/%d/%Y`.
+    *   Create an `Hour` column. Note that standard 24-hour time goes from 0 to 23. The target columns are `Hr 1` to `Hr 24`. Typically, `Hr 1` corresponds to the hour starting at 00:00 (midnight to 1:00 AM), `Hr 2` to 01:00-02:00, ..., and `Hr 24` to 23:00-24:00 (11 PM to midnight). So, `Hour = datetime.hour + 1`.
+5.  **Aggregate**: Group by `Date` and `Hour`. For each group, we need a single value for `cerc_logger_1`. Looking at the sample data, the values within an hour seem consistent or close. A common aggregation for such sensor data is the mean (average). Let's assume mean.
+6.  **Pivot/Reshape**: After grouping and aggregating (e.g., taking the mean), pivot the table so that `Date` is the index, `Hour` becomes the columns, and the values are the aggregated `cerc_logger_1`.
+7.  **Format Columns**: The pivoted columns will be integers 1..24. Rename them to strings `Hr 1`, `Hr 2`, ..., `Hr 24`.
+8.  **Reset Index and Select**: Reset the index to make `Date` a column again. Ensure all 24 hour columns exist (filling NaNs if a specific hour is missing for a day, though the problem implies complete days). Finally, select the columns in the exact order specified in the target schema.
+
+Refinement on Aggregation:
+Let's look at the source sample:
+`7/28/2019 4:50` -> 24.562
+`7/28/2019 5:00` -> 24.625
+`7/28/2019 5:10` -> 24.562
+`7/28/2019 5:20` -> 24.562
+Hour 5 (which is `Hr 6` in target if 1-based index starting at 0) contains 5:00, 5:10, 5:20.
+Wait, let's check the target sample for a specific date.
+Target `05/08/2019`: `Hr 1` is 24.25.
+Source data for `5/8/2019` isn't explicitly shown in the tiny source sample, but let's look at the logic.
+If `Hr 1` corresponds to hour 0 (00:00-00:59), `Hr 2` to hour 1 (01:00-01:59), etc.
+Then `Hr 5` corresponds to hour 4 (04:00-04:59).
+In the source sample: `7/28/2019 4:50` is in hour 4.
+If we assume the aggregation is `mean`, we calculate the average of values falling into each hour bucket.
+
+Let's verify the column naming:
+Target: `Hr 1`, `Hr 2`, ... `Hr 24`.
+Mapping: Hour 0 -> `Hr 1`, Hour 1 -> `Hr 2`, ..., Hour 23 -> `Hr 24`.
+
+Implementation Steps:
+1. `df['datetime'] = pd.to_datetime(df['date'])`
+2. `df['Date'] = df['datetime'].dt.strftime('%m/%d/%Y')`
+3. `df['Hour'] = df['datetime'].dt.hour + 1`
+4. `grouped = df.groupby(['Date', 'Hour'])['cerc_logger_1'].mean()`
+5. `pivot = grouped.unstack('Hour')`
+6. Rename columns: `pivot.columns = [f'Hr {i}' for i in pivot.columns]`
+7. Ensure all hours 1-24 are present. If some are missing, reindex columns.
+8. `pivot = pivot.reindex(columns=[f'Hr {i}' for i in range(1, 25)])`
+9. `pivot = pivot.reset_index()`
+10. Return selected columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # Parse the date column to datetime
+    df['datetime'] = pd.to_datetime(df['date'])
+    
+    # Extract the date part formatted as MM/DD/YYYY
+    df['Date'] = df['datetime'].dt.strftime('%m/%d/%Y')
+    
+    # Extract the hour and adjust to 1-24 range (0 -> 1, ..., 23 -> 24)
+    df['Hour'] = df['datetime'].dt.hour + 1
+    
+    # Group by Date and Hour, and calculate the mean of cerc_logger_1
+    # Using mean as a robust aggregation for sensor data over time intervals
+    grouped = df.groupby(['Date', 'Hour'])['cerc_logger_1'].mean()
+    
+    # Pivot the data so that Hours become columns
+    pivot_df = grouped.unstack('Hour')
+    
+    # Rename columns to match target schema: 'Hr 1', 'Hr 2', ...
+    pivot_df.columns = [f'Hr {col}' for col in pivot_df.columns]
+    
+    # Ensure all 24 hours are present in the columns, filling missing with NaN
+    target_hour_cols = [f'Hr {i}' for i in range(1, 25)]
+    pivot_df = pivot_df.reindex(columns=target_hour_cols)
+    
+    # Reset index to bring 'Date' back as a column
+    pivot_df = pivot_df.reset_index()
+    
+    # Define the exact target column order
+    target_columns = ['Date'] + target_hour_cols
+    
+    # Return the dataframe with the correct columns
+    return pivot_df[target_columns]
+```

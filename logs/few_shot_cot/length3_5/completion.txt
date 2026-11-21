@@ -1,0 +1,85 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `class`, `Description`, `analysis`, `date`, `value1`...`value24`, `uom`. The `date` column is in format `M/D/YYYY` (e.g., '7/3/2011'). The `value` columns represent hourly data.
+    *   **Target**: Contains columns `date`, `Hour 1`...`Hour 24`. The `date` column is in format `YYYY-MM-DD 00:00:00`.
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target might include a date that is not present in the provided source sample, or there is an aggregation/grouping involved. However, looking at the sample data, the source rows seem to be individual daily records. The target rows are also individual daily records. The difference in row count (182 vs 183) in the benchmark description might be due to the specific test set having an extra day or the source sample provided here being a subset. Given the structure (1 row per day in source, 1 row per day in target), the transformation is likely a direct mapping of rows, possibly with sorting or filtering. Let's look closer at the dates.
+    *   Source sample dates: 7/3/2011, 7/4/2011, ..., 12/31/2011.
+    *   Target sample dates: 2011-01-01, 2011-01-02, ..., 2011-07-02.
+    *   The target dates are chronologically ordered and start from Jan 1, 2011. The source sample provided starts from July 3, 2011. This implies the full source table likely contains data for the whole year (or a larger range), and the target is a sorted version of that data. The row count difference (182 vs 183) is small. 2011 is not a leap year (365 days). 182 days is roughly half a year. It's possible the source data is incomplete in the sample or the target includes a specific aggregation. However, usually in these TbT tasks, if the structure is 1-to-1 (daily rows), we just transform the columns.
+    *   Let's check if there's any aggregation. The values in `value1` for source row `7/3/2011` is `1.0243`. In the target, `2011-07-02` (which corresponds to source `7/2/2011` if we assume the source sample is just a snippet) has `Hour 1` = `0.8341`. Wait, the source sample has `7/3/2011` with `value1` = `1.0243`. The target has `2011-07-02` with `Hour 1` = `0.8341`.
+    *   Let's look at the source row `7/3/2011`. `value1` is `1.0243`.
+    *   Let's look at the target row `2011-07-02`. `Hour 1` is `0.8341`.
+    *   Let's look at the source row `7/4/2011`. `value1` is `0.8662`.
+    *   Let's look at the target row `2011-07-03`. `Hour 1` is `1.2923`.
+    *   There seems to be a mismatch or the source sample provided is not contiguous with the target sample in a simple 1-to-1 index way.
+    *   However, the task is to write a *general* function. The most logical transformation is:
+        1.  Parse the `date` column from `M/D/YYYY` to datetime.
+        2.  Format the `date` column to `YYYY-MM-DD 00:00:00`.
+        3.  Rename `value1` to `Hour 1`, ..., `value24` to `Hour 24`.
+        4.  Sort by `date` to ensure chronological order (as seen in target).
+        5.  Select the target columns.
+
+2.  **Date Transformation**:
+    *   Source `date`: '7/3/2011'.
+    *   Target `date`: '2011-01-01 00:00:00'.
+    *   Action: `pd.to_datetime(df['date'])` then `.dt.strftime('%Y-%m-%d %H:%M:%S')`.
+
+3.  **Column Renaming**:
+    *   Source: `value1`, `value2`, ..., `value24`.
+    *   Target: `Hour 1`, `Hour 2`, ..., `Hour 24`.
+    *   Action: Create a mapping dictionary `{f'value{i}': f'Hour {i}' for i in range(1, 25)}` and rename.
+
+4.  **Handling Row Count/Sorting**:
+    *   The target is sorted by date. The source sample is not strictly sorted (jumps from July to December).
+    *   Action: Sort the DataFrame by the parsed datetime object (or the formatted string) to match the target's chronological order.
+
+5.  **Final Selection**:
+    *   Select columns `['date', 'Hour 1', ..., 'Hour 24']`.
+
+6.  **Refinement on Row Count**:
+    *   The prompt mentions "Row count changes from 182 to 183". This is a specific hint. If the source has 182 rows and target has 183, and it's a 1-to-1 mapping, where does the extra row come from?
+    *   Possibility A: Aggregation (e.g., summing duplicates). But the values don't look like sums of multiple rows.
+    *   Possibility B: The source data might have missing dates that are filled in? Unlikely for this type of task.
+    *   Possibility C: The "182 vs 183" note might be a distractor or refer to a specific test case property not visible in the sample. However, looking at the sample, the transformation is clearly a column rename and date format change.
+    *   Let's re-read carefully. "Source sample rows: 182 rows... Target rows: 183 rows".
+    *   If I simply transform and sort, I will get 182 rows. If the target expects 183, I might be missing a row.
+    *   Is it possible that `value1`...`value24` are not the only data? No.
+    *   Is it possible that the source has duplicate dates that need to be aggregated? The sample shows unique dates.
+    *   Let's look at the target sample again. It starts at 2011-01-01. The source sample starts at 7/3/2011. The source sample provided in the prompt is likely just a *snippet* of the full source table. The full source table probably has 182 rows. The full target table has 183 rows.
+    *   Wait, 2011 has 365 days. 182 is roughly half.
+    *   Maybe the source data is for a specific subset (e.g., weekdays only? 182 is close to 26 weeks * 7 = 182).
+    *   If the source has 182 rows and target has 183, and the mapping is 1-to-1, there is a discrepancy.
+    *   However, without seeing the full data, I must assume the standard transformation: Rename, Format Date, Sort. If there is an aggregation, it would usually be indicated by duplicate keys. Here, `date` seems to be the key.
+    *   Let's assume the standard path: Transform columns and sort. The row count difference might be due to the specific test file having an extra row in the target that corresponds to a row in the source that wasn't in the *sample* but is in the *file*. Or, perhaps the source has a header row counted differently? No, pandas handles headers.
+    *   Actually, let's look at the target sample values.
+        *   Target `2011-07-02` `Hour 1`: 0.8341.
+        *   Source `7/3/2011` `value1`: 1.0243.
+        *   Source `7/4/2011` `value1`: 0.8662.
+        *   There is no direct match in the provided snippet. This confirms the snippet is just a random subset.
+    *   I will proceed with the column transformation and sorting.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column and format it to the target format
+    # Source format: M/D/YYYY (e.g., '7/3/2011')
+    # Target format: YYYY-MM-DD 00:00:00 (e.g., '2011-01-01 00:00:00')
+    df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Rename value columns to Hour columns
+    rename_dict = {f'value{i}': f'Hour {i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Sort by date to match the chronological order in the target
+    df = df.sort_values(by='date').reset_index(drop=True)
+    
+    # 4. Define target columns
+    target_columns = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    
+    # 5. Return the transformed dataframe with only the target columns
+    return df[target_columns]
+```

@@ -1,0 +1,208 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Date`, `Class`, and numeric columns `1` through `24`. The `Date` column is in `MM/DD/YYYY` format. The numeric columns represent hourly data points (1-24).
+    *   **Target**: Contains a `date` column and 24 columns representing specific times of day (e.g., `1:00 AM`, `12:00 PM`, etc.). The row count increases slightly (182 to 183), which suggests the source might be missing a date present in the target, or the target includes a specific date range. However, looking at the data, the transformation is primarily a **reshaping** (wide-to-wide mapping) and **renaming** task. The slight row count difference in the benchmark description might be due to the specific sample provided vs. the full test set, or potentially an aggregation if multiple rows existed for the same date. Given `Class` is always `RESIDENT` and dates appear unique in the source sample, we assume a 1-to-1 mapping of dates. If there were duplicates, we would need to aggregate (e.g., mean), but the prompt implies a direct transformation. Let's look closer at the column mapping.
+
+2.  **Map Source Columns to Target Columns**:
+    *   The source columns `1` to `24` correspond to hours of the day.
+    *   We need to determine if `1` is 1:00 AM or 12:00 AM.
+    *   Standard 24-hour notation: 1 = 01:00, 12 = 12:00, 13 = 13:00, 24 = 24:00 (or 00:00 next day).
+    *   Target columns:
+        *   `1:00 AM` -> Hour 1
+        *   `2:00 AM` -> Hour 2
+        *   ...
+        *   `11:00 AM` -> Hour 11
+        *   `12:00 PM` -> Hour 12 (Noon)
+        *   `1:00 PM` -> Hour 13
+        *   ...
+        *   `11:00 PM` -> Hour 23
+        *   `12:00 AM` -> Hour 24 (Midnight)
+    *   Let's verify this mapping with the target column list provided:
+        `['date', '1:00 AM', '2:00 AM', ..., '11:00 AM', '12:00 AM', '1:00 PM', ..., '12:00 PM']`
+        Wait, the order in the target list is specific:
+        1.  `1:00 AM` (Hour 1)
+        2.  `2:00 AM` (Hour 2)
+        3.  ...
+        11. `11:00 AM` (Hour 11)
+        12. `12:00 AM` (Hour 24? Or is this a typo for 12:00 PM? No, `12:00 PM` is at the end). Let's look at the standard clock.
+            *   12:00 AM is Midnight (Hour 0 or 24).
+            *   12:00 PM is Noon (Hour 12).
+        *   The target columns are:
+            *   `1:00 AM` to `11:00 AM` (Hours 1-11)
+            *   `12:00 AM` (This is likely Hour 24 based on position in a 24-hour cycle, or it's placed oddly. Let's look at the values).
+            *   `1:00 PM` to `11:00 PM` (Hours 13-23)
+            *   `12:00 PM` (Hour 12)
+
+    *   Let's check the source sample values vs target sample values to confirm the mapping.
+        *   Source `7/3/2013`: Col `1` = 0.56. Target `07/03/2013` (not in target sample, but let's look at `01/01/2013`).
+        *   Let's look at `12/31/2013` in source. Col `1` = 0.94.
+        *   Let's look at `01/01/2013` in target. `1:00 AM` = 0.89.
+        *   This doesn't help directly because the dates don't overlap in the small samples provided.
+        *   However, logically:
+            *   Source Col `1` = 1st hour = 1:00 AM.
+            *   Source Col `12` = 12th hour = 12:00 PM (Noon).
+            *   Source Col `13` = 13th hour = 1:00 PM.
+            *   Source Col `24` = 24th hour = 12:00 AM (Midnight).
+
+    *   Let's construct the mapping dictionary:
+        *   `1` -> `1:00 AM`
+        *   `2` -> `2:00 AM`
+        *   `3` -> `3:00 AM`
+        *   `4` -> `4:00 AM`
+        *   `5` -> `5:00 AM`
+        *   `6` -> `6:00 AM`
+        *   `7` -> `7:00 AM`
+        *   `8` -> `8:00 AM`
+        *   `9` -> `9:00 AM`
+        *   `10` -> `10:00 AM`
+        *   `11` -> `11:00 AM`
+        *   `12` -> `12:00 PM`  (Note: Target list has `12:00 PM` at the very end)
+        *   `13` -> `1:00 PM`
+        *   `14` -> `2:00 PM`
+        *   `15` -> `3:00 PM`
+        *   `16` -> `4:00 PM`
+        *   `17` -> `5:00 PM`
+        *   `18` -> `6:00 PM`
+        *   `19` -> `7:00 PM`
+        *   `20` -> `8:00 PM`
+        *   `21` -> `9:00 PM`
+        *   `22` -> `10:00 PM`
+        *   `23` -> `11:00 PM`
+        *   `24` -> `12:00 AM` (Note: Target list has `12:00 AM` in the middle)
+
+3.  **Handle Date Formatting**:
+    *   Source `Date` is `MM/DD/YYYY`.
+    *   Target `date` is `MM/DD/YYYY`.
+    *   The format appears identical. We just need to rename the column `Date` to `date`.
+    *   *Self-Correction*: Sometimes "date" implies just the date string. The sample shows `01/01/2013`. The source shows `7/3/2013`. Pandas might parse these. To be safe, we should ensure the output string format matches exactly. Since the input is already in that format (mostly), renaming might suffice. However, if pandas converts to datetime, we should format back to `'%m/%d/%Y'`.
+
+4.  **Address Row Count Discrepancy**:
+    *   The prompt notes source has 182 rows and target has 183.
+    *   If the source data is a subset or missing a day, we cannot "create" data for a missing day without external info.
+    *   However, in TbT tasks, usually the `source` provided in the function argument is the *complete* source for that specific test case. The "182 vs 183" note might refer to the training set stats or a specific quirk where one row is aggregated or split.
+    *   Given `Class` is constant, and no grouping key is obvious other than `Date`, and the columns are 1-to-1 mapped, it is highly likely that the transformation is just renaming and reordering.
+    *   *Hypothesis*: Is it possible that `12:00 AM` (Hour 24) and `12:00 PM` (Hour 12) are swapped in my logic?
+        *   Hour 12 is Noon -> 12:00 PM.
+        *   Hour 24 is Midnight -> 12:00 AM.
+    *   Let's check the target column order again:
+        `['date', '1:00 AM', ..., '11:00 AM', '12:00 AM', '1:00 PM', ..., '11:00 PM', '12:00 PM']`
+        This order is:
+        1-11 AM (Hours 1-11)
+        12 AM (Hour 24)
+        1-11 PM (Hours 13-23)
+        12 PM (Hour 12)
+    *   This is a non-chronological order for the columns, but the mapping of values should be based on the hour index.
+
+5.  **Implementation Steps**:
+    1.  Select the `Date` column and rename it to `date`.
+    2.  Ensure the date format is consistent (string `MM/DD/YYYY`).
+    3.  Create a mapping from source numeric columns (`1`-`24`) to the target time string columns.
+    4.  Rename the source numeric columns to the target names.
+    5.  Reorder the columns to match the exact target schema order.
+    6.  Return the DataFrame.
+
+6.  **Refining the Date Format**:
+    *   Source: `'7/3/2013'` (single digit month/day).
+    *   Target: `'01/01/2013'` (zero-padded).
+    *   Action: Parse dates to datetime, then format to `'%m/%d/%Y'` to ensure zero-padding.
+
+7.  **Final Column Mapping Construction**:
+    *   `1`: `1:00 AM`
+    *   `2`: `2:00 AM`
+    *   `3`: `3:00 AM`
+    *   `4`: `4:00 AM`
+    *   `5`: `5:00 AM`
+    *   `6`: `6:00 AM`
+    *   `7`: `7:00 AM`
+    *   `8`: `8:00 AM`
+    *   `9`: `9:00 AM`
+    *   `10`: `10:00 AM`
+    *   `11`: `11:00 AM`
+    *   `12`: `12:00 PM`
+    *   `13`: `1:00 PM`
+    *   `14`: `2:00 PM`
+    *   `15`: `3:00 PM`
+    *   `16`: `4:00 PM`
+    *   `17`: `5:00 PM`
+    *   `18`: `6:00 PM`
+    *   `19`: `7:00 PM`
+    *   `20`: `8:00 PM`
+    *   `21`: `9:00 PM`
+    *   `22`: `10:00 PM`
+    *   `23`: `11:00 PM`
+    *   `24`: `12:00 AM`
+
+    Target Order:
+    `['date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+
+    Note: `12:00 AM` is mapped from source col `24`. `12:00 PM` is mapped from source col `12`.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame by renaming columns,
+    formatting dates, and reordering columns to match the target schema.
+    """
+    # 1. Copy the source to avoid modifying the original
+    df = source.copy()
+    
+    # 2. Handle the Date column
+    # Parse the date string to datetime to handle formatting consistently (e.g., zero-padding)
+    # Source format is '%m/%d/%Y' (e.g., '7/3/2013')
+    # Target format is '%m/%d/%Y' (e.g., '01/01/2013')
+    if 'Date' in df.columns:
+        df['date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y').dt.strftime('%m/%d/%Y')
+    
+    # 3. Define the mapping from source numeric columns (1-24) to target time columns
+    # Source 1-11 -> 1:00 AM - 11:00 AM
+    # Source 12 -> 12:00 PM (Noon)
+    # Source 13-23 -> 1:00 PM - 11:00 PM
+    # Source 24 -> 12:00 AM (Midnight)
+    
+    col_mapping = {}
+    
+    # 1:00 AM to 11:00 AM
+    for i in range(1, 12):
+        col_mapping[str(i)] = f"{i}:00 AM"
+        
+    # 12:00 PM (Noon) corresponds to hour 12
+    col_mapping['12'] = '12:00 PM'
+    
+    # 1:00 PM to 11:00 PM
+    for i in range(13, 24):
+        pm_hour = i - 12
+        col_mapping[str(i)] = f"{pm_hour}:00 PM"
+        
+    # 12:00 AM (Midnight) corresponds to hour 24
+    col_mapping['24'] = '12:00 AM'
+    
+    # 4. Rename the numeric columns
+    df = df.rename(columns=col_mapping)
+    
+    # 5. Define the exact target column order
+    target_columns = [
+        'date', 
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', 
+        '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', 
+        '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', 
+        '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', 
+        '12:00 PM'
+    ]
+    
+    # 6. Select and reorder columns. 
+    # Note: We drop the original 'Date' and 'Class' columns as they are not in the target schema.
+    # We only keep 'date' and the renamed time columns.
+    
+    # Ensure we only select columns that exist in the dataframe
+    existing_target_cols = [col for col in target_columns if col in df.columns]
+    
+    # If there are missing columns (e.g. if source didn't have all 24 hours), 
+    # we might need to handle NaNs, but assuming schema consistency:
+    df = df[existing_target_cols]
+    
+    # Return the DataFrame with the exact target column names
+    return df[target_columns]
+```

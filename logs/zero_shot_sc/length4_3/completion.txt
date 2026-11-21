@@ -1,0 +1,165 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `Strata_ID`, `Strata`, `DT_STRATA` (date string), `DOW`, and 24 hourly percentage columns (`PCT_HOURLY_0100` to `PCT_HOURLY_2400`) plus a `PCT_HOURLY_2500` column. The data appears to be aggregated by Strata and Date.
+    *   **Target**: Contains a `date` column and 24 time-labeled columns (`1:00 AM` through `12:00 PM`, then `12:00 AM` through `11:00 PM`). Note the specific order: AM hours 1-11, then 12:00 AM, then PM hours 1-11, then 12:00 PM. Wait, looking closely at the target columns provided:
+        `['date', '1:00 AM', '2:00 AM', ..., '11:00 AM', '12:00 AM', '1:00 PM', ..., '11:00 PM', '12:00 PM']`
+        This ordering is slightly unusual (12:00 AM is after 11:00 AM, and 12:00 PM is at the very end). I must map the source columns to these exact target column names.
+
+2.  **Map Source Columns to Target Columns**:
+    *   The source columns are named `PCT_HOURLY_XXXX` where XXXX represents the hour in 24-hour format (0100 = 1 AM, 1200 = 12 PM, 1300 = 1 PM, 2400 = 12 AM / Midnight start of next day? Or end of day?).
+    *   Let's verify the mapping logic based on standard time conversions:
+        *   `0100` -> 1:00 AM
+        *   `0200` -> 2:00 AM
+        *   ...
+        *   `1100` -> 11:00 AM
+        *   `1200` -> 12:00 PM (Noon)
+        *   `1300` -> 1:00 PM
+        *   ...
+        *   `2300` -> 11:00 PM
+        *   `2400` -> 12:00 AM (Midnight)
+    *   Let's check the target column list order again:
+        `1:00 AM` ... `11:00 AM` (Source 0100-1100)
+        `12:00 AM` (Source 2400)
+        `1:00 PM` ... `11:00 PM` (Source 1300-2300)
+        `12:00 PM` (Source 1200)
+    *   This specific ordering in the target schema is crucial. I need to create a mapping dictionary from source column names to target column names.
+
+    *   Mapping:
+        *   `PCT_HOURLY_0100` -> `'1:00 AM'`
+        *   `PCT_HOURLY_0200` -> `'2:00 AM'`
+        *   ...
+        *   `PCT_HOURLY_1100` -> `'11:00 AM'`
+        *   `PCT_HOURLY_2400` -> `'12:00 AM'`  (Note: 2400 is midnight)
+        *   `PCT_HOURLY_1300` -> `'1:00 PM'`
+        *   ...
+        *   `PCT_HOURLY_2300` -> `'11:00 PM'`
+        *   `PCT_HOURLY_1200` -> `'12:00 PM'` (Note: 1200 is noon)
+
+3.  **Handle Date Formatting**:
+    *   Source `DT_STRATA` is in `'%m/%d/%Y'` (e.g., '7/2/2016').
+    *   Target `date` is in `'%m/%d/%Y'` (e.g., '01/01/2016').
+    *   The sample shows that single-digit months/days might need zero-padding in the target (e.g., '7/2/2016' becomes '07/02/2016' if it were in Jan, but the sample target shows '01/01/2016'). The source sample has '7/2/2016'. The target sample has '01/01/2016'.
+    *   I should parse the date to ensure consistent formatting. Using `pd.to_datetime` and then formatting with `dt.strftime('%m/%d/%Y')` ensures zero-padding for single-digit months and days, matching the target sample style (e.g., '01/01/2016').
+
+4.  **Row Aggregation/Selection**:
+    *   The source has multiple `Strata_ID`s and `Strata` names. The target has one row per date.
+    *   The source sample shows rows for different Strata on the same date. The target seems to aggregate or select one.
+    *   Looking at the row counts: Source 5673 rows, Target 5673 rows. This suggests a 1-to-1 mapping or that the source data provided in the sample is already unique per date for the relevant strata, or perhaps the "Strata" column indicates a specific dataset where each row is unique.
+    *   Wait, the source sample has `Strata_ID` 16 and 34. The target sample has dates starting from 01/01/2016. The source sample has dates in July and December 2016.
+    *   Crucially, the problem statement says "Source sample rows: 5673" and "Target rows: 5673". This implies no aggregation (sum/mean) across rows is needed to reduce row count. It implies that either:
+        a) Each source row maps to exactly one target row.
+        b) The source data in the actual test set is already unique per date (or the "Strata" distinction is irrelevant/consistent).
+    *   Given the 1:1 row count, I will assume the transformation is row-wise. I just need to rename columns and format the date. If there were multiple rows per date, I would need to aggregate, but the identical row counts strongly suggest a direct transformation.
+
+5.  **Implementation Steps**:
+    *   Create a copy of the source DataFrame.
+    *   Parse `DT_STRATA` to datetime and format as `'%m/%d/%Y'` to create the `date` column.
+    *   Define a dictionary mapping the 24 source `PCT_HOURLY_*` columns to the 24 target time columns.
+    *   Rename the columns using this dictionary.
+    *   Select the required target columns in the specific order provided.
+    *   Drop any unused columns (`Strata_ID`, `Strata`, `DOW`, `PCT_HOURLY_2500`).
+
+6.  **Refining the Column Mapping**:
+    *   Source: `PCT_HOURLY_0100` ... `PCT_HOURLY_2400`
+    *   Target Order: `1:00 AM`, `2:00 AM`, `3:00 AM`, `4:00 AM`, `5:00 AM`, `6:00 AM`, `7:00 AM`, `8:00 AM`, `9:00 AM`, `10:00 AM`, `11:00 AM`, `12:00 AM`, `1:00 PM`, `2:00 PM`, `3:00 PM`, `4:00 PM`, `5:00 PM`, `6:00 PM`, `7:00 PM`, `8:00 PM`, `9:00 PM`, `10:00 PM`, `11:00 PM`, `12:00 PM`
+
+    *   Mapping Logic:
+        *   0100 -> 1:00 AM
+        *   0200 -> 2:00 AM
+        *   0300 -> 3:00 AM
+        *   0400 -> 4:00 AM
+        *   0500 -> 5:00 AM
+        *   0600 -> 6:00 AM
+        *   0700 -> 7:00 AM
+        *   0800 -> 8:00 AM
+        *   0900 -> 9:00 AM
+        *   1000 -> 10:00 AM
+        *   1100 -> 11:00 AM
+        *   2400 -> 12:00 AM  (Midnight)
+        *   1300 -> 1:00 PM
+        *   1400 -> 2:00 PM
+        *   1500 -> 3:00 PM
+        *   1600 -> 4:00 PM
+        *   1700 -> 5:00 PM
+        *   1800 -> 6:00 PM
+        *   1900 -> 7:00 PM
+        *   2000 -> 8:00 PM
+        *   2100 -> 9:00 PM
+        *   2200 -> 10:00 PM
+        *   2300 -> 11:00 PM
+        *   1200 -> 12:00 PM (Noon)
+
+    *   Note: `PCT_HOURLY_2500` is in source but not in target. It should be ignored.
+
+7.  **Final Code Structure**:
+    *   Import pandas.
+    *   Define `transform`.
+    *   Format date.
+    *   Rename columns.
+    *   Return subset.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Format the date column
+    # Parse DT_STRATA to datetime and format as MM/DD/YYYY
+    df['date'] = pd.to_datetime(df['DT_STRATA'], format='%m/%d/%Y').dt.strftime('%m/%d/%Y')
+    
+    # 2. Define the mapping from source hourly columns to target time labels
+    # Source columns are PCT_HOURLY_XXXX where XXXX is 24-hour time
+    # Target columns are specific AM/PM strings in a specific order
+    
+    column_mapping = {
+        'PCT_HOURLY_0100': '1:00 AM',
+        'PCT_HOURLY_0200': '2:00 AM',
+        'PCT_HOURLY_0300': '3:00 AM',
+        'PCT_HOURLY_0400': '4:00 AM',
+        'PCT_HOURLY_0500': '5:00 AM',
+        'PCT_HOURLY_0600': '6:00 AM',
+        'PCT_HOURLY_0700': '7:00 AM',
+        'PCT_HOURLY_0800': '8:00 AM',
+        'PCT_HOURLY_0900': '9:00 AM',
+        'PCT_HOURLY_1000': '10:00 AM',
+        'PCT_HOURLY_1100': '11:00 AM',
+        'PCT_HOURLY_2400': '12:00 AM',  # Midnight
+        'PCT_HOURLY_1300': '1:00 PM',
+        'PCT_HOURLY_1400': '2:00 PM',
+        'PCT_HOURLY_1500': '3:00 PM',
+        'PCT_HOURLY_1600': '4:00 PM',
+        'PCT_HOURLY_1700': '5:00 PM',
+        'PCT_HOURLY_1800': '6:00 PM',
+        'PCT_HOURLY_1900': '7:00 PM',
+        'PCT_HOURLY_2000': '8:00 PM',
+        'PCT_HOURLY_2100': '9:00 PM',
+        'PCT_HOURLY_2200': '10:00 PM',
+        'PCT_HOURLY_2300': '11:00 PM',
+        'PCT_HOURLY_1200': '12:00 PM'   # Noon
+    }
+    
+    # 3. Rename the columns
+    df = df.rename(columns=column_mapping)
+    
+    # 4. Define the target columns in the exact order specified
+    target_columns = [
+        'date', 
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', 
+        '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', 
+        '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', 
+        '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM'
+    ]
+    
+    # 5. Select only the target columns
+    # Note: We assume the source data is already 1-to-1 with target (same row count)
+    # If there were duplicates per date, we would need to aggregate, but the problem
+    # implies a direct transformation based on row counts.
+    result = df[target_columns]
+    
+    return result
+```

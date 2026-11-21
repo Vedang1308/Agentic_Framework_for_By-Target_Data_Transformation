@@ -1,0 +1,129 @@
+Here are worked examples demonstrating step-by-step reasoning and valid Python code:
+
+### Example 1 (Case length1_1)
+Source Schema: Strata_ID (int64), Strata (object), DT_STRATA (object), DOW (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)
+Target Schema: cst (object), 1:00..24:00 (float64)
+Source Sample: DT_STRATA sample: ['7/2/2016', '7/3/2016']; PCT_HOURLY_0100 sample: [0.000701, 0.000761]
+Target Sample: cst sample: ['Fri 01/01/2016', 'Sat 01/02/2016']; 1:00 sample: [0.001222, 0.001313]
+Step-by-Step Reasoning Plan:
+1. Analyze schemas: Source has date column 'DT_STRATA' and hourly columns 'PCT_HOURLY_0100' through 'PCT_HOURLY_2500'.
+2. Target schema requires column 'cst' with formatted date strings like 'Fri 01/01/2016' (%a %m/%d/%Y).
+3. Parse 'DT_STRATA' to datetime and format as '%a %m/%d/%Y' in column 'cst'.
+4. Rename hourly columns: 'PCT_HOURLY_0100' -> '1:00', ..., 'PCT_HOURLY_2400' -> '24:00'.
+5. Drop extra columns ('Strata_ID', 'Strata', 'DOW', 'PCT_HOURLY_2500') and align returned columns verbatim to target.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'{i}:00' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    return df[target_cols]
+```
+
+### Example 2 (Case length2_1)
+Source Schema: CST (object), 1:00..24:00:00 (float64)
+Target Schema: dt_strata (object), dow (int64), pct_hourly_0100..pct_hourly_2500 (float64)
+Source Sample: CST sample: ['Sat 12/01/2012', 'Sun 12/02/2012']; 1:00 sample: [0.9841, 0.9012]
+Target Sample: dt_strata sample: ['04/01/2009', '04/02/2009']; dow sample: [3, 4]; pct_hourly_0100 sample: [1.02, 0.93]
+Step-by-Step Reasoning Plan:
+1. Inspect date: Source 'CST' has format 'Day MM/DD/YYYY'. Split by whitespace to extract the date part.
+2. Convert to datetime, then format as '%m/%d/%Y' for 'dt_strata'.
+3. Compute 'dow' (day of week) where Monday=1 ... Sunday=7 using `dt.dt.dayofweek + 1`.
+4. Rename hourly columns: '1:00' -> 'pct_hourly_0100', ..., '24:00'/'24:00:00' -> 'pct_hourly_2400'.
+5. Target includes 'pct_hourly_2500' filled with 0. Add this column and select target columns verbatim.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    date_str = df['CST'].str.split(' ').str[-1]
+    dt = pd.to_datetime(date_str, format='%m/%d/%Y')
+    df['dt_strata'] = dt.dt.strftime('%m/%d/%Y')
+    df['dow'] = dt.dt.dayofweek + 1
+    rename_dict = {f'{i}:00': f'pct_hourly_{i:02d}00' for i in range(1, 24)}
+    if '24:00:00' in df.columns:
+        rename_dict['24:00:00'] = 'pct_hourly_2400'
+    elif '24:00' in df.columns:
+        rename_dict['24:00'] = 'pct_hourly_2400'
+    df = df.rename(columns=rename_dict)
+    df['pct_hourly_2500'] = 0
+    target_cols = ['dt_strata', 'dow'] + [f'pct_hourly_{i:02d}00' for i in range(1, 26)]
+    return df[target_cols]
+```
+
+### Example 3 (Case length3_1)
+Source Schema: Strata_ID (int64), Strata (object), DT_STRATA (object), DOW (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)
+Target Schema: date (object), Hour 1..Hour 24 (float64)
+Source Sample: DT_STRATA sample: ['7/2/2016']; PCT_HOURLY_0100 sample: [0.000701]
+Target Sample: date sample: ['01/01/2016']; Hour 1 sample: [0.001222]
+Step-by-Step Reasoning Plan:
+1. Analyze date: Source column 'DT_STRATA' has dates formatted as M/D/YYYY. Format as '%m/%d/%Y' in column 'date'.
+2. Map hour columns: 'PCT_HOURLY_{i:02d}00' maps to 'Hour {i}' for i=1..24.
+3. Select columns: 'date' followed by 'Hour 1' through 'Hour 24'. Drop unused columns.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['date'] = dt.dt.strftime('%m/%d/%Y')
+    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'Hour {i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    target_cols = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    return df[target_cols]
+```
+
+============================================================
+Now, synthesize the transformation function for the following case:
+
+### Benchmark Case: length9_3
+- Source sample rows: 300 rows (Note: test_0.csv may have different row count)
+- Target rows: 300 rows
+
+### Exact Target Columns (Must match verbatim):
+['season', 'daytype', 'hour', 'temperature_range', 'constant', 'coefficient', 'low_end', 'high_end']
+
+### Source Schema and Types:
+CLASS (object), SEASON DAY TYPE (object), HOUR (int64), T_MIN_1 (int64), T_MAX_1 (float64), CONSTANT_1 (float64), TEMP_1 (float64), RH_1 (float64), WIND_1 (float64), T_MIN_2 (float64), T_MAX_2 (float64), CONSTANT_2 (float64), TEMP_2 (float64), RH_2 (float64), WIND_2 (float64), T_MIN_3 (float64), T_MAX_3 (float64), CONSTANT_3 (float64), TEMP_3 (float64), RH_3 (float64), WIND_3 (float64), PROFILE_MIN (float64), PROFILE_MAX (float64)
+
+### Target Schema and Types:
+season (object), daytype (object), hour (int64), temperature_range (int64), constant (float64), coefficient (float64), low_end (int64), high_end (int64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- CLASS: ['RS0']
+
+### Source Table Sample (training_0.csv):
+| CLASS   | SEASON DAY TYPE   |   HOUR |   T_MIN_1 |   T_MAX_1 |   CONSTANT_1 |     TEMP_1 |         RH_1 |       WIND_1 |   T_MIN_2 |   T_MAX_2 |   CONSTANT_2 |      TEMP_2 |         RH_2 |       WIND_2 |   T_MIN_3 |   T_MAX_3 |   CONSTANT_3 |       TEMP_3 |         RH_3 |       WIND_3 |   PROFILE_MIN |   PROFILE_MAX |
+|:--------|:------------------|-------:|----------:|----------:|-------------:|-----------:|-------------:|-------------:|----------:|----------:|-------------:|------------:|-------------:|-------------:|----------:|----------:|-------------:|-------------:|-------------:|-------------:|--------------:|--------------:|
+| RS0     | June WE           |     13 |        68 |      75   |     -2.27261 |  0.0408502 |   0.0107447  | nan          |      75   |      82   |     -6.5827  |  0.0985877  |   0.00746994 | nan          |      82   |        91 |    -4.27286  |   0.0684744  |   0.0112146  | nan          |         0.616 |         2.821 |
+| RS0     | June WE           |     14 |        68 |      81   |     -2.1451  |  0.0409519 |   0.00935745 | nan          |      81   |      93   |     -3.3475  |  0.0602259  |   0.00848122 | nan          |     nan   |       nan |   nan        | nan          | nan          | nan          |         0.616 |         2.821 |
+| RS0     | June WE           |     15 |        70 |      78.5 |     -2.81425 |  0.0488167 |   0.0109052  | nan          |      78.5 |      83.5 |     -7.66717 |  0.11022    |   0.0120217  | nan          |      83.5 |        95 |    -2.6015   |   0.0567524  |   0.00051828 | nan          |         0.616 |         2.821 |
+| RS0     | June WE           |     16 |        68 |      76   |     -3.55845 |  0.0629464 |   0.00860501 | nan          |      76   |      83   |     -6.97602 |  0.0973837  |   0.0201065  | nan          |      83   |        97 |    -0.744828 |   0.0381572  |  -0.00381544 | nan          |         0.616 |         2.821 |
+| RS0     | December WE       |     21 |        19 |      33.5 |      2.56865 | -0.0175021 | nan          |  -0.00431114 |      33.5 |      47.5 |      2.37433 | -0.013512   | nan          |  -0.00826092 |      47.5 |        66 |     1.8743   |  -0.00753462 | nan          |   0.00102602 |         0.693 |         2.504 |
+| RS0     | December WE       |     22 |        18 |      32   |      2.55477 | -0.0163982 | nan          |  -0.0107095  |      32   |      46   |      2.31076 | -0.0163921  | nan          |   0.0039235  |      46   |        68 |     1.89634  |  -0.00980365 | nan          |   0.00388997 |         0.693 |         2.504 |
+| RS0     | December WE       |     23 |        19 |      34   |      2.68285 | -0.0262719 | nan          |  -0.00899648 |      34   |      48   |      2.35611 | -0.0210872  | nan          |   0.00469002 |      48   |        64 |     1.82646  |  -0.0115957  | nan          |   0.0135813  |         0.693 |         2.504 |
+| RS0     | December WE       |     24 |        19 |      35   |      2.37988 | -0.0225725 | nan          |  -0.0027489  |      35   |      47.5 |      1.71898 | -0.00932639 | nan          |   0.00466731 |      47.5 |        64 |     1.42192  |  -0.00704835 | nan          |   0.0099397  |         0.693 |         2.504 |
+
+### Desired Target Table Sample (target.csv):
+| season   | daytype   |   hour |   temperature_range |   constant |   coefficient |   low_end |   high_end |
+|:---------|:----------|-------:|--------------------:|-----------:|--------------:|----------:|-----------:|
+| SPRING   | WEEKDAY   |      1 |                  53 |        nan |           nan |         9 |         62 |
+| SPRING   | WEEKDAY   |      2 |                  53 |        nan |           nan |        10 |         63 |
+| SPRING   | WEEKDAY   |      3 |                  56 |        nan |           nan |         9 |         65 |
+| SPRING   | WEEKDAY   |      4 |                  56 |        nan |           nan |        10 |         66 |
+| SUMMER   | WEEKEND   |      9 |                  21 |        nan |           nan |        60 |         81 |
+| SUMMER   | WEEKEND   |     10 |                  21 |        nan |           nan |        63 |         84 |
+| SUMMER   | WEEKEND   |     11 |                  21 |        nan |           nan |        66 |         87 |
+| SUMMER   | WEEKEND   |     12 |                  22 |        nan |           nan |        67 |         89 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

@@ -1,0 +1,39 @@
+### Benchmark Case: length2_9
+- Source sample rows: 1450 rows (Note: test_0.csv may have different row count)
+- Target rows: 2 rows
+- Notice: Row count changes from 1450 to 2. Check if an aggregation, grouping, or pivoting operation is required.
+
+### Exact Target Columns (Must match verbatim):
+['dt_strata', 'dow', 'pct_hourly_0100', 'pct_hourly_0200', 'pct_hourly_0300', 'pct_hourly_0400', 'pct_hourly_0500', 'pct_hourly_0600', 'pct_hourly_0700', 'pct_hourly_0800', 'pct_hourly_0900', 'pct_hourly_1000', 'pct_hourly_1100', 'pct_hourly_1200', 'pct_hourly_1300', 'pct_hourly_1400', 'pct_hourly_1500', 'pct_hourly_1600', 'pct_hourly_1700', 'pct_hourly_1800', 'pct_hourly_1900', 'pct_hourly_2000', 'pct_hourly_2100', 'pct_hourly_2200', 'pct_hourly_2300', 'pct_hourly_2400', 'pct_hourly_2500']
+
+### Datetime Format Inferences:
+- Source column 'date' has date format '%m/%d/%Y %H:%M' (sample: '1/2/2018 0:11')
+
+### Source Schema and Types:
+date (object), zone_016 (float64)
+
+### Target Schema and Types:
+dt_strata (object), dow (int64), pct_hourly_0100 (float64), pct_hourly_0200 (float64), pct_hourly_0300 (float64), pct_hourly_0400 (float64), pct_hourly_0500 (float64), pct_hourly_0600 (float64), pct_hourly_0700 (float64), pct_hourly_0800 (float64), pct_hourly_0900 (float64), pct_hourly_1000 (float64), pct_hourly_1100 (float64), pct_hourly_1200 (float64), pct_hourly_1300 (float64), pct_hourly_1400 (float64), pct_hourly_1500 (float64), pct_hourly_1600 (float64), pct_hourly_1700 (float64), pct_hourly_1800 (float64), pct_hourly_1900 (float64), pct_hourly_2000 (float64), pct_hourly_2100 (float64), pct_hourly_2200 (float64), pct_hourly_2300 (float64), pct_hourly_2400 (float64), pct_hourly_2500 (int64)
+
+### Source Table Sample (training_0.csv):
+| date          |   zone_016 |
+|:--------------|-----------:|
+| 1/2/2018 0:11 |       67.9 |
+| 1/2/2018 0:12 |       67.9 |
+| 1/2/2018 0:13 |       67.9 |
+| 1/2/2018 0:14 |       67.9 |
+| 1/3/2018 0:17 |       69   |
+| 1/3/2018 0:18 |      nan   |
+| 1/3/2018 0:19 |      nan   |
+| 1/3/2018 0:20 |      nan   |
+
+### Desired Target Table Sample (target.csv):
+| dt_strata   |   dow |   pct_hourly_0100 |   pct_hourly_0200 |   pct_hourly_0300 |   pct_hourly_0400 |   pct_hourly_0500 |   pct_hourly_0600 |   pct_hourly_0700 |   pct_hourly_0800 |   pct_hourly_0900 |   pct_hourly_1000 |   pct_hourly_1100 |   pct_hourly_1200 |   pct_hourly_1300 |   pct_hourly_1400 |   pct_hourly_1500 |   pct_hourly_1600 |   pct_hourly_1700 |   pct_hourly_1800 |   pct_hourly_1900 |   pct_hourly_2000 |   pct_hourly_2100 |   pct_hourly_2200 |   pct_hourly_2300 |   pct_hourly_2400 |   pct_hourly_2500 |
+|:------------|------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|------------------:|
+| 01/02/18    |     2 |               0   |               0   |               0   |               0   |               0   |               0   |                 0 |               0   |               0   |               0   |               0   |               0   |               0   |               0   |               0   |               0   |               0   |               0   |               0   |               0   |               0   |               0   |               0   |             746.9 |                 0 |
+| 01/01/18    |     1 |            4073.5 |            4066.4 |            4059.1 |            4051.5 |            4041.5 |            4031.8 |              4023 |            4016.4 |            4011.1 |            4003.6 |            3995.2 |            3988.4 |            3979.6 |            3970.8 |            3963.2 |            3956.7 |            3964.6 |            3978.9 |            3993.3 |            4009.9 |            4030.8 |            4048.2 |            4063.6 |            4074   |                 0 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

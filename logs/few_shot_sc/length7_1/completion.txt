@@ -1,0 +1,171 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Date Parsing**: The source column `CST` contains strings like 'Sat 12/01/2012'. We need to parse this to extract the month name and determine if the day is a weekday or weekend.
+   - Split the string to get the date part (e.g., '12/01/2012').
+   - Convert to datetime.
+   - Extract the month name using `.dt.strftime('%B')` for the `month` column.
+   - Determine `daytype`: If the day of week is Monday-Friday, it's 'weekday'; if Saturday or Sunday, it's 'weekend'.
+
+2. **Analyze Hourly Columns**: The source has columns `1:00` through `24:00:00`. The target has `hr1` through `hr24`.
+   - Create a mapping dictionary to rename `1:00` -> `hr1`, `2:00` -> `hr2`, ..., `24:00:00` -> `hr24`.
+   - Apply this rename to the DataFrame.
+
+3. **Analyze Row Count Change (Aggregation/Grouping)**:
+   - Source has 1339 rows. Target has 1340 rows.
+   - Looking at the target sample, we see multiple rows for the same `month` and `daytype`. For example, "April", "weekday" appears 3 times in the first few rows.
+   - The source data appears to be daily profiles. The target data seems to be a subset or a specific aggregation.
+   - Let's look closer at the values.
+     - Source row 1 (Sat 12/01/2012): hr1=0.9841.
+     - Target row 1 (April, weekday): hr1=1.02.
+     - This suggests the target is not directly derived from the sample source rows provided in the prompt's "Source Table Sample" vs "Target Table Sample" in a 1-to-1 mapping. The samples provided are likely from different parts of the dataset or the transformation involves grouping.
+   - Wait, the prompt says "Source sample rows: 1339 rows" and "Target rows: 1340 rows". The row count increases slightly.
+   - Let's re-examine the target structure. It has `month` and `daytype`.
+   - If we group by `month` and `daytype`, we would get one row per unique combination. April has 30 days. Weekdays ~22, Weekends ~8. That's 30 rows for April. The target shows multiple rows for April/weekday.
+   - Actually, looking at the target sample, the values for `hr1` etc. are distinct for each row.
+   - Is it possible the target is just a filtered/renamed version of the source?
+   - Let's check the number of unique months. If the source is daily data for several years, grouping by month/daytype might reduce rows.
+   - However, the row count *increased* from 1339 to 1340. This is a very specific change.
+   - Let's look at the columns again.
+   - Source: `CST`, `1:00`...`24:00:00`.
+   - Target: `month`, `daytype`, `hr1`...`hr24`.
+   - If we simply rename and add `month`/`daytype`, we keep 1339 rows.
+   - Why 1340?
+   - Perhaps there is a missing value imputation or a specific row added?
+   - Or perhaps the source has a header row that was counted? No, pandas usually handles headers.
+   - Let's look at the "Notice": "Row count changes from 1339 to 1340. Check if an aggregation, grouping, or pivoting operation is required."
+   - Usually, grouping reduces rows. Pivoting can change shape.
+   - Let's look at the target sample values again.
+     - Target Row 1: April, weekday, hr1=1.02.
+     - Target Row 5: November, weekday, hr1=1.057.
+   - These look like averages or typical profiles.
+   - If we group by `month` and `daytype` and take the **mean** of the hourly columns, we would get one row per (month, daytype).
+   - There are 12 months. Each month has weekdays and weekends. Max 24 rows.
+   - The target has 1340 rows. This is far more than 24.
+   - This implies the grouping key is more granular.
+   - What if the grouping is by `month` and `daytype` AND `year`? Still small.
+   - What if the target is NOT aggregated?
+   - If the target is just the source rows with added columns, why 1340 vs 1339?
+   - Maybe one row is duplicated? Or a header row was included in the source count but not the target?
+   - Or maybe the source has a row with NaN that is dropped? No, rows increased.
+   - Let's consider the possibility that the "Source sample" provided in the prompt is just a snippet, and the actual transformation is a simple rename + date extraction.
+   - If I just rename and extract, I get 1339 rows.
+   - Is it possible the target includes an empty row or a total row?
+   - Let's look at the target columns: `month`, `daytype`, `hr1`...
+   - Let's assume the standard transformation for these TbT tasks:
+     1. Parse Date.
+     2. Derive `month` and `daytype`.
+     3. Rename hours.
+     4. Select columns.
+   - If the row count mismatch is due to a specific anomaly (like a header row in the source CSV being read as data), `pd.read_csv` usually handles headers.
+   - However, if I must explain the 1340 vs 1339:
+     - 1339 days is approx 3.6 years.
+     - 1340 is 1339 + 1.
+     - Could it be that the target adds a "Total" or "Average" row? Unlikely given the sample values look like daily profiles.
+     - Could it be that the source has a duplicate index or a specific row that gets split?
+     - Let's look at the sample data again.
+     - Source: Sat 12/01/2012.
+     - Target: April, weekday.
+     - The samples don't match directly.
+   
+   - Let's reconsider the "GroupBy" hint.
+   - If we group by `month` and `daytype`, we get ~24 rows.
+   - The target has 1340 rows.
+   - This is roughly the same magnitude as the source (1339).
+   - Therefore, it is **not** a heavy aggregation.
+   - It is likely a **1-to-1 transformation** (renaming/deriving columns).
+   - Why +1 row?
+   - In some datasets, there might be a row with all NaNs or a specific marker that is handled differently, or perhaps the source file had a trailing newline that created an empty row which was dropped, but here it's added?
+   - Actually, looking at similar TbT benchmarks, sometimes the "Source" count includes a header row if read incorrectly, or the "Target" count includes an index row.
+   - However, without external knowledge, the most robust transformation is the direct mapping.
+   - If I output 1339 rows and the expected is 1340, I might be missing a row.
+   - Is there a row in the target that isn't in the source?
+   - Or is the source missing a row that is implied?
+   - Let's look at the date range. If the source covers Dec 2012 to July 2016 (from sample), that's about 4.5 years. 4.5 * 365 = 1642 days. 1339 is less.
+   - If the target has 1340, it's extremely close.
+   - I will proceed with the direct transformation: Parse date, create `month` and `daytype`, rename columns.
+   - If there is a specific row addition, it's not evident from the schema.
+   - Wait, look at the target sample: `hr1` values are rounded to 2-3 decimals. Source has 4 decimals.
+   - Target Row 1: 1.02. Source Row 1 (Sat 12/01/2012): 0.9841.
+   - The values are different. This confirms the samples are from different parts of the data or the data is aggregated.
+   - But 1340 rows is too many for monthly aggregation.
+   - Is it possible the target is grouped by `month` and `daytype` AND `year`?
+   - 12 months * 2 types * ~4 years = 96 rows. Still too few.
+   - Is it possible the target is grouped by `month` and `daytype` AND `day_of_month`?
+   - 12 * 2 * 31 = 744 rows. Still too few.
+   - Is it possible the target is grouped by `month` and `daytype` AND `year` AND `week`?
+   - This is getting complex.
+   
+   - Let's look at the column names again.
+   - Source: `CST` (Date), Hours.
+   - Target: `month`, `daytype`, Hours.
+   - The target does NOT have `year` or `day`.
+   - If the target has 1340 rows, and only `month` and `daytype` as identifiers, there must be many duplicate `(month, daytype)` pairs.
+   - This implies the rows are distinct daily records, just labeled by month and daytype.
+   - So, it IS a 1-to-1 transformation.
+   - Why the +1 row?
+   - Maybe the source has a header row that was counted in the "1339" stat in the prompt description erroneously? Or the target has an empty row?
+   - I will implement the 1-to-1 transformation. If a row is missing, it's likely a data artifact not generalizable from schema alone.
+   - One possibility: The source has a row with `CST` being NaN or invalid, which is dropped? No, rows increased.
+   - Another possibility: The target adds a row for "Unknown" or similar?
+   - Given the strict requirement to generalize, I will stick to the deterministic mapping.
+
+   - **Refinement on Daytype**:
+     - Monday-Friday: 'weekday'
+     - Saturday-Sunday: 'weekend'
+
+   - **Refinement on Month**:
+     - Full name: 'January', 'February', etc.
+
+   - **Refinement on Hours**:
+     - `1:00` -> `hr1`
+     - ...
+     - `24:00:00` -> `hr24`
+
+4. **Implementation Steps**:
+   - Copy source.
+   - Parse `CST` to datetime. Handle format `%a %m/%d/%Y`.
+   - Create `month` column: `dt.strftime('%B')`.
+   - Create `daytype` column: Map dayofweek. 0-4 -> 'weekday', 5-6 -> 'weekend'.
+   - Rename hour columns.
+   - Select target columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the CST column to datetime
+    # Format is 'Sat 12/01/2012' -> '%a %m/%d/%Y'
+    # We need to handle the fact that the day name is abbreviated.
+    dt = pd.to_datetime(df['CST'], format='%a %m/%d/%Y')
+    
+    # 2. Create 'month' column with full month name
+    df['month'] = dt.dt.strftime('%B')
+    
+    # 3. Create 'daytype' column
+    # Monday=0, Tuesday=1, ..., Friday=4, Saturday=5, Sunday=6
+    # Weekday if 0-4, Weekend if 5-6
+    dayofweek = dt.dt.dayofweek
+    df['daytype'] = dayofweek.apply(lambda x: 'weekend' if x >= 5 else 'weekday')
+    
+    # 4. Rename hourly columns
+    # Source: '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target: 'hr1', 'hr2', ..., 'hr23', 'hr24'
+    rename_dict = {}
+    for i in range(1, 25):
+        src_col = f'{i}:00'
+        if i == 24:
+            src_col = '24:00:00'
+        tgt_col = f'hr{i}'
+        if src_col in df.columns:
+            rename_dict[src_col] = tgt_col
+            
+    df = df.rename(columns=rename_dict)
+    
+    # 5. Define target columns in order
+    target_columns = ['month', 'daytype'] + [f'hr{i}' for i in range(1, 25)]
+    
+    # 6. Return the dataframe with only the target columns
+    return df[target_columns]
+```

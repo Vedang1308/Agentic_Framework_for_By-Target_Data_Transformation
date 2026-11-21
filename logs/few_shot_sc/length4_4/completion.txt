@@ -1,0 +1,196 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Schemas and Row Counts**:
+   - Source has 182 rows, Target has 183 rows. This suggests a transformation that might involve adding a row (e.g., an aggregate, a specific date like Jan 1st if missing, or simply a shift/reindexing). However, looking at the sample data:
+     - Source dates range from July 2013 to Dec 2013 in the sample, but the target sample starts with Jan 2013. This implies the full dataset covers a full year (or similar period).
+     - The row count difference (182 vs 183) is small. Let's look closer at the columns.
+   - Source columns: `Date`, `Class`, `1` through `24`.
+   - Target columns: `date`, `1:00 AM`, `2:00 AM`, ..., `12:00 AM`, `1:00 PM`, ..., `12:00 PM`.
+
+2. **Map Hour Columns**:
+   - Source has integer columns `1` to `24` representing hours of the day (1-based index, likely 1=1:00 AM, 12=12:00 PM, 13=1:00 PM, ..., 24=12:00 AM/Next Day).
+   - Target has string columns with 12-hour clock format.
+   - Mapping logic:
+     - Source `1` -> Target `1:00 AM`
+     - Source `2` -> Target `2:00 AM`
+     - ...
+     - Source `11` -> Target `11:00 AM`
+     - Source `12` -> Target `12:00 PM` (Note: Target list has `12:00 AM` before `1:00 PM`. Let's check the order carefully).
+     - Target Column Order: `1:00 AM` ... `11:00 AM`, `12:00 AM`, `1:00 PM` ... `11:00 PM`, `12:00 PM`.
+     - Wait, standard 12-hour clock:
+       - 1 AM = Hour 1
+       - ...
+       - 11 AM = Hour 11
+       - 12 PM = Hour 12
+       - 1 PM = Hour 13
+       - ...
+       - 11 PM = Hour 23
+       - 12 AM = Hour 24 (or 0)
+     - Let's verify with the target sample values vs source sample values.
+     - Source Row 1 (7/3/2013):
+       - Col `1`: 0.56
+       - Col `12`: 0.82
+       - Col `13`: 0.85
+       - Col `24`: 0.96
+     - Target Row corresponding to 7/3/2013? The target sample starts with 01/01/2013. We don't have the direct mapping for 7/3 in the target sample provided. However, we can infer the mapping from the column names and standard time conventions.
+     - Standard mapping:
+       - Source `1` (1 AM) -> `1:00 AM`
+       - Source `12` (12 PM) -> `12:00 PM`
+       - Source `13` (1 PM) -> `1:00 PM`
+       - Source `24` (12 AM) -> `12:00 AM`
+     - Let's check the target column list again: `['1:00 AM', ..., '11:00 AM', '12:00 AM', '1:00 PM', ..., '11:00 PM', '12:00 PM']`.
+     - This order is slightly unusual (12:00 AM is placed between 11 AM and 1 PM?). No, looking at the list:
+       `1:00 AM` ... `11:00 AM` (Indices 0-10)
+       `12:00 AM` (Index 11) -> This corresponds to Source Hour 24? Or Hour 12?
+       `1:00 PM` ... `11:00 PM` (Indices 12-22)
+       `12:00 PM` (Index 23) -> This corresponds to Source Hour 12?
+     - Let's re-read standard time.
+       - Hour 1 = 1:00 AM
+       - Hour 12 = 12:00 PM
+       - Hour 13 = 1:00 PM
+       - Hour 24 = 12:00 AM
+     - If Source `12` is 12:00 PM and Source `24` is 12:00 AM.
+     - The target column `12:00 AM` is at index 11. The target column `12:00 PM` is at index 23.
+     - Let's assume the mapping is:
+       - Source `i` (1-11) -> `i:00 AM`
+       - Source `12` -> `12:00 PM`
+       - Source `13-23` -> `(i-12):00 PM`
+       - Source `24` -> `12:00 AM`
+     - Let's check the target column list order again:
+       `1:00 AM` ... `11:00 AM` (11 cols)
+       `12:00 AM` (1 col)
+       `1:00 PM` ... `11:00 PM` (11 cols)
+       `12:00 PM` (1 col)
+     - This order puts `12:00 AM` (Source 24) in the middle and `12:00 PM` (Source 12) at the end. This is a specific permutation.
+
+3. **Date Formatting**:
+   - Source `Date` is `'%m/%d/%Y'` (e.g., '7/3/2013').
+   - Target `date` is `'%m/%d/%Y'` (e.g., '01/01/2013').
+   - We need to ensure zero-padding. `pd.to_datetime` then `.dt.strftime('%m/%d/%Y')` handles this.
+
+4. **Row Count Discrepancy (182 -> 183)**:
+   - The source has 182 rows. The target has 183.
+   - Common reasons:
+     - A new row is added (e.g., a summary row, or a missing date is filled).
+     - The source might be missing a date that is present in the target.
+     - Looking at the samples: Source has dates in July-Dec 2013. Target has Jan 2013 - July 2013.
+     - If the source covers a full year (365 days), 182 rows is roughly half a year. 183 is also roughly half a year.
+     - Wait, 182 days is exactly 26 weeks. 183 days is 26 weeks + 1 day.
+     - Is it possible the source is missing a specific date? Or is there a grouping?
+     - The `Class` column is constant ('RESIDENT').
+     - Let's look at the "Notice": "Row count changes from 182 to 183. Check if an aggregation, grouping, or pivoting operation is required."
+     - Usually, if rows are added, it's because of a `reindex` on a complete date range.
+     - However, without knowing the *exact* missing date, we cannot hardcode it.
+     - Alternative theory: Is one of the source rows split? No, schema is flat.
+     - Is one target row an aggregate? E.g., "Total"? No, target schema is identical to source structure, just renamed columns.
+     - Let's look at the dates in the source sample: 7/3, 7/4, 7/5, 7/6, 12/28, 12/29, 12/30, 12/31.
+     - Target sample: 01/01, 01/02, 01/03, 01/04, 06/29, 06/30, 07/01, 07/02.
+     - There is no obvious overlap in the *samples* provided to deduce the exact missing date.
+     - However, in many energy/load datasets, Jan 1st is a special case or sometimes missing in source if it's a "working day" only dataset, but target includes it. Or vice versa.
+     - But wait, look at the row counts again. 182 vs 183.
+     - If the dataset is for a non-leap year (2013), it has 365 days.
+     - If the source has 182 rows, it might be a subset.
+     - If the target has 183 rows, it might be the same subset plus one day?
+     - Or, is it possible that the source has duplicate dates that are aggregated? No, source rows look unique.
+     - Let's consider the possibility that the transformation involves **sorting** or **reindexing** to a full date range defined by the min/max of the source, and filling missing dates with NaN or 0?
+     - If we reindex to a complete date range, we might add rows.
+     - What is the date range?
+     - If Source is 182 rows, and Target is 183, and they represent the same "logical" dataset, maybe one date is missing in source.
+     - Which date? Often, in these benchmarks, if the row count increases by 1, it's because the target includes a date that was filtered out or missing in the source, OR the source had a duplicate that was aggregated (but count would decrease).
+     - Let's look at the provided solution pattern for similar problems. Often, `reindex` with `date_range` is used.
+     - How to determine the range? `pd.date_range(start=df['Date'].min(), end=df['Date'].max(), freq='D')`.
+     - If we do this, we get all days between min and max.
+     - If the source has gaps, `reindex` adds them (as NaN).
+     - Does the target have NaNs? The sample doesn't show NaNs.
+     - However, if the source is contiguous, `reindex` won't add rows.
+     - If the source is missing 1 day, `reindex` adds 1 row.
+     - This fits the 182 -> 183 change perfectly if the source has a gap of 1 day within the min-max range.
+     - Step:
+       1. Parse dates.
+       2. Set index to Date.
+       3. Create a full date range from min to max.
+       4. Reindex the dataframe to this full range.
+       5. This will add the missing date(s).
+       6. The values for the missing date will be NaN. The target sample doesn't show NaNs, but maybe the missing date is not in the sample, or the sample just doesn't show it. Or perhaps the missing values are filled with 0? The target schema is float64.
+       7. Let's assume `reindex` is the key.
+
+5. **Refining the Column Mapping**:
+   - Source Cols: `1` ... `24`.
+   - Target Cols:
+     - `1:00 AM` ... `11:00 AM` (Source 1-11)
+     - `12:00 AM` (Source 24)
+     - `1:00 PM` ... `11:00 PM` (Source 13-23)
+     - `12:00 PM` (Source 12)
+   - Construct a rename dictionary.
+
+6. **Final Steps**:
+   - Parse `Date` to datetime.
+   - Set `Date` as index.
+   - Reindex to `pd.date_range` from min to max.
+   - Rename columns.
+   - Reset index.
+   - Format `date` column as `'%m/%d/%Y'`.
+   - Select and return target columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse Date and set as index
+    df['Date'] = pd.to_datetime(df['Date'])
+    df = df.set_index('Date')
+    
+    # 2. Handle Row Count Increase (182 -> 183) by reindexing to full date range
+    # This fills any missing dates within the min-max range of the source data.
+    date_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq='D')
+    df = df.reindex(date_range)
+    
+    # 3. Define Column Mapping
+    # Source columns are integers 1 to 24.
+    # Target columns are 12-hour format strings.
+    # Mapping logic:
+    # Source 1-11 -> 1:00 AM - 11:00 AM
+    # Source 12 -> 12:00 PM
+    # Source 13-23 -> 1:00 PM - 11:00 PM
+    # Source 24 -> 12:00 AM
+    
+    rename_dict = {}
+    
+    # 1:00 AM to 11:00 AM
+    for i in range(1, 12):
+        rename_dict[str(i)] = f'{i}:00 AM'
+        
+    # 12:00 PM
+    rename_dict['12'] = '12:00 PM'
+    
+    # 1:00 PM to 11:00 PM (Source 13 to 23)
+    for i in range(13, 24):
+        hour_12 = i - 12
+        rename_dict[str(i)] = f'{hour_12}:00 PM'
+        
+    # 12:00 AM (Source 24)
+    rename_dict['24'] = '12:00 AM'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 4. Reset index to get 'Date' back as a column
+    df = df.reset_index()
+    df = df.rename(columns={'index': 'date'})
+    
+    # 5. Format date column
+    df['date'] = df['date'].dt.strftime('%m/%d/%Y')
+    
+    # 6. Define target columns in the exact order specified
+    target_cols = [
+        'date',
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM',
+        '12:00 AM',
+        '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM',
+        '12:00 PM'
+    ]
+    
+    # 7. Select and return
+    return df[target_cols]
+```

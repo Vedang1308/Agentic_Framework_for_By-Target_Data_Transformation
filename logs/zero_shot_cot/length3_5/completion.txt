@@ -1,0 +1,62 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `class`, `Description`, `analysis`, `date`, `value1` through `value24`, and `uom`. The `date` column is in string format `'%m/%d/%Y'`. The `value` columns represent hourly data for that day.
+    *   **Target**: Contains columns `date` and `Hour 1` through `Hour 24`. The `date` column is in datetime format `'%Y-%m-%d %H:%M:%S'`. The `Hour` columns correspond to the `value` columns in the source.
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target might include a date that is not present in the provided source sample, or there is a slight discrepancy in the sample data provided vs the full dataset. However, looking at the target sample, it starts from `2011-01-01`, while the source sample starts from `2011-07-03`. This implies the source table likely contains data for the entire year (or a larger range), and the sample just shows a subset. The transformation logic should be general: map each source row to a target row. The row count difference in the *sample* description might be due to the sample not showing all rows, or potentially a missing day in the source that needs to be handled? Let's look closer. The target sample shows dates from Jan 2011 to July 2011. The source sample shows July 2011 to Dec 2011. It is highly likely the full source table contains all dates. The transformation is essentially a reshaping/renaming operation. If the source is missing a day that is in the target, we might need to forward fill or interpolate, but usually, in these TbT tasks, the source contains all necessary data. The "182 vs 183" note is a hint to check for aggregations or missing values. Since `value1`-`value24` are already hourly, no aggregation is needed. The extra row in target might be a result of the source having a different date range or a specific date being added. However, without explicit instructions to generate missing dates, the standard approach is to transform existing rows. Let's assume the source contains all rows needed for the target. If the target has more rows, it might be that the source has a row that splits? No, the structure is 1-to-1 per day. Let's look at the dates. Target starts 2011-01-01. Source sample starts 2011-07-03. The full source likely has 365 or 366 rows. 182 is roughly half a year. 183 is roughly half a year. It's possible the source has 182 days and the target has 183? Or maybe the source has duplicates? The distinct values for `class`, `Description`, `analysis` are single values, suggesting no grouping is needed. The most likely scenario is that the source table provided in the full test case has 182 rows, and the target has 183. This is strange for a 1-to-1 mapping. Let's re-read carefully. "Source sample rows: 182 rows". "Target rows: 183 rows". This implies the transformation might involve adding a row? Or perhaps the source has a row that is split? No, `value1`-`value24` are atomic.
+    *   Alternative hypothesis: The source table might have multiple entries for the same date? If so, we would need to aggregate. But the distinct values for `class`, `Description`, `analysis` are single, and `date` is likely unique per row in the source (standard for this type of data). If `date` is unique, 182 source rows -> 182 target rows. Why 183?
+    *   Let's check the target sample again. It shows `2011-01-01` to `2011-07-02`. That's 183 days (Jan 31 + Feb 28 + Mar 31 + Apr 30 + May 31 + Jun 30 + Jul 2 = 183).
+    *   The source sample shows `2011-07-03` to `2011-12-31`. That's 182 days (Jul 29 + Aug 31 + Sep 30 + Oct 31 + Nov 30 + Dec 31 = 182).
+    *   Ah, the *samples* are disjoint. The full source table likely contains *all* dates from Jan 1 to Dec 31. The sample just shows a subset. The "182 rows" and "183 rows" in the prompt description likely refer to the *sample* files provided for training/testing, not the full logical dataset. The transformation function must work on the full source DataFrame. If the full source has 365 rows, the target will have 365 rows. The prompt's note about row count change is likely a red herring or refers to the specific sample files which are disjoint subsets. The core task is to rename columns and format dates.
+
+2.  **Date Formatting**:
+    *   Parse the source `date` column from `'%m/%d/%Y'` to a datetime object.
+    *   Format it to `'%Y-%m-%d %H:%M:%S'` as required by the target. Since the time is always midnight (start of day), we can set the time to `00:00:00`.
+
+3.  **Column Renaming**:
+    *   The source columns `value1` to `value24` need to be renamed to `Hour 1` to `Hour 24`.
+    *   We can create a mapping dictionary or use a list comprehension to generate the new column names.
+
+4.  **Column Selection and Ordering**:
+    *   Select the `date` column and the renamed `Hour` columns.
+    *   Ensure the order matches the target schema: `date`, `Hour 1`, ..., `Hour 24`.
+
+5.  **Implementation Details**:
+    *   Use `pd.to_datetime` to parse dates.
+    *   Use `dt.strftime` to format dates.
+    *   Use `rename` or direct assignment to change column names.
+    *   Return the DataFrame with the exact target column names.
+
+### Python Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    # Create a copy to avoid modifying the original source
+    df = source.copy()
+    
+    # 1. Parse and format the date column
+    # Source format: '%m/%d/%Y' (e.g., '7/3/2011')
+    # Target format: '%Y-%m-%d %H:%M:%S' (e.g., '2011-01-01 00:00:00')
+    df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y')
+    df['date'] = df['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Rename value columns to Hour columns
+    # Map value1 -> Hour 1, value2 -> Hour 2, ..., value24 -> Hour 24
+    rename_mapping = {}
+    for i in range(1, 25):
+        rename_mapping[f'value{i}'] = f'Hour {i}'
+    
+    df.rename(columns=rename_mapping, inplace=True)
+    
+    # 3. Define the target column order
+    target_columns = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    
+    # 4. Select and order the columns
+    # Ensure all required columns are present
+    df = df[target_columns]
+    
+    return df
+```

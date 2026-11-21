@@ -1,0 +1,101 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Date Column**: The source column `DT_STRATA` contains dates in format `M/D/YYYY` (e.g., '7/2/2016'). The target column `date` requires the format `MM/DD/YYYY` (e.g., '01/01/2016'). We need to parse `DT_STRATA` into datetime objects and then format them as `%m/%d/%Y`.
+2.  **Analyze Hourly Columns**: The source has columns `PCT_HOURLY_0100` through `PCT_HOURLY_2400` (and `PCT_HOURLY_2500` which is always 0 and likely ignored or dropped based on target schema). The target has 24 columns representing hours in 12-hour format with AM/PM indicators.
+    *   The target column order is specific: `1:00 AM` through `11:00 AM`, then `12:00 AM` (Midnight), then `1:00 PM` through `11:00 PM`, then `12:00 PM` (Noon).
+    *   Let's map the source 24-hour indices (1-24) to the target 12-hour labels:
+        *   Source 0100 (1 AM) -> Target `1:00 AM`
+        *   Source 0200 (2 AM) -> Target `2:00 AM`
+        *   ...
+        *   Source 1100 (11 AM) -> Target `11:00 AM`
+        *   Source 1200 (12 PM/Noon) -> Target `12:00 PM`? Wait, let's look at the target list order carefully.
+        *   Target List: `['1:00 AM', ..., '11:00 AM', '12:00 AM', '1:00 PM', ..., '11:00 PM', '12:00 PM']`
+        *   This order is unusual. Let's trace standard time:
+            *   1:00 AM = Hour 1
+            *   ...
+            *   11:00 AM = Hour 11
+            *   12:00 PM = Hour 12 (Noon)
+            *   1:00 PM = Hour 13
+            *   ...
+            *   11:00 PM = Hour 23
+            *   12:00 AM = Hour 24 (Midnight)
+        *   However, the target column list provided is: `['1:00 AM', '2:00 AM', ..., '11:00 AM', '12:00 AM', '1:00 PM', ..., '11:00 PM', '12:00 PM']`.
+        *   Let's check the sample data to confirm the mapping.
+            *   Source `PCT_HOURLY_0100` (Hour 1) value for first row: `0.000701052`.
+            *   Target `1:00 AM` value for first row (date 01/01/2016? No, the sample target rows don't match the sample source rows directly in the prompt description, they are just samples). Let's look at the structure.
+            *   Usually, `PCT_HOURLY_0100` corresponds to 1:00 AM.
+            *   `PCT_HOURLY_1200` corresponds to 12:00 PM (Noon).
+            *   `PCT_HOURLY_2400` corresponds to 12:00 AM (Midnight).
+        *   Let's look at the target column names again:
+            1.  `1:00 AM` -> Source `PCT_HOURLY_0100`
+            2.  `2:00 AM` -> Source `PCT_HOURLY_0200`
+            ...
+            11. `11:00 AM` -> Source `PCT_HOURLY_1100`
+            12. `12:00 AM` -> This is Midnight. In 24h clock, this is Hour 24 (`PCT_HOURLY_2400`).
+            13. `1:00 PM` -> Source `PCT_HOURLY_1300`
+            ...
+            23. `11:00 PM` -> Source `PCT_HOURLY_2300`
+            24. `12:00 PM` -> This is Noon. In 24h clock, this is Hour 12 (`PCT_HOURLY_1200`).
+        *   So the mapping is:
+            *   Hours 1-11 (AM): `PCT_HOURLY_0100` to `PCT_HOURLY_1100` map to `1:00 AM` to `11:00 AM`.
+            *   Hour 24 (Midnight): `PCT_HOURLY_2400` maps to `12:00 AM`.
+            *   Hours 13-23 (PM): `PCT_HOURLY_1300` to `PCT_HOURLY_2300` map to `1:00 PM` to `11:00 PM`.
+            *   Hour 12 (Noon): `PCT_HOURLY_1200` maps to `12:00 PM`.
+3.  **Construct Rename Dictionary**: Create a dictionary mapping source column names to target column names based on the logic above.
+4.  **Format Date**: Convert `DT_STRATA` to datetime and format as `%m/%d/%Y` for the `date` column.
+5.  **Select and Order Columns**: Create the final DataFrame with columns `['date']` followed by the specific target column names in the exact order provided.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Format the date column
+    # Source DT_STRATA is like '7/2/2016', Target date is '01/01/2016'
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['date'] = dt.dt.strftime('%m/%d/%Y')
+    
+    # 2. Map hourly columns to 12-hour format with AM/PM
+    # Target column order: 
+    # 1:00 AM .. 11:00 AM (Hours 1-11)
+    # 12:00 AM (Hour 24 - Midnight)
+    # 1:00 PM .. 11:00 PM (Hours 13-23)
+    # 12:00 PM (Hour 12 - Noon)
+    
+    rename_dict = {}
+    
+    # Hours 1 to 11 (AM)
+    for i in range(1, 12):
+        src_col = f'PCT_HOURLY_{i:02d}00'
+        tgt_col = f'{i}:00 AM'
+        rename_dict[src_col] = tgt_col
+        
+    # Hour 24 (Midnight -> 12:00 AM)
+    rename_dict['PCT_HOURLY_2400'] = '12:00 AM'
+    
+    # Hours 13 to 23 (PM)
+    for i in range(13, 24):
+        src_col = f'PCT_HOURLY_{i:02d}00'
+        hour_12 = i - 12
+        tgt_col = f'{hour_12}:00 PM'
+        rename_dict[src_col] = tgt_col
+        
+    # Hour 12 (Noon -> 12:00 PM)
+    rename_dict['PCT_HOURLY_1200'] = '12:00 PM'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define target columns in the exact order specified
+    target_cols = [
+        'date',
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', 
+        '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', 
+        '12:00 AM',
+        '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', 
+        '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', 
+        '12:00 PM'
+    ]
+    
+    return df[target_cols]
+```

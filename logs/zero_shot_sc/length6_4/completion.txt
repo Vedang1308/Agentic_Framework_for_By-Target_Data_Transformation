@@ -1,0 +1,160 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source Schema**:
+    *   The source table has a `date` column in `MM/DD/YYYY` format.
+    *   It has 24 columns representing hourly data, but they are not in chronological order. Specifically, `12:00 AM` (midnight) appears after `11:00 AM` in the provided schema list, but logically it is Hour 1 (00:00).
+    *   The hours are labeled with AM/PM suffixes: `1:00 AM`, `2:00 AM`, ..., `11:00 AM`, `12:00 AM`, `1:00 PM`, ..., `12:00 PM`.
+    *   There is a `DSL` column which is not present in the target, so it should be dropped.
+
+2.  **Analyze Target Schema**:
+    *   The target has a `Date` column in `YYYY-MM-DD HH:MM:SS` format.
+    *   It has 24 columns named `Hr 1` through `Hr 24`.
+    *   `Hr 1` corresponds to `00:00` (Midnight), `Hr 2` to `01:00`, ..., `Hr 12` to `11:00`, `Hr 13` to `12:00` (Noon), ..., `Hr 24` to `23:00`.
+
+3.  **Map Source Columns to Target Columns**:
+    *   We need to map the specific source column names to the generic `Hr X` names.
+    *   `12:00 AM` -> `Hr 1` (00:00)
+    *   `1:00 AM` -> `Hr 2` (01:00)
+    *   ...
+    *   `11:00 AM` -> `Hr 12` (11:00)
+    *   `12:00 PM` -> `Hr 13` (12:00)
+    *   `1:00 PM` -> `Hr 14` (13:00)
+    *   ...
+    *   `11:00 PM` -> `Hr 24` (23:00)
+
+4.  **Transformation Steps**:
+    *   **Date Parsing**: Convert the `date` column from string (`MM/DD/YYYY`) to datetime objects. Then format it to the required string format `YYYY-MM-DD HH:MM:SS` (specifically `00:00:00` for the time part).
+    *   **Column Renaming/Reordering**: Create a mapping dictionary to rename the source hourly columns to `Hr 1` ... `Hr 24`. Apply this renaming.
+    *   **Column Selection**: Select only the `Date` and the 24 `Hr` columns. Drop `DSL`.
+    *   **Sorting**: The target sample shows dates sorted chronologically. The source sample is not strictly sorted (jumps from July to December). We should sort the DataFrame by the `Date` column to ensure deterministic output matching the target structure.
+    *   **Reset Index**: Clean up the index after sorting.
+
+5.  **Refinement on Date Format**:
+    *   Source: `7/3/2014`
+    *   Target: `2014-01-01 00:00:00`
+    *   Action: `pd.to_datetime(source['date'])` then `.dt.strftime('%Y-%m-%d %H:%M:%S')`.
+
+6.  **Refinement on Hour Mapping**:
+    *   Source columns: `['1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+    *   Target columns: `['Hr 1', 'Hr 2', ..., 'Hr 24']`
+    *   Logic:
+        *   12:00 AM is 00:00 -> Hr 1
+        *   1:00 AM is 01:00 -> Hr 2
+        *   ...
+        *   11:00 AM is 11:00 -> Hr 12
+        *   12:00 PM is 12:00 -> Hr 13
+        *   1:00 PM is 13:00 -> Hr 14
+        *   ...
+        *   11:00 PM is 23:00 -> Hr 24
+
+    Let's construct the rename map explicitly to avoid errors with AM/PM parsing logic.
+
+    Map:
+    '12:00 AM': 'Hr 1'
+    '1:00 AM': 'Hr 2'
+    '2:00 AM': 'Hr 3'
+    '3:00 AM': 'Hr 4'
+    '4:00 AM': 'Hr 5'
+    '5:00 AM': 'Hr 6'
+    '6:00 AM': 'Hr 7'
+    '7:00 AM': 'Hr 8'
+    '8:00 AM': 'Hr 9'
+    '9:00 AM': 'Hr 10'
+    '10:00 AM': 'Hr 11'
+    '11:00 AM': 'Hr 12'
+    '12:00 PM': 'Hr 13'
+    '1:00 PM': 'Hr 14'
+    '2:00 PM': 'Hr 15'
+    '3:00 PM': 'Hr 16'
+    '4:00 PM': 'Hr 17'
+    '5:00 PM': 'Hr 18'
+    '6:00 PM': 'Hr 19'
+    '7:00 PM': 'Hr 20'
+    '8:00 PM': 'Hr 21'
+    '9:00 PM': 'Hr 22'
+    '10:00 PM': 'Hr 23'
+    '11:00 PM': 'Hr 24'
+
+7.  **Final Code Structure**:
+    *   Import pandas.
+    *   Define function.
+    *   Parse date.
+    *   Rename columns.
+    *   Select target columns.
+    *   Sort by Date.
+    *   Reset index.
+    *   Return.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # Define the target columns verbatim
+    target_columns = [
+        'Date', 'Hr 1', 'Hr 2', 'Hr 3', 'Hr 4', 'Hr 5', 'Hr 6', 'Hr 7', 'Hr 8', 
+        'Hr 9', 'Hr 10', 'Hr 11', 'Hr 12', 'Hr 13', 'Hr 14', 'Hr 15', 'Hr 16', 
+        'Hr 17', 'Hr 18', 'Hr 19', 'Hr 20', 'Hr 21', 'Hr 22', 'Hr 23', 'Hr 24'
+    ]
+    
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Parse and format the date column
+    # Source format is MM/DD/YYYY, Target format is YYYY-MM-DD HH:MM:SS
+    df['Date'] = pd.to_datetime(df['date'], format='%m/%d/%Y').dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Define mapping from source hour columns to target hour columns
+    # Source order in schema: 1AM, 2AM, ..., 11AM, 12AM, 1PM, ..., 12PM
+    # Logical order (Hr 1 to Hr 24):
+    # Hr 1: 12:00 AM (00:00)
+    # Hr 2: 1:00 AM (01:00)
+    # ...
+    # Hr 12: 11:00 AM (11:00)
+    # Hr 13: 12:00 PM (12:00)
+    # ...
+    # Hr 24: 11:00 PM (23:00)
+    
+    rename_map = {
+        '12:00 AM': 'Hr 1',
+        '1:00 AM': 'Hr 2',
+        '2:00 AM': 'Hr 3',
+        '3:00 AM': 'Hr 4',
+        '4:00 AM': 'Hr 5',
+        '5:00 AM': 'Hr 6',
+        '6:00 AM': 'Hr 7',
+        '7:00 AM': 'Hr 8',
+        '8:00 AM': 'Hr 9',
+        '9:00 AM': 'Hr 10',
+        '10:00 AM': 'Hr 11',
+        '11:00 AM': 'Hr 12',
+        '12:00 PM': 'Hr 13',
+        '1:00 PM': 'Hr 14',
+        '2:00 PM': 'Hr 15',
+        '3:00 PM': 'Hr 16',
+        '4:00 PM': 'Hr 17',
+        '5:00 PM': 'Hr 18',
+        '6:00 PM': 'Hr 19',
+        '7:00 PM': 'Hr 20',
+        '8:00 PM': 'Hr 21',
+        '9:00 PM': 'Hr 22',
+        '10:00 PM': 'Hr 23',
+        '11:00 PM': 'Hr 24'
+    }
+    
+    # 3. Rename the columns
+    df.rename(columns=rename_map, inplace=True)
+    
+    # 4. Select only the target columns
+    # This automatically drops 'date' and 'DSL' and any other unwanted columns
+    df = df[target_columns]
+    
+    # 5. Sort by Date to match the target sample order (chronological)
+    df.sort_values(by='Date', inplace=True)
+    
+    # 6. Reset index
+    df.reset_index(drop=True, inplace=True)
+    
+    return df[target_columns]
+```

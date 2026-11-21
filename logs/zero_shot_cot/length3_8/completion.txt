@@ -1,0 +1,88 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a date column `CST` (format: `%a %m/%d/%Y`) and 24 hourly columns named `1:00` through `24:00:00`.
+    *   **Target**: Contains a date column `date` (format: `%m/%d/%Y`) and 24 hourly columns named `Hour 1` through `Hour 24`.
+    *   **Row Count**: The source has 1339 rows, and the target has 1340 rows. This slight increase suggests that the transformation is primarily a renaming and formatting operation, and the row count difference might be due to a specific edge case in the test data (e.g., an extra row added or a missing row in the sample) or simply a discrepancy in the provided sample counts vs actual data. However, since the structure is 1-to-1 (one row per day), we should treat this as a row-wise transformation. The "aggregation" hint in the prompt is likely a red herring or refers to the fact that we are consolidating the time-series data into a single row per day, which is already the case in the source. We will assume a direct mapping.
+
+2.  **Date Transformation**:
+    *   The source column `CST` contains strings like `'Sat 12/01/2012'`.
+    *   The target column `date` requires strings like `'04/01/2009'`.
+    *   We need to parse the `CST` column to extract the date part. Since the format is consistent (`%a %m/%d/%Y`), we can split the string or use `pd.to_datetime` with the specific format and then format it back to `%m/%d/%Y`.
+    *   Alternatively, since the day-of-week prefix is just noise for the target format, we can extract the substring starting from index 4 (after "Sat ") or use regex to find the date part. Using `pd.to_datetime` is safer.
+
+3.  **Column Renaming**:
+    *   Source columns: `1:00`, `2:00`, ..., `23:00`, `24:00:00`.
+    *   Target columns: `Hour 1`, `Hour 2`, ..., `Hour 23`, `Hour 24`.
+    *   We need to map each source column to the corresponding target column.
+    *   Mapping logic:
+        *   `1:00` -> `Hour 1`
+        *   `2:00` -> `Hour 2`
+        *   ...
+        *   `23:00` -> `Hour 23`
+        *   `24:00:00` -> `Hour 24`
+    *   We can create a dictionary mapping the old column names to the new ones.
+
+4.  **Implementation Steps**:
+    *   Create a copy of the source DataFrame to avoid modifying the original.
+    *   Transform the `CST` column to the desired `date` format.
+    *   Rename the hourly columns.
+    *   Ensure the final DataFrame has the exact column names specified in the target schema.
+    *   Return the DataFrame with columns ordered as per the target schema.
+
+5.  **Handling Potential Issues**:
+    *   **Data Types**: The source hourly columns are `float64`. The target is also `float64`. No conversion needed.
+    *   **Missing Values**: If there are NaNs, they should be preserved.
+    *   **Row Count Discrepancy**: If the test data has a different row count, the transformation should still apply row-wise. The function should not hardcode any indices.
+
+6.  **Code Construction**:
+    *   Define the mapping dictionary for columns.
+    *   Apply the date formatting.
+    *   Rename columns.
+    *   Select and order columns.
+
+### Python Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # Define the target column names
+    target_columns = [
+        'date', 'Hour 1', 'Hour 2', 'Hour 3', 'Hour 4', 'Hour 5', 'Hour 6', 
+        'Hour 7', 'Hour 8', 'Hour 9', 'Hour 10', 'Hour 11', 'Hour 12', 
+        'Hour 13', 'Hour 14', 'Hour 15', 'Hour 16', 'Hour 17', 'Hour 18', 
+        'Hour 19', 'Hour 20', 'Hour 21', 'Hour 22', 'Hour 23', 'Hour 24'
+    ]
+    
+    # Transform the 'CST' column to 'date'
+    # Source format: '%a %m/%d/%Y' (e.g., 'Sat 12/01/2012')
+    # Target format: '%m/%d/%Y' (e.g., '04/01/2009')
+    # We can parse the date and then format it.
+    # Note: pd.to_datetime might be slow for large datasets, but it's robust.
+    # Alternatively, we can just extract the substring if the format is strictly consistent.
+    # Let's use pd.to_datetime for robustness.
+    df['date'] = pd.to_datetime(df['CST'], format='%a %m/%d/%Y').dt.strftime('%m/%d/%Y')
+    
+    # Define the mapping for hourly columns
+    # Source columns: '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target columns: 'Hour 1', 'Hour 2', ..., 'Hour 23', 'Hour 24'
+    col_mapping = {}
+    for i in range(1, 24):
+        col_mapping[f'{i}:00'] = f'Hour {i}'
+    col_mapping['24:00:00'] = 'Hour 24'
+    
+    # Rename the columns
+    df = df.rename(columns=col_mapping)
+    
+    # Select and order the columns as per the target schema
+    # We need to drop the original 'CST' column and keep the new 'date' column
+    # and the renamed hourly columns.
+    df = df[target_columns]
+    
+    return df[target_columns]
+```

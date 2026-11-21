@@ -1,0 +1,78 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Datetime**: The source column `date` is a string in the format `%m/%d/%Y %H:%M`. We need to parse this into a pandas datetime object to extract date and hour components.
+2.  **Extract Date and Hour**:
+    *   Extract the date part (year, month, day) to group by. This will become the `Date` column in the target.
+    *   Extract the hour part (0-23) to determine which "Hr X" column the value belongs to. Note that the target columns are 1-indexed ("Hr 1" to "Hr 24"), while pandas `dt.hour` is 0-indexed (0-23). So, `Hr 1` corresponds to hour 0, `Hr 2` to hour 1, ..., `Hr 24` to hour 23.
+3.  **Handle Aggregation**: The source has multiple rows per hour (e.g., every 5 minutes). The target has one row per day with one value per hour. We need to aggregate the values for each (Date, Hour) pair. Looking at the sample data, the values are constant (73) within an hour. A simple mean or first value aggregation will work. Let's use `mean` to be robust against potential slight variations, or `first` if we assume consistency. Given the distinct values are just 73 and 84, and the target shows 73, `mean` is safe.
+4.  **Pivot/Reshape**: We need to reshape the data from long format (one row per timestamp) to wide format (one row per date, columns for each hour).
+    *   Group by the extracted Date and Hour.
+    *   Aggregate the `zone_016_cooling_sp` values.
+    *   Pivot the table so that the unique Hours become columns.
+5.  **Rename Columns**: The pivot will likely create columns named 0, 1, ..., 23 (or similar). We need to rename these to "Hr 1", "Hr 2", ..., "Hr 24".
+6.  **Format Date Column**: The target `Date` column is a string in `%m/%d/%Y` format. We need to format the date index/column accordingly.
+7.  **Ensure Column Order and Presence**: The target requires specific columns in a specific order: `Date`, `Hr 1`, ..., `Hr 24`. We must ensure all 24 hour columns exist, even if some are missing in the data (fill with NaN).
+8.  **Final Output**: Return the DataFrame with the exact target column names.
+
+### Implementation Details
+
+*   **Parsing**: `pd.to_datetime(source['date'])`
+*   **Date Extraction**: `dt.date` or `dt.normalize()`
+*   **Hour Extraction**: `dt.hour`
+*   **Aggregation**: `groupby(['date', 'hour'])['zone_016_cooling_sp'].mean()`
+*   **Pivoting**: `unstack('hour')`
+*   **Renaming**: Map hour integers 0-23 to strings "Hr 1"-"Hr 24".
+*   **Formatting**: Convert date to string `strftime('%m/%d/%Y')`.
+
+Let's write the code.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # 1. Parse the date column
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract date and hour
+    df['date_only'] = df['datetime'].dt.date
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 3. Aggregate by date and hour
+    # We use mean to handle multiple entries per hour. 
+    # If there are no entries for a specific hour on a day, it will be NaN.
+    agg_df = df.groupby(['date_only', 'hour'])['zone_016_cooling_sp'].mean().reset_index()
+    
+    # 4. Pivot the table
+    # Index: date_only, Columns: hour, Values: zone_016_cooling_sp
+    pivot_df = agg_df.pivot(index='date_only', columns='hour', values='zone_016_cooling_sp')
+    
+    # 5. Ensure all 24 hours are present as columns
+    # The pivot might only have columns for hours that had data.
+    # We need columns 0 through 23.
+    all_hours = range(24)
+    pivot_df = pivot_df.reindex(columns=all_hours)
+    
+    # 6. Rename columns to "Hr 1", "Hr 2", ..., "Hr 24"
+    # Hour 0 -> Hr 1, Hour 1 -> Hr 2, ..., Hour 23 -> Hr 24
+    pivot_df.columns = [f'Hr {h+1}' for h in pivot_df.columns]
+    
+    # 7. Format the date index to string '%m/%d/%Y'
+    pivot_df.index = pivot_df.index.strftime('%m/%d/%Y')
+    
+    # 8. Reset index to make 'Date' a column
+    pivot_df = pivot_df.reset_index()
+    pivot_df = pivot_df.rename(columns={'date_only': 'Date'})
+    
+    # 9. Define target columns
+    target_columns = ['Date', 'Hr 1', 'Hr 2', 'Hr 3', 'Hr 4', 'Hr 5', 'Hr 6', 'Hr 7', 'Hr 8', 'Hr 9', 'Hr 10', 'Hr 11', 'Hr 12', 'Hr 13', 'Hr 14', 'Hr 15', 'Hr 16', 'Hr 17', 'Hr 18', 'Hr 19', 'Hr 20', 'Hr 21', 'Hr 22', 'Hr 23', 'Hr 24']
+    
+    # 10. Ensure the order and presence of columns
+    # Reindex to ensure all target columns are present and in order
+    pivot_df = pivot_df.reindex(columns=target_columns)
+    
+    return pivot_df[target_columns]
+```

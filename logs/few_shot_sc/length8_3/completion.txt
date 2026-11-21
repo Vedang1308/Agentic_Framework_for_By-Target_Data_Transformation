@@ -1,0 +1,69 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Input/Output**: The source table contains timestamped data (`date`) and a numeric value (`zone_016_cooling_sp`). The target table aggregates this data by `Hour` (0-23) and `Month` (January-December). The row count drops significantly (15k -> 24), indicating a pivot/aggregation operation.
+2. **Parse Dates**: Convert the `date` column from string format (`%m/%d/%Y %H:%M`) to pandas datetime objects to extract temporal components.
+3. **Extract Features**:
+   - Extract the `Hour` (0-23) from the datetime.
+   - Extract the `Month` name (e.g., 'January', 'February') from the datetime.
+4. **Pivot/Aggregate**:
+   - The target schema has `Hour` as a row identifier and months as columns.
+   - We need to pivot the data such that rows are hours, columns are months, and values are the `zone_016_cooling_sp` values.
+   - Since there might be multiple entries for the same hour/month combination, we need an aggregation function. Looking at the sample target, the values are consistent (73). A common aggregation for such sensor data when creating a profile is the mean or median. Given the distinct values are just 73 and 84, and the sample shows 73, `mean` is a safe default for "representative" value, or we can check if exact matching is required. However, usually in these TbT tasks, if multiple values exist for a bin, `mean` is the standard aggregation unless specified otherwise. Let's use `mean`.
+   - Use `pivot_table` with `index='Hour'`, `columns='Month'`, `values='zone_016_cooling_sp'`, and `aggfunc='mean'`.
+5. **Handle Missing Data**: The target sample shows `nan` for months with no data. `pivot_table` naturally produces NaNs for missing combinations.
+6. **Rename Columns**: The month columns from `pivot_table` will be the month names (e.g., 'January'). This matches the target schema exactly.
+7. **Reset Index**: Convert the `Hour` index back to a column.
+8. **Sort and Format**: Ensure the `Hour` column is sorted (0-23) and the month columns are in the correct order (January to December). The target schema lists months in calendar order.
+9. **Final Selection**: Select the columns in the exact order specified: `['Hour', 'January', ..., 'December']`.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column
+    df['date_dt'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract Hour and Month Name
+    df['Hour'] = df['date_dt'].dt.hour
+    df['Month'] = df['date_dt'].dt.strftime('%B') # Full month name e.g., 'January'
+    
+    # 3. Pivot the data
+    # Index: Hour, Columns: Month, Values: zone_016_cooling_sp
+    # Aggregation: mean (standard for binning time-series data)
+    pivot_df = df.pivot_table(
+        index='Hour', 
+        columns='Month', 
+        values='zone_016_cooling_sp', 
+        aggfunc='mean'
+    )
+    
+    # 4. Reset index to make Hour a column
+    pivot_df = pivot_df.reset_index()
+    
+    # 5. Define target column order
+    month_names = ['January', 'February', 'March', 'April', 'May', 'June', 
+                   'July', 'August', 'September', 'October', 'November', 'December']
+    target_columns = ['Hour'] + month_names
+    
+    # 6. Ensure all month columns exist (even if empty/NaN) and are in correct order
+    # pivot_table might miss months if no data exists for them, but reset_index keeps existing ones.
+    # We need to make sure we return exactly the target columns.
+    
+    # Re-index columns to ensure order and presence
+    # If a month is missing from pivot_df, it will be NaN in the final selection if we just select.
+    # But pivot_df columns are the months that had data. We need to ensure all 12 months are present as columns.
+    
+    # Create a complete frame with all months
+    for month in month_names:
+        if month not in pivot_df.columns:
+            pivot_df[month] = np.nan
+            
+    # Sort by Hour to match typical target output order (0-23)
+    pivot_df = pivot_df.sort_values('Hour').reset_index(drop=True)
+    
+    # Select final columns
+    return pivot_df[target_columns]
+```

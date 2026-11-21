@@ -1,0 +1,111 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Input and Output Schemas**:
+    *   **Source**: Two columns: `date` (string, format `%m/%d/%Y %H:%M`) and `zone_016` (float). The data appears to be time-series data with minute-level granularity.
+    *   **Target**: 25 columns: `date` (string, format `%m/%d/%Y`) and `value1` through `value24` (floats).
+    *   **Row Count Change**: The source has many rows (1450+), while the target has very few (2 in the sample). This strongly implies an aggregation or grouping operation. Specifically, the target has one row per unique date.
+
+2.  **Determine Grouping Key**:
+    *   The target `date` column is formatted as `%m/%d/%Y`.
+    *   The source `date` column includes time.
+    *   Therefore, we need to extract the date part from the source `date` column to use as the grouping key.
+
+3.  **Determine Aggregation Logic**:
+    *   The target has 24 value columns (`value1` to `value24`). This number corresponds to the 24 hours in a day.
+    *   The source data has minute-level timestamps.
+    *   We need to map the minute-level data into hourly buckets.
+    *   For each date and each hour (1 to 24), we need to aggregate the `zone_016` values.
+    *   Looking at the sample target:
+        *   Row `01/02/2018` has `value1` = 67.9 and others NaN. The source shows `1/2/2018 0:11` through `0:14` with value 67.9. These fall in Hour 1 (00:00-00:59).
+        *   Row `01/01/2018` (which is likely `1/1/2018` in source, though not explicitly shown in the tiny snippet, the logic holds) has values for all hours.
+    *   The aggregation function is likely `mean` or `first` or `last`. Given the constant values in the snippet (67.9), `mean` is a safe default for time-series downsampling unless specified otherwise. However, looking at the second target row `01/01/2018`, the values vary (67.9, 67.9, 67.8...). If there were multiple minutes per hour, `mean` would average them. If we assume the source might have multiple entries per hour, `mean` is standard. Let's look closer. The source snippet only shows `1/2/2018` and `1/3/2018`. The target shows `01/02/2018` and `01/01/2018`.
+    *   Crucially, the target columns are `value1` ... `value24`. This maps to Hour 1 ... Hour 24.
+    *   We need to extract the hour from the source timestamp. Note: Python's `dt.hour` returns 0-23. The target columns are 1-24. So, Hour 0 maps to `value1`, Hour 1 maps to `value2`, ..., Hour 23 maps to `value24`.
+
+4.  **Transformation Steps**:
+    *   **Parse Date**: Convert source `date` column to datetime.
+    *   **Extract Date and Hour**:
+        *   Create a `date_str` column formatted as `%m/%d/%Y` for grouping and final output.
+        *   Create an `hour` column from the datetime.
+        *   Map `hour` (0-23) to `target_col` (`value1`-`value24`). Specifically, `target_col = f"value{hour + 1}"`.
+    *   **Pivot/Aggregate**:
+        *   Group by `date_str`.
+        *   We need to pivot the data so that each hour becomes a column.
+        *   Use `groupby` on `date_str` and apply a function to aggregate values for each hour.
+        *   Alternatively, create a column for the target column name (`value1`, etc.) and use `pivot_table` or `groupby` + `unstack`.
+    *   **Handling Missing Data**: If an hour has no data for a specific date, the result should be NaN.
+    *   **Refining Aggregation**: Since the source has minute-level data, we should aggregate all minutes within an hour. `mean()` is appropriate.
+
+5.  **Implementation Details**:
+    *   `df['datetime'] = pd.to_datetime(df['date'])`
+    *   `df['date_out'] = df['datetime'].dt.strftime('%m/%d/%Y')`
+    *   `df['hour'] = df['datetime'].dt.hour`
+    *   `df['target_col'] = 'value' + (df['hour'] + 1).astype(str)`
+    *   Now, we have columns: `date_out`, `target_col`, `zone_016`.
+    *   We want to pivot such that `date_out` is the index, `target_col` are the columns, and values are `zone_016`.
+    *   Since there can be multiple rows per (date, hour) combination (multiple minutes), we need to aggregate.
+    *   `pivot_table(index='date_out', columns='target_col', values='zone_016', aggfunc='mean')`
+    *   This will create columns named `value1`, `value2`, ..., `value24`.
+    *   Reset index to make `date_out` a column again. Rename `date_out` to `date`.
+    *   Ensure all 24 value columns exist, even if empty for some dates (fill NaN).
+    *   Sort the columns to match the target schema: `date`, `value1`...`value24`.
+
+6.  **Edge Cases**:
+    *   Ensure the column order is strictly `date`, `value1`, ..., `value24`.
+    *   Handle potential duplicates in source (mean aggregation handles this).
+    *   Handle missing hours (pivot_table fills with NaN).
+
+7.  **Final Verification**:
+    *   Source `1/2/2018 0:11` -> Date `01/02/2018`, Hour 0 -> Col `value1`. Value 67.9.
+    *   Source `1/2/2018 0:12` -> Date `01/02/2018`, Hour 0 -> Col `value1`. Value 67.9.
+    *   Mean of 67.9, 67.9 is 67.9. Matches target.
+    *   Target `01/01/2018` has values for all hours. This implies source data for that day existed.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column to datetime
+    df['datetime'] = pd.to_datetime(df['date'])
+    
+    # 2. Extract the date string for grouping and output
+    df['date_out'] = df['datetime'].dt.strftime('%m/%d/%Y')
+    
+    # 3. Extract the hour and map to target column names (value1 to value24)
+    # Hour 0 -> value1, Hour 1 -> value2, ..., Hour 23 -> value24
+    df['target_col'] = 'value' + (df['datetime'].dt.hour + 1).astype(str)
+    
+    # 4. Pivot the table
+    # Index: date_out
+    # Columns: target_col (value1, value2, ...)
+    # Values: zone_016
+    # Aggregation: mean (to handle multiple minutes per hour)
+    pivot_df = df.pivot_table(
+        index='date_out',
+        columns='target_col',
+        values='zone_016',
+        aggfunc='mean'
+    )
+    
+    # 5. Reset index to make date_out a column
+    pivot_df = pivot_df.reset_index()
+    
+    # 6. Rename 'date_out' to 'date'
+    pivot_df = pivot_df.rename(columns={'date_out': 'date'})
+    
+    # 7. Ensure all expected value columns exist (value1 to value24)
+    # Pivot might miss columns if no data exists for certain hours/dates
+    expected_value_cols = [f'value{i}' for i in range(1, 25)]
+    for col in expected_value_cols:
+        if col not in pivot_df.columns:
+            pivot_df[col] = pd.NA
+            
+    # 8. Select and order columns verbatim
+    target_columns = ['date'] + expected_value_cols
+    result_df = pivot_df[target_columns]
+    
+    return result_df
+```

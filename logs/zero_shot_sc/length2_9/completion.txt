@@ -1,0 +1,179 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Datetime**: The source column `date` is a string in format `'%m/%d/%Y %H:%M'`. We need to convert this to a pandas datetime object to extract components like day of the week and hour.
+2.  **Extract Components**:
+    *   `dow`: Extract the day of the week. The target shows `01/01/18` (Monday) as `1` and `01/02/18` (Tuesday) as `2`. This corresponds to `dt.weekday() + 1` (where Monday=1, Sunday=7) or simply mapping standard weekday indices. Let's verify: Jan 1, 2018 was a Monday. Target `dow` is 1. Jan 2, 2018 was a Tuesday. Target `dow` is 2. So `dow = dt.weekday() + 1`.
+    *   `dt_strata`: The target format is `MM/DD/YY`. We can format the date part of the datetime object using `strftime('%m/%d/%y')`.
+    *   `hour`: Extract the hour component (0-23) to map to the target columns.
+3.  **Map Hours to Target Columns**: The target columns are `pct_hourly_0100` through `pct_hourly_2500`.
+    *   `pct_hourly_0100` likely corresponds to Hour 0 (midnight to 1am).
+    *   `pct_hourly_2400` likely corresponds to Hour 23 (11pm to midnight).
+    *   `pct_hourly_2500` is a special column. Looking at the sample data:
+        *   Row `01/02/18` has value `746.9` in `pct_hourly_2400` and `0` in `pct_hourly_2500`. Wait, looking closer at the sample target:
+            *   `01/02/18`: `pct_hourly_2400` is `746.9`. `pct_hourly_2500` is `0`.
+            *   `01/01/18`: `pct_hourly_2400` is `4074`. `pct_hourly_2500` is `0`.
+        *   Let's re-examine the column names and values.
+        *   Standard hours 0-23 map to columns 0100-2400?
+            *   Hour 0 -> `pct_hourly_0100`?
+            *   Hour 23 -> `pct_hourly_2400`?
+        *   What is `pct_hourly_2500`? It is `int64` in the target schema, while others are `float64`. In the sample, it is `0` for both rows.
+        *   Let's look at the source data again. `zone_016` values are around 4000-700.
+        *   If Hour 0 maps to `pct_hourly_0100`, then for `01/02/18` (Tuesday), the source has rows at `0:11`, `0:12` etc. with value `67.9`.
+        *   The target for `01/02/18` has `pct_hourly_2400` = `746.9`. This doesn't match the `67.9` values in the source sample for Hour 0.
+        *   Let's check `01/01/18` (Monday). The source sample doesn't show Monday data explicitly in the snippet, but the target has high values (~4000) for all hours 0100-2400.
+        *   Wait, the source sample shows `1/2/2018` and `1/3/2018`.
+        *   Target row `01/02/18` has `dow=2`.
+        *   Target row `01/01/18` has `dow=1`.
+        *   The source sample for `1/2/2018` (Tuesday) has `zone_016` = 67.9.
+        *   The target for `01/02/18` has `pct_hourly_2400` = 746.9. This is not 67.9.
+        *   Perhaps the aggregation is a **sum** or **mean** over the hour?
+        *   If there are many rows per hour, a sum might be large.
+        *   Let's look at the column mapping again.
+            *   `pct_hourly_0100` usually means "Percentage at 1:00" or "Hour 1". But in power/load contexts, "0100" often denotes the start of the hour 01:00-02:00. However, if it's 24-hour clock, 0000 is midnight.
+            *   Let's assume `pct_hourly_0100` corresponds to Hour 0 (00:00-00:59).
+            *   `pct_hourly_2400` corresponds to Hour 23 (23:00-23:59).
+            *   What about `pct_hourly_2500`? It might be a specific metric or a leftover column. Given it's 0 in the sample, and int, it might be a count of something or a flag. Or perhaps it represents Hour 24 (which doesn't exist in 0-23) or is just a placeholder. Since it's 0 in both samples, and we don't have source data mapping to it, we might initialize it to 0.
+        *   Let's re-read the values.
+            *   Source `1/2/2018 0:11` is 67.9.
+            *   Target `01/02/18` `pct_hourly_2400` is 746.9.
+            *   If `pct_hourly_2400` is Hour 23, where is the data for Hour 0?
+            *   Target `01/02/18` `pct_hourly_0100` is 0.
+            *   This implies the data for `1/2/2018` in the source sample (Hour 0) might be aggregated into a different column or the sample source rows provided are just a tiny subset and the aggregation logic is different.
+            *   Actually, look at the target `01/02/18`. Only `pct_hourly_2400` is non-zero (746.9). All others are 0.
+            *   Look at source `1/2/2018`. We see Hour 0 data.
+            *   If Hour 0 maps to `pct_hourly_0100`, why is it 0?
+            *   Maybe the mapping is shifted?
+            *   Or maybe `pct_hourly_2400` *is* Hour 0? No, that's unusual.
+            *   Let's look at `01/01/18`. All hours 0100-2400 have ~4000 values.
+            *   This suggests that for Monday, there is data in every hour. For Tuesday, only one column has data.
+            *   The source sample for Tuesday (`1/2/2018`) only shows Hour 0. If the target has data only in `pct_hourly_2400`, maybe `pct_hourly_2400` corresponds to Hour 0?
+            *   If `pct_hourly_2400` == Hour 0, then `pct_hourly_0100` == Hour 1?
+            *   Let's test this hypothesis:
+                *   Col `pct_hourly_0100` -> Hour 1
+                *   ...
+                *   Col `pct_hourly_2300` -> Hour 23
+                *   Col `pct_hourly_2400` -> Hour 0?
+                *   Col `pct_hourly_2500` -> ?
+            *   This seems inverted. Usually 0100 is 1am. 0000 is midnight.
+            *   Let's look at the column names again: `0100, 0200, ..., 2400, 2500`.
+            *   There is no `0000`.
+            *   If `2400` represents midnight (24:00 is 00:00 next day), then:
+                *   Hour 0 -> `pct_hourly_2400`
+                *   Hour 1 -> `pct_hourly_0100`
+                *   ...
+                *   Hour 23 -> `pct_hourly_2300`
+            *   Let's check the Tuesday data again.
+                *   Source: Hour 0 data exists.
+                *   Target: `pct_hourly_2400` is 746.9. Others 0.
+                *   This fits the hypothesis: Hour 0 maps to `pct_hourly_2400`.
+            *   Let's check the Monday data.
+                *   Target: `pct_hourly_0100` (Hour 1?) is 4073.5. `pct_hourly_2400` (Hour 0?) is 4074.
+                *   This implies data exists for all hours.
+            *   So the mapping is:
+                *   Source Hour `h`:
+                    *   If `h == 0`: Column `pct_hourly_2400`
+                    *   If `h > 0`: Column `pct_hourly_{h:04d}00`? No, the columns are `0100`, `0200`... `2300`.
+                    *   So Hour 1 -> `pct_hourly_0100`.
+                    *   Hour 23 -> `pct_hourly_2300`.
+                    *   Hour 0 -> `pct_hourly_2400`.
+            *   What about `pct_hourly_2500`? It is likely a placeholder or for a specific edge case not present in the standard 24 hours. We will initialize it to 0.
+
+4.  **Aggregation Logic**:
+    *   Group by `dt_strata` (Date) and `dow`.
+    *   For each group, we need to calculate the value for each hour column.
+    *   The values in the target look like sums.
+        *   Tuesday `pct_hourly_2400` = 746.9.
+        *   Source Tuesday Hour 0 values: 67.9, 67.9, 67.9, 67.9...
+        *   If there are 11 rows of 67.9, sum is 746.9. (67.9 * 11 = 746.9).
+        *   The sample shows 4 rows of 67.9. The full dataset likely has 11 rows for that hour/minute combination or similar.
+        *   So the operation is **Sum** of `zone_016` for each date/hour bucket.
+    *   Handle NaNs: `sum` ignores NaNs by default.
+
+5.  **Pivoting**:
+    *   Create a column `hour_bucket` based on the logic above:
+        *   If `dt.hour == 0`, `hour_col = 'pct_hourly_2400'`
+        *   Else, `hour_col = f'pct_hourly_{dt.hour:02d}00'`
+    *   Pivot the table: Index=`dt_strata`, Columns=`hour_col`, Values=`zone_016`, Aggfunc=`sum`.
+    *   Fill missing values with 0.
+
+6.  **Final Formatting**:
+    *   Ensure `dow` is included.
+    *   Ensure `pct_hourly_2500` is added and set to 0 (int).
+    *   Ensure column order matches the target list.
+    *   Ensure types match (floats for hourly, int for dow and 2500).
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # 1. Parse the date column
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract components
+    # dt_strata: MM/DD/YY
+    df['dt_strata'] = df['datetime'].dt.strftime('%m/%d/%y')
+    # dow: Monday=1, ..., Sunday=7
+    df['dow'] = df['datetime'].dt.weekday + 1
+    # hour: 0-23
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 3. Map hour to target column name
+    # Hypothesis: Hour 0 -> pct_hourly_2400, Hour 1 -> pct_hourly_0100, ..., Hour 23 -> pct_hourly_2300
+    def get_hour_col(h):
+        if h == 0:
+            return 'pct_hourly_2400'
+        else:
+            return f'pct_hourly_{h:02d}00'
+            
+    df['hour_col'] = df['hour'].apply(get_hour_col)
+    
+    # 4. Aggregate
+    # We need to sum zone_016 for each dt_strata and hour_col
+    # First, drop rows where zone_016 is NaN to avoid issues, though sum ignores them
+    df_agg = df.dropna(subset=['zone_016'])
+    
+    # Pivot table
+    pivot = df_agg.pivot_table(
+        index='dt_strata',
+        columns='hour_col',
+        values='zone_016',
+        aggfunc='sum',
+        fill_value=0
+    ).reset_index()
+    
+    # 5. Prepare final columns
+    # Define all target hourly columns
+    hourly_cols = [f'pct_hourly_{i:02d}00' for i in range(1, 24)] + ['pct_hourly_2400']
+    
+    # Ensure all hourly columns exist in pivot
+    for col in hourly_cols:
+        if col not in pivot.columns:
+            pivot[col] = 0
+            
+    # Add pct_hourly_2500 as 0 (int)
+    pivot['pct_hourly_2500'] = 0
+    
+    # Get dow for each dt_strata. Since dow is constant for a date, we can merge or join.
+    # Create a dow lookup
+    dow_lookup = df[['dt_strata', 'dow']].drop_duplicates()
+    pivot = pivot.merge(dow_lookup, on='dt_strata', how='left')
+    
+    # 6. Sort by dt_strata to match typical output order (though not strictly required, good for consistency)
+    # The sample shows 01/02/18 then 01/01/18. This is reverse chronological or arbitrary.
+    # We will just ensure the columns are in the correct order.
+    
+    # 7. Construct final column list
+    target_columns = ['dt_strata', 'dow', 'pct_hourly_0100', 'pct_hourly_0200', 'pct_hourly_0300', 'pct_hourly_0400', 'pct_hourly_0500', 'pct_hourly_0600', 'pct_hourly_0700', 'pct_hourly_0800', 'pct_hourly_0900', 'pct_hourly_1000', 'pct_hourly_1100', 'pct_hourly_1200', 'pct_hourly_1300', 'pct_hourly_1400', 'pct_hourly_1500', 'pct_hourly_1600', 'pct_hourly_1700', 'pct_hourly_1800', 'pct_hourly_1900', 'pct_hourly_2000', 'pct_hourly_2100', 'pct_hourly_2200', 'pct_hourly_2300', 'pct_hourly_2400', 'pct_hourly_2500']
+    
+    # Select and order columns
+    result = pivot[target_columns]
+    
+    # Ensure types
+    result['dow'] = result['dow'].astype('int64')
+    result['pct_hourly_250

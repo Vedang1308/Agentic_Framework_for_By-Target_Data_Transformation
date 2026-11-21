@@ -1,0 +1,118 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `date` (datetime string) and `cerc_logger_1` (float). The source has 74,848 rows, implying high-frequency data (likely every 10 minutes based on the sample `4:50`, `5:00`, `5:10`).
+    *   **Target**: Contains `date` (date string `MM/DD/YYYY`) and 24 columns `value1` through `value24`. The target has 521 rows, implying one row per day.
+    *   **Transformation Goal**: Reshape the long-format source data into a wide-format target table where each row represents a day, and the 24 columns represent hourly aggregated values for that day.
+
+2.  **Determine Time Granularity and Aggregation**:
+    *   The source data appears to be sampled every 10 minutes.
+    *   There are 24 target value columns (`value1` to `value24`). This strongly suggests these correspond to the 24 hours of a day (Hour 1 to Hour 24, or Hour 0 to Hour 23 mapped to 1-24).
+    *   Let's verify the mapping. If we group by date and hour, we need to decide how to aggregate the 10-minute intervals into a single hourly value.
+    *   Common aggregations: Mean, Median, First, Last.
+    *   Looking at the sample source: `7/28/2019 4:50` -> `24.562`, `5:00` -> `24.625`.
+    *   Looking at the target sample for `05/08/2019`: `value1` is `24.25`.
+    *   Let's assume the standard mapping: `value1` corresponds to the first hour of the day (00:00-00:59 or 00:00-01:00), `value2` to the second hour, etc. Or potentially `value1` is Hour 1 (01:00-01:59).
+    *   Let's look at the number of rows per day. If data is every 10 minutes, there are $24 \times 6 = 144$ rows per day.
+    *   The target has 24 columns. This confirms a 1-to-1 mapping between target columns and hours of the day.
+    *   Which aggregation? Let's look at the values. The source values are precise (e.g., 24.562). The target values are also precise (e.g., 24.25).
+    *   If we take the mean of 10-minute intervals within an hour, we might get the target value.
+    *   Let's determine the hour index. Usually, `value1` corresponds to the hour starting at 00:00 (Hour 0) or 01:00 (Hour 1). In many sensor logging contexts, `value1` is often the first hour (00:00-01:00). Let's assume `value1` = Hour 0 (midnight to 1am), `value2` = Hour 1 (1am to 2am), ..., `value24` = Hour 23 (11pm to midnight).
+
+3.  **Step-by-Step Execution Plan**:
+    *   **Parse Dates**: Convert the `date` column in the source DataFrame from string to datetime objects.
+    *   **Extract Date and Hour**: Create a new column `day` (just the date part) and `hour` (the hour of the day, 0-23).
+    *   **Map Hour to Value Column**: Map the hour 0 to `value1`, hour 1 to `value2`, ..., hour 23 to `value24`. This can be done by creating a column `value_col` = `hour + 1` then pivoting, or by grouping and unstacking.
+    *   **Aggregate**: Group by `day` and `hour`. Calculate the mean (or another aggregation if mean doesn't fit, but mean is standard for sensor data smoothing) of `cerc_logger_1` for each hour.
+    *   **Pivot/Reshape**: Unstack the `hour` index to create columns for each hour.
+    *   **Rename Columns**: Rename the resulting columns to `value1`, `value2`, ..., `value24`.
+    *   **Format Date**: Format the `day` column back to string `MM/DD/YYYY`.
+    *   **Sort**: Ensure the output is sorted appropriately (usually by date, though the target sample looks somewhat random, sorting by date is a safe default for determinism, or just returning as is). The target sample isn't sorted chronologically (`05/08`, `05/07`, `03/10`...), but standard practice is to return a clean DataFrame. I will sort by date to ensure determinism, unless the specific order is required. However, the prompt says "general Python function", so standard sorting is best.
+    *   **Final Output**: Select the columns in the exact order specified.
+
+4.  **Refining Aggregation Logic**:
+    *   Since the source has 10-minute intervals, each hour has up to 6 data points.
+    *   Let's check if `mean` is the right aggregation.
+    *   Source: `7/28/2019 4:50` (24.562), `5:00` (24.625).
+    *   If `value5` corresponds to Hour 4 (4:00-5:00), it would include data from 4:00, 4:10, ..., 4:50.
+    *   If `value6` corresponds to Hour 5 (5:00-6:00), it would include 5:00, 5:10, etc.
+    *   The mapping `hour h` -> `value(h+1)` is the most logical.
+
+5.  **Implementation Details**:
+    *   Use `pd.to_datetime` to parse dates.
+    *   Use `.dt.date` or `.dt.normalize()` to get the day key.
+    *   Use `.dt.hour` to get the hour.
+    *   Group by `[date_key, hour]` and aggregate `cerc_logger_1` using `mean`.
+    *   Unstack `hour`.
+    *   Rename columns: `df.columns = [f'value{i+1}' for i in df.columns]`.
+    *   Reset index to make `date` a column.
+    *   Format `date` column to `MM/DD/YYYY`.
+    *   Return the DataFrame with the specific target columns.
+
+6.  **Edge Cases**:
+    *   Missing hours: If an hour has no data, it will be NaN. The target schema implies floats, so NaN is acceptable if data is missing, or we might need to fill. Given the high density of data (10 mins), missing hours are unlikely unless the device was off. I will leave them as NaN if they occur, as filling requires assumptions.
+    *   Sorting: The target sample is not sorted. However, for a general function, returning a sorted DataFrame is usually preferred for reproducibility. I will sort by `date`.
+
+Let's double-check the aggregation. Is it possible it's `first` or `last`?
+Sensor data like temperature or level often uses mean or last.
+Looking at `05/08/2019` target `value1` = 24.25.
+If I had the source data for that day, I could verify. Without it, `mean` is the most statistically robust transformation for "sensor readings per hour" unless specified otherwise. Another possibility is that the 10-minute samples are averaged.
+
+Let's write the code.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms a high-frequency sensor log (10-minute intervals) into a daily summary
+    with 24 hourly values (value1 to value24).
+    """
+    # 1. Parse the date column
+    # The source format is '%m/%d/%Y %H:%M'
+    df = source.copy()
+    df['date_parsed'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract date (day) and hour
+    df['day'] = df['date_parsed'].dt.normalize()
+    df['hour'] = df['date_parsed'].dt.hour
+    
+    # 3. Aggregate by day and hour
+    # We assume 'mean' aggregation for the 10-minute intervals within each hour.
+    # Group by day and hour, then take the mean of cerc_logger_1
+    hourly_agg = df.groupby(['day', 'hour'])['cerc_logger_1'].mean().reset_index()
+    
+    # 4. Pivot the data to wide format
+    # Create a pivot table where rows are 'day', columns are 'hour', and values are the aggregated sensor data
+    pivot_df = hourly_agg.pivot(index='day', columns='hour', values='cerc_logger_1')
+    
+    # 5. Ensure all 24 hours are present (0-23) and reorder columns
+    # Create a complete index of hours 0-23
+    all_hours = pd.RangeIndex(0, 24, name='hour')
+    pivot_df = pivot_df.reindex(columns=all_hours)
+    
+    # 6. Rename columns to value1, value2, ..., value24
+    # Hour 0 -> value1, Hour 1 -> value2, ..., Hour 23 -> value24
+    pivot_df.columns = [f'value{i+1}' for i in pivot_df.columns]
+    
+    # 7. Reset index to make 'day' a column
+    pivot_df = pivot_df.reset_index()
+    
+    # 8. Format the date column to MM/DD/YYYY
+    pivot_df['date'] = pivot_df['day'].dt.strftime('%m/%d/%Y')
+    
+    # 9. Define target columns
+    target_columns = [
+        'date', 'value1', 'value2', 'value3', 'value4', 'value5', 'value6', 
+        'value7', 'value8', 'value9', 'value10', 'value11', 'value12', 
+        'value13', 'value14', 'value15', 'value16', 'value17', 'value18', 
+        'value19', 'value20', 'value21', 'value22', 'value23', 'value24'
+    ]
+    
+    # 10. Sort by date to ensure deterministic output
+    pivot_df = pivot_df.sort_values('date').reset_index(drop=True)
+    
+    # 11. Return only the required columns
+    return pivot_df[target_columns]
+```

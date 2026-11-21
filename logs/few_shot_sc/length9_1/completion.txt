@@ -1,0 +1,102 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Row Count Change**: The source has 118,273 rows, and the target has 118,274 rows. This suggests an unpivoting or melting operation where multiple columns are transformed into rows. The source has `NUMBER_OF_RANGES` (1 to 4) and corresponding `LOW_i`, `HIGH_i`, `COEFF_i` columns. The target has single columns `temperature_range`, `constant`, `coefficient`, `low_end`, `high_end`. This confirms we need to melt the wide format into a long format.
+
+2.  **Identify Target Columns**:
+    *   `season`: Derived from `MONTH`.
+    *   `daytype`: Derived from `PROFILE_CLASS` or potentially `DAY`/`DOW` if available, but `PROFILE_CLASS` seems most likely given the values "WEEKDAY" in target. Let's look at distinct values. The source sample has `PROFILE_CLASS` like 'MP1', 'TR3'. The target has 'WEEKDAY'. Usually, in energy data, profiles map to day types. However, looking at the sample, `PROFILE_CLASS` varies. Let's look for a pattern. Wait, the target `daytype` is 'WEEKDAY'. Is it possible `PROFILE_CLASS` maps to it? Or is there a date-based derivation? The source has `YEAR`, `MONTH`, `DAY`. We can construct a date and check if it's a weekday. But `PROFILE_CLASS` is categorical. Let's look at the sample target again. All shown rows are 'WEEKDAY'. Let's assume for now it might be derived from the date or a mapping. Given the lack of explicit mapping in the prompt, and the presence of `YEAR`, `MONTH`, `DAY`, calculating the day of the week is a strong candidate. If the date falls on Mon-Fri, it's WEEKDAY, else WEEKEND. Let's verify if `PROFILE_CLASS` is needed for `season`.
+    *   `hour`: Source has `HOUR` (e.g., 1400, 1500). Target has `hour` (e.g., 100, 200, 1000). It looks like the source `HOUR` is HHMM format. The target `hour` seems to be the same value? No, source 1400 -> target? The target sample shows 100, 200... 1000. These look like times of day in minutes or just HHMM. Source 1400 is 2 PM. Target 100 is 1 AM? No, 100 usually means 01:00. Let's check the source `HOUR` values: 1400, 1500, 1600, 1700, 2100, 2200, 2300, 2400. Target sample: 100, 200, 300, 400, 1000, 1100... This looks like the target `hour` is just the source `HOUR` value, but the sample rows in target are different from source. The source sample rows are for July 2 and Dec 31. The target sample rows are for SPRING/FALL. This implies the target is a generalized view or the sample rows are just illustrative. The key is the structure. Source `HOUR` is likely kept as is or converted. Given target `hour` is float64 and values like 100, 200, it matches the HHMM integer representation (1:00 -> 100, 10:00 -> 1000). So `hour` = source `HOUR`.
+    *   `season`: Derived from `MONTH`. Typical mapping:
+        *   Spring: Mar (3), Apr (4), May (5)
+        *   Summer: Jun (6), Jul (7), Aug (8)
+        *   Fall: Sep (9), Oct (10), Nov (11)
+        *   Winter: Dec (12), Jan (1), Feb (2)
+    *   `temperature_range`: This is an index or identifier for the range. In the source, ranges are 1, 2, 3, 4. The target sample shows `100998`. This is a specific value. Wait, looking at the source, `LOW_1` is -999, `HIGH_1` is some value. `LOW_2` is `HIGH_1`, `HIGH_2` is 99999. The target `temperature_range` is `100998`. This looks like a composite key or a specific code. However, looking at the melt logic, we are expanding rows. If we melt, we get a `range_id` (1, 2, 3, 4). Where does `100998` come from?
+        *   Let's re-read the target sample carefully.
+        *   `low_end`: -999
+        *   `high_end`: 99999
+        *   `constant`: 27.1451
+        *   `coefficient`: -0.16849
+        *   `temperature_range`: 100998
+        *   This row corresponds to a single range spanning -999 to 99999. In the source, if `NUMBER_OF_RANGES` is 1, then `LOW_1`=-999, `HIGH_1`=99999.
+        *   If `NUMBER_OF_RANGES` is 2, we have two rows.
+        *   The value `100998` is peculiar. It might be a hash or a specific code for the "default" or "full" range? Or perhaps it's `LOW` concatenated with `HIGH`? -999 and 99999 -> 100998? No.
+        *   Let's look at another possibility. Is `temperature_range` simply the `NUMBER_OF_RANGES`? No, sample says 100998.
+        *   Is it possible `temperature_range` is derived from `LOSS_FACTOR`? No.
+        *   Let's look at the source columns again. `LOW_1`, `HIGH_1`, etc.
+        *   Maybe `temperature_range` is a fixed value for this specific dataset transformation? Or maybe it's `100 * HIGH + LOW`? No.
+        *   Let's look at the target schema type: `float64`.
+        *   Let's reconsider the melt. We need to create rows for each range `i` from 1 to `NUMBER_OF_RANGES`.
+        *   Columns to extract: `LOW_i`, `HIGH_i`, `COEFF_i`. And `CONSTANT` is common.
+        *   What is `temperature_range`? In many energy datasets, this might be a bin ID. If the bin is -999 to 99999, maybe the ID is predefined.
+        *   However, without external knowledge, let's look for a calculation.
+        *   Source: `LOW_1` = -999. `HIGH_1` varies.
+        *   Target: `low_end` = -999. `high_end` = 99999.
+        *   This specific target row has a full range.
+        *   Let's look at the source row with `NUMBER_OF_RANGES` = 1. `LOW_1`=-999, `HIGH_1`=99999. `COEFF_1` is present. `COEFF_2..4` are NaN.
+        *   If we melt, we get `range_idx`=1, `low`=-999, `high`=99999, `coeff`=COEFF_1.
+        *   The target `temperature_range` is 100998.
+        *   Let's check if `100998` is a constant for all rows in the target? The sample shows 100998 for all rows. It is highly likely that `temperature_range` is a constant column in the target for this specific benchmark case, or derived from a column not shown or a fixed mapping. Given the prompt constraints and the fact that `100998` appears in every sample row, and no obvious source column maps to it via simple arithmetic on the visible numbers (-999, 99999), I will assume it might be a constant or derived from a hidden column. BUT, wait. `100998` is `100000 - 999 + ...`? No.
+        *   Let's look at `LOSS_FACTOR`. Values: 1.05, 1.02, 1.08.
+        *   Let's look at `PROFILE_CLASS`. MP1, TR3.
+        *   Actually, in similar benchmarks, `temperature_range` often refers to the specific bin identifier. If the bin is the "catch-all" bin, it might have a specific ID.
+        *   However, a more robust approach for "synthesis" when a value appears constant in the sample is to check if it's a constant. If the target has 118,274 rows and source has 118,273, and we are melting, the number of target rows = sum of `NUMBER_OF_RANGES` in source.
+        *   Let's estimate sum of ranges. If avg ranges is ~2, rows double. 118k * 2 = 236k. But target is ~118k. This implies `NUMBER_OF_RANGES` is mostly 1? Or the target is *not* a full melt?
+        *   Wait, Source rows: 118,273. Target rows: 118,274. The counts are almost identical. This suggests **NO MELTING**. The row count didn't explode.
+        *   If no melting, how do we get `low_end`, `high_end`, `coefficient` from multiple `LOW_i`, `HIGH_i`, `COEFF_i` columns?
+        *   Maybe only the first range is used? Or the last?
+        *   Or maybe `temperature_range` determines which columns to pick?
+        *   But `temperature_range` is a *target* column.
+        *   Let's re-read the target sample. `temperature_range` is 100998.
+        *   If the row count is preserved (1:1 mapping), then each source row maps to one target row.
+        *   Source has `NUMBER_OF_RANGES`. If it's 2, we have `LOW_1, HIGH_1, COEFF_1` AND `LOW_2, HIGH_2, COEFF_2`.
+        *   Target has only one `low_end`, `high_end`, `coefficient`.
+        *   This implies we are selecting *one* range per source row. Which one?
+        *   Maybe the one corresponding to `temperature_range`? But `temperature_range` is output.
+        *   Perhaps `temperature_range` is a constant `100998` and we always pick the *first* valid range? Or the *last*?
+        *   Let's look at the source sample again.
+            *   Row 1: `NUMBER_OF_RANGES`=2. `LOW_1`=-999, `HIGH_1`=79.9. `LOW_2`=79.9, `HIGH_2`=99999.
+            *   Row 7: `NUMBER_OF_RANGES`=1. `LOW_1`=-999, `HIGH_1`=99999.
+        *   Target sample rows have `low_end`=-999, `high_end`=99999. This matches the `NUMBER_OF_RANGES`=1 case, or the second range of a 2-range case? No, the second range is 79.9 to 99999.
+        *   The target sample shows `low_end`=-999 and `high_end`=99999. This is the full range.
+        *   This suggests that for the target, we might be aggregating or picking a specific "default" range.
+        *   However, if the row count is 1:1, we must pick one.
+        *   Hypothesis: The target represents the "full" range profile, and if a source row has multiple ranges, we might need to combine them or pick the one that spans the full domain? But coefficients differ.
+        *   Alternative Hypothesis: The `temperature_range` column in the target is actually the `NUMBER_OF_RANGES`? No, 100998 != 2.
+        *   Let's look at the value `100998` again.
+        *   Is it possible `temperature_range` is `100000 - 999 + ...`?
+        *   Let's check if `100998` is related to `LOSS_FACTOR`? No.
+        *   Let's check if `100998` is a constant. If I assume it's a constant, the code is simple.
+        *   What about `daytype`? Source `PROFILE_CLASS` is 'MP1', 'TR3'. Target is 'WEEKDAY'.
+        *   Calculation: `pd.to_datetime` from YEAR, MONTH, DAY. `dt.dayofweek`. If < 5, 'WEEKDAY', else 'WEEKEND'.
+        *   What about `season`? From MONTH.
+        *   What about `hour`? Source `HOUR` (1400) -> Target `hour` (1400)? Target sample has 100, 200... 1000. These are 1:00, 2:00... 10:00. Source has 1400 (2 PM). The sample rows are just different. The column `hour` likely maps directly from `HOUR`.
+        *   What about `constant` and `coefficient`?
+        *   If we assume 1:1 mapping, which coefficient?
+        *   If `NUMBER_OF_RANGES` is 1, we take `COEFF_1`.
+        *   If `NUMBER_OF_RANGES` is 2, do we take `COEFF_1`? Or `COEFF_2`?
+        *   The target sample shows `low_end`=-999, `high_end`=99999. This corresponds to `LOW_1` and `HIGH_1` ONLY IF `NUMBER_OF_RANGES` is 1. If `NUMBER_OF_RANGES` is 2, `HIGH_1` is ~80.
+        *   This implies the target sample rows come from source rows where `NUMBER_OF_RANGES` is 1.
+        *   But what about rows where `NUMBER_OF_RANGES` > 1?
+        *   If the target row count is almost identical to source, we are likely keeping one row per source row.
+        *   Maybe we are *always* taking the first range (`LOW_1`, `HIGH_1`, `COEFF_1`)?
+        *   If we take the first range:
+            *   `low_end` = `LOW_1`
+            *   `high_end` = `HIGH_1`
+            *   `coefficient` = `COEFF_1`
+            *   `constant` = `CONSTANT`
+            *   `temperature_range` = ???
+        *   Why would `temperature_range` be 100998?
+        *   Maybe `temperature_range` is `100 * HIGH_1 + LOW_1`? For -999 and 99999: `100*99999 - 999` = 9,999,900 - 999 = 9,998,901. No.
+        *   Maybe `100998` is a fixed ID for the "primary" range?
+        *   Let's check the distinct values of `temperature_range` in the target if possible. We only have one sample value.
+        *   Given the ambiguity, and the fact that `100998` is a very specific number, it might be a constant defined in the benchmark for this "length9" case.
+        *   However, there is a possibility that `temperature_range` is derived from `PROFILE_CLASS`? MP1 -> 100998? Unlikely.
+        *   Let's assume `temperature_range` is a constant `100998.0` for now, as it appears in all sample rows.
+        *   Let's refine the `daytype` logic. `PROFILE_CLASS` values like MP1, TR3 are typical ISO-NE or PJM profile classes. MP often means "Monday-Friday" or similar? No, MP1 is a specific load profile. TR3 is another.
+        *   Calculating from date is safer.
+        *   Let's refine the `season` logic.
+        *   Let's refine the column selection.
+        *   If the row count is 1:1, we pick `LOW_1`, `HIGH_1`, `COEFF_1`.
+        *   Wait, is it possible `temperature_range` is `100000 - 999 + 99999`? No.
+        *   Let's look at `100998`. `100` and `998`?
+        *   Actually, let's look at the source `HOUR`. 1400.

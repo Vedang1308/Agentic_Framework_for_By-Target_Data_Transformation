@@ -1,0 +1,59 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `class`, `Description`, `analysis`, `date`, `value1` through `value24`, and `uom`. The `date` column is in string format (`%m/%d/%Y`). The `value` columns represent hourly data.
+    *   **Target**: Contains columns `Date` and `Hr 1` through `Hr 24`. The `Date` column is a formatted string (`%Y-%m-%d %H:%M:%S`). The `Hr` columns correspond to the `value` columns in the source.
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target might include a date that is not present in the provided source sample, or there is a slight mismatch in the sample data provided versus the full dataset. However, looking at the sample data, the source rows are sparse (only a few days in July and December 2011), while the target shows consecutive days from January 2011. This implies the source table likely contains *all* the data, but the sample provided is just a subset. The transformation logic itself (mapping columns) remains the same regardless of row count. The row count increase in the description might be due to the target containing a full year or a specific range that the source sample doesn't fully display, but the *transformation* is a direct column mapping. Wait, looking closely at the sample:
+        *   Source Sample: 7/3/2011, 7/4/2011, etc., and 12/28/2011, etc.
+        *   Target Sample: 2011-01-01, 2011-01-02, etc.
+        *   The samples are disjoint! This confirms that the source table contains the raw data for the entire period, and the target is just a reformatting of that same data. The "182 to 183" note is likely a specific artifact of the benchmark test set (e.g., maybe one extra day is added or the source sample is missing one day compared to the target sample). The core task is **column renaming and date formatting**. No aggregation or pivoting is needed because the source is already in a "wide" format with one row per day and columns for each hour, just like the target.
+
+2.  **Date Parsing and Formatting**:
+    *   The source `date` column is in `'%m/%d/%Y'` format (e.g., '7/3/2011').
+    *   The target `Date` column requires `'%Y-%m-%d %H:%M:%S'` format (e.g., '2011-01-01 00:00:00').
+    *   Action: Convert the `date` column to datetime objects using `pd.to_datetime`, then format it as a string using `.dt.strftime('%Y-%m-%d %H:%M:%S')`.
+
+3.  **Column Renaming**:
+    *   The source columns `value1` to `value24` need to be renamed to `Hr 1` to `Hr 24`.
+    *   Action: Create a mapping dictionary or use a loop/list comprehension to rename these columns.
+
+4.  **Column Selection and Ordering**:
+    *   The target requires specific columns: `['Date', 'Hr 1', ..., 'Hr 24']`.
+    *   Action: Select the newly renamed columns in the correct order.
+
+5.  **Implementation Details**:
+    *   Read the source DataFrame.
+    *   Parse the date.
+    *   Rename value columns.
+    *   Construct the final DataFrame with the target schema.
+
+### Python Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column from '%m/%d/%Y' to datetime
+    df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y')
+    
+    # 2. Format the date to '%Y-%m-%d %H:%M:%S' as required by the target 'Date' column
+    df['Date'] = df['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 3. Rename value columns to Hr columns
+    # Mapping value1 -> Hr 1, value2 -> Hr 2, ..., value24 -> Hr 24
+    rename_map = {}
+    for i in range(1, 25):
+        rename_map[f'value{i}'] = f'Hr {i}'
+    
+    df.rename(columns=rename_map, inplace=True)
+    
+    # 4. Define the target column order
+    target_columns = ['Date', 'Hr 1', 'Hr 2', 'Hr 3', 'Hr 4', 'Hr 5', 'Hr 6', 'Hr 7', 'Hr 8', 'Hr 9', 'Hr 10', 'Hr 11', 'Hr 12', 'Hr 13', 'Hr 14', 'Hr 15', 'Hr 16', 'Hr 17', 'Hr 18', 'Hr 19', 'Hr 20', 'Hr 21', 'Hr 22', 'Hr 23', 'Hr 24']
+    
+    # 5. Select and return the required columns
+    # Note: The source might have other columns (class, Description, etc.) which we ignore.
+    return df[target_columns]
+```

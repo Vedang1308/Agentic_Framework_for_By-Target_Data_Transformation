@@ -1,0 +1,54 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Schemas and Row Counts**:
+    *   Source has 182 rows, Target has 183 rows. This suggests a potential aggregation or that the source data is incomplete/filtered in the sample, but typically in these benchmarks, if the row count increases slightly, it might be due to a specific date being added or an aggregation of multiple classes. However, looking at the source sample, the `Class` column only contains 'RESIDENT'. The target sample shows dates starting from '01/01/2013', while the source sample starts from '7/3/2013'. This implies the source DataFrame provided to the function will likely contain the full year's data (or the relevant subset) and we just need to transform it. The row count difference (182 vs 183) is likely due to the specific sample provided in the prompt description being a subset (e.g., missing one day or having a different range) compared to the full test case. The transformation logic should be row-wise or column-wise mapping, not necessarily changing row counts unless aggregation is needed. Given the 1-to-1 mapping of hours, it's likely a direct transformation.
+    *   Source Columns: `Date`, `Class`, `1` through `24`.
+    *   Target Columns: `Date`, `Hr 1` through `Hr 24`.
+
+2.  **Date Formatting**:
+    *   Source `Date` is in format `M/D/YYYY` (e.g., '7/3/2013').
+    *   Target `Date` is in format `MM/DD/YYYY` (e.g., '01/01/2013').
+    *   Action: Parse `Date` to datetime and format as `%m/%d/%Y`.
+
+3.  **Column Renaming**:
+    *   Source hour columns are integers `1` to `24`.
+    *   Target hour columns are strings `'Hr 1'` to `'Hr 24'`.
+    *   Action: Create a mapping dictionary to rename columns `1` -> `'Hr 1'`, ..., `24` -> `'Hr 24'`.
+
+4.  **Data Selection**:
+    *   Drop the `Class` column as it is not in the target.
+    *   Select the `Date` column and the renamed hour columns.
+
+5.  **Final Output**:
+    *   Ensure the column order matches the target schema exactly: `['Date', 'Hr 1', ..., 'Hr 24']`.
+
+6.  **Refinement on Row Count**:
+    *   The prompt notes "Row count changes from 182 to 183". In many TbT tasks, if the source has unique dates and the target has unique dates, and the mapping is 1-to-1, the row count should remain the same unless there's a `groupby` or `pivot`. Here, the structure is wide (24 hours). It is highly probable that the source DataFrame passed to the function will have the correct number of rows for the target, and the sample provided in the text description is just a snippet. The transformation is a direct map. If the source had multiple classes per date, we might need to aggregate, but the distinct values for `Class` are only `['RESIDENT']`. Thus, no aggregation is needed. The row count discrepancy in the *description* is likely an artifact of the specific sample files vs the full dataset, or the source sample shown is missing one row (e.g., 365 days vs 366 days for a leap year, or just a subset). The code should simply transform whatever rows are in `source`.
+
+7.  **Implementation Details**:
+    *   Use `pd.to_datetime` for robust parsing.
+    *   Use `df.rename` for columns.
+    *   Return `df[target_columns]`.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse and format the Date column
+    # Source format: M/D/YYYY (e.g., '7/3/2013')
+    # Target format: MM/DD/YYYY (e.g., '01/01/2013')
+    df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%m/%d/%Y')
+    
+    # 2. Rename hour columns from integers 1-24 to 'Hr 1'-'Hr 24'
+    rename_dict = {i: f'Hr {i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define target columns in the correct order
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # 4. Select and return the target columns
+    # Note: The 'Class' column is dropped implicitly by not including it in target_columns
+    return df[target_columns]
+```

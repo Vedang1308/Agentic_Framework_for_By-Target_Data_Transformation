@@ -1,0 +1,119 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Date Transformation**:
+    *   Source column `Date` contains dates in format `M/D/YYYY` (e.g., '7/3/2013').
+    *   Target column `cst` requires format `%a %m/%d/%Y` (e.g., 'Tue 01/01/2013').
+    *   Action: Parse `Date` to datetime using `pd.to_datetime`, then format using `.dt.strftime('%a %m/%d/%Y')`.
+
+2.  **Analyze Hourly Column Transformation**:
+    *   Source columns are integers `1` through `24` representing hours.
+    *   Target columns are strings `1:00` through `24:00`.
+    *   Action: Rename source columns `1` -> `1:00`, `2` -> `2:00`, ..., `24` -> `24:00`.
+
+3.  **Analyze Row Count and Aggregation**:
+    *   Source has 182 rows, Target has 183 rows.
+    *   The source sample shows dates like '7/3/2013', '7/4/2013'... '12/31/2013'.
+    *   The target sample shows dates starting from '01/01/2013' and going through '07/02/2013' and presumably covering the whole year.
+    *   The source data appears to be a subset or a specific view, but the target implies a full year or a specific set of dates.
+    *   However, looking closely at the provided samples:
+        *   Source `Date` '7/3/2013' corresponds to Target `cst` 'Tue 07/02/2013'? No, '7/3/2013' is a Wednesday. 'Tue 07/02/2013' is July 2nd.
+        *   Let's check the values.
+        *   Source Row 1: Date '7/3/2013', Hour 1 value 0.56.
+        *   Target Row 8: cst 'Tue 07/02/2013', Hour 1 value 0.66.
+        *   Target Row 7: cst 'Mon 07/01/2013', Hour 1 value 0.68.
+        *   Target Row 6: cst 'Sun 06/30/2013', Hour 1 value 0.66.
+        *   Target Row 5: cst 'Sat 06/29/2013', Hour 1 value 0.56.
+        *   Wait, Source Row 1 (7/3/2013) has Hour 1 = 0.56. Target Row 5 (Sat 06/29/2013) has Hour 1 = 0.56. This doesn't match directly by date.
+        *   Let's look at Source Row 1 again: Date '7/3/2013'. Values: 0.56, 0.51, 0.49...
+        *   Let's look at Target Row 5: Date 'Sat 06/29/2013'. Values: 0.56, 0.51, 0.48...
+        *   The values are very similar but not identical (0.49 vs 0.48).
+        *   Let's look at Source Row 2: Date '7/4/2013'. Values: 0.81, 0.73...
+        *   Let's look at Target Row 8: Date 'Tue 07/02/2013'. Values: 0.66...
+        *   There seems to be a mismatch in the sample alignment or the source data provided in the prompt description vs the actual transformation logic.
+        *   Let's re-read the prompt carefully. "Source sample rows: 182 rows... Target rows: 183 rows".
+        *   Usually, in these TbT tasks, if the row count changes slightly (182 vs 183), it might involve adding a row (like a total or a missing date) or the source is missing one day.
+        *   However, looking at the dates:
+            *   Source starts 7/3/2013.
+            *   Target starts 01/01/2013.
+            *   This implies the source data provided in the *sample* is just a snippet, but the *actual* source DataFrame passed to the function will likely contain all the necessary dates to produce the target.
+            *   The key is the mapping.
+            *   Source `Date` '7/3/2013' -> Target `cst`?
+            *   If I simply parse the source date '7/3/2013' to datetime, it is a Wednesday.
+            *   Target 'Tue 01/01/2013' is Jan 1, 2013.
+            *   The transformation is likely just:
+                1. Parse Date.
+                2. Format Date.
+                3. Rename Columns.
+            *   Why the row count difference? 182 vs 183. 2013 is not a leap year (365 days). 182 is roughly half a year. 183 is roughly half a year + 1.
+            *   Perhaps the source contains data for specific days, and the target contains data for specific days.
+            *   The instruction says: "The function must compute its result SOLELY from the `source` argument."
+            *   This implies I cannot generate dates that aren't in the source.
+            *   If the source has 182 rows and target has 183, and I can't read the target, how do I get the extra row?
+            *   Maybe the source *does* have 183 rows in the actual test case, and the sample description "182 rows" is just for the snippet shown? Or maybe the source has duplicates that need aggregating?
+            *   Let's look at the `Class` column. It is 'RESIDENT'.
+            *   If there are multiple classes, we might need to aggregate. But here there is only one class.
+            *   Let's assume the standard transformation: Parse Date, Format Date, Rename Columns.
+            *   If the row count differs in the *sample description* but the function must be general, it's possible the source DataFrame passed in the actual test *will* have the correct number of rows to match the target, or the "182 vs 183" note is a hint that I might need to handle a specific edge case like adding a missing day? No, I can't add data not in source.
+            *   Alternative interpretation: The source sample shown is truncated. The actual `source` DataFrame will have the rows corresponding to the target.
+            *   Let's verify the date format mapping again.
+            *   Source: '7/3/2013'.
+            *   Target: 'Tue 01/01/2013'.
+            *   These are different dates. The sample rows in the prompt are likely just illustrative of the *format*, not a direct row-by-row mapping of the specific values shown in the snippet. The snippet shows Source starting July and Target starting Jan. This confirms the samples are disjoint sets of data for illustration.
+            *   Therefore, the logic is simply:
+                1.  Convert `Date` to datetime.
+                2.  Create `cst` by formatting datetime as `%a %m/%d/%Y`.
+                3.  Rename columns `1`..`24` to `1:00`..`24:00`.
+                4.  Select columns `cst` and the renamed hour columns.
+                5.  Sort by date? The target sample is sorted by date. It is good practice to sort by the date column to ensure deterministic output order matching the target.
+
+4.  **Refining the Plan**:
+    *   Step 1: Copy source.
+    *   Step 2: Parse `Date` column to datetime.
+    *   Step 3: Create `cst` column with format `%a %m/%d/%Y`.
+    *   Step 4: Rename columns `1` through `24` to `1:00` through `24:00`.
+    *   Step 5: Drop `Class` column.
+    *   Step 6: Sort by `cst` (or the underlying datetime) to ensure order. Since `cst` is a string, sorting by the original datetime is safer, then drop the datetime helper or just sort by `cst` if the format allows lexicographical sorting (it doesn't perfectly because of day names, but `%a %m/%d/%Y` sorts poorly). Better to sort by the parsed datetime object before formatting, or sort by `cst` after formatting if we assume the target is sorted by date. Let's sort by the datetime index or a temporary datetime column.
+    *   Step 7: Return `df[target_columns]`.
+
+5.  **Code Construction**:
+    *   `df = source.copy()`
+    *   `df['dt'] = pd.to_datetime(df['Date'])`
+    *   `df['cst'] = df['dt'].dt.strftime('%a %m/%d/%Y')`
+    *   `rename_map = {str(i): f'{i}:00' for i in range(1, 25)}`
+    *   `df = df.rename(columns=rename_map)`
+    *   `df = df.sort_values('dt')`
+    *   `target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]`
+    *   `return df[target_cols]`
+
+6.  **Double Check**:
+    *   Source `Date` '7/3/2013' -> `dt` 2013-07-03 -> `cst` 'Wed 07/03/2013'.
+    *   Target sample has 'Tue 01/01/2013'.
+    *   The logic holds for any date.
+    *   Column names match verbatim.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the Date column to datetime
+    df['dt'] = pd.to_datetime(df['Date'])
+    
+    # 2. Create the 'cst' column with the required format: '%a %m/%d/%Y'
+    # Example: 'Tue 01/01/2013'
+    df['cst'] = df['dt'].dt.strftime('%a %m/%d/%Y')
+    
+    # 3. Rename hourly columns from integers (1..24) to strings ('1:00'..'24:00')
+    rename_dict = {str(i): f'{i}:00' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    
+    # 4. Sort by the datetime to ensure the output order matches the target (chronological)
+    df = df.sort_values('dt')
+    
+    # 5. Define target columns verbatim
+    target_columns = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    
+    # 6. Return the DataFrame with only the target columns
+    return df[target_columns]
+```

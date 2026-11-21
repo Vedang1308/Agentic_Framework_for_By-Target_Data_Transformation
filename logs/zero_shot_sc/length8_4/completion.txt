@@ -1,0 +1,129 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains daily data with columns for each hour (`PCT_HOURLY_0100` to `PCT_HOURLY_2500`). Note that `PCT_HOURLY_2500` is always 0 in the sample, likely representing midnight/end-of-day or a placeholder. The dates are in `DT_STRATA`.
+    *   **Target**: Contains hourly averages/aggregates for each month. Columns are `hour` (1-24) and months (`january` to `december`).
+    *   **Transformation Goal**: Pivot the data from a "long" format (rows per day) to a "wide" format (rows per hour, columns per month), aggregating the percentage values.
+
+2.  **Determine Aggregation Logic**:
+    *   The target has 24 rows (hours 1-24).
+    *   The target values look like averages of the daily percentages for that specific hour across all days in that month.
+    *   We need to extract the month from `DT_STRATA`.
+    *   We need to extract the hour index from the column names (`PCT_HOURLY_0100` -> Hour 1, `PCT_HOURLY_0200` -> Hour 2, ..., `PCT_HOURLY_2400` -> Hour 24).
+    *   We will ignore `PCT_HOURLY_2500` as it doesn't correspond to a standard hour 1-24 and is zero in samples.
+
+3.  **Step-by-Step Implementation Plan**:
+    *   **Parse Dates**: Convert `DT_STRATA` to datetime objects to extract the month.
+    *   **Melt the DataFrame**: Convert the wide hourly columns into long format.
+        *   Identifier variables: `DT_STRATA` (and potentially others, but we only need date and value).
+        *   Value variable: `value` (the percentage).
+        *   Variable column: `hour_col` (e.g., `PCT_HOURLY_0100`).
+    *   **Extract Hour**: Parse the integer hour from the `hour_col` name. `PCT_HOURLY_0100` -> 1, `PCT_HOURLY_2400` -> 24.
+    *   **Extract Month**: Get the month number from the parsed `DT_STRATA`.
+    *   **Group and Aggregate**: Group by `hour` and `month`. Calculate the mean of the `value` column.
+    *   **Pivot/Reshape**: Create a DataFrame where index is `hour`, columns are months, and values are the aggregated means.
+    *   **Rename Columns**: Map month numbers (1-12) to month names ('january', 'february', etc.).
+    *   **Format Output**: Ensure the `hour` column is an integer and reset the index. Sort by hour.
+
+4.  **Refining the Hour Extraction**:
+    *   Column names are like `PCT_HOURLY_0100`.
+    *   We can strip `PCT_HOURLY_` and convert the remaining string (e.g., `0100`) to an integer, then divide by 100? Or just take the first two digits?
+    *   `0100` -> 1. `0200` -> 2. `2400` -> 24.
+    *   Regex or string slicing: `col.split('_')[-1]` gives `0100`. `int('0100') // 100` gives 1. `int('2400') // 100` gives 24. This works.
+
+5.  **Refining the Month Mapping**:
+    *   Month 1 -> 'january'
+    *   Month 2 -> 'february'
+    *   ...
+    *   Month 12 -> 'december'
+
+6.  **Code Construction**:
+    *   Load source.
+    *   Parse `DT_STRATA`.
+    *   Select only `PCT_HOURLY_*` columns.
+    *   Melt.
+    *   Clean hour and month.
+    *   Groupby mean.
+    *   Pivot.
+    *   Rename.
+    *   Return.
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms source DataFrame with daily hourly percentages into a target DataFrame
+    with hourly averages for each month.
+    """
+    # 1. Parse the date column to extract month information
+    # The format is inferred as '%m/%d/%Y' from the sample '7/2/2016'
+    source['DT_STRATA'] = pd.to_datetime(source['DT_STRATA'], format='%m/%d/%Y')
+    
+    # 2. Identify hourly columns
+    # Columns are PCT_HOURLY_0100 to PCT_HOURLY_2400 (and 2500 which we ignore)
+    hourly_cols = [col for col in source.columns if col.startswith('PCT_HOURLY_')]
+    
+    # Filter out 2500 if present, as target only has hours 1-24
+    hourly_cols = [col for col in hourly_cols if not col.endswith('2500')]
+    
+    # 3. Melt the dataframe to long format
+    # Keep DT_STRATA, melt the hourly columns
+    df_long = source[['DT_STRATA'] + hourly_cols].melt(
+        id_vars=['DT_STRATA'],
+        value_vars=hourly_cols,
+        var_name='hour_column',
+        value_name='value'
+    )
+    
+    # Drop rows with NaN values if any (though source seems dense)
+    df_long = df_long.dropna(subset=['value'])
+    
+    # 4. Extract hour number from column name
+    # e.g., 'PCT_HOURLY_0100' -> 1, 'PCT_HOURLY_2400' -> 24
+    # The last 4 chars are the time, e.g., '0100'. Dividing by 100 gives the hour.
+    df_long['hour'] = df_long['hour_column'].apply(lambda x: int(x.split('_')[-1]) // 100)
+    
+    # 5. Extract month number from DT_STRATA
+    df_long['month'] = df_long['DT_STRATA'].dt.month
+    
+    # 6. Aggregate: Calculate mean value for each hour and month
+    # Group by hour and month, then take the mean of the 'value' column
+    grouped = df_long.groupby(['hour', 'month'])['value'].mean().reset_index()
+    
+    # 7. Pivot the data
+    # Index: hour, Columns: month, Values: mean value
+    df_pivot = grouped.pivot(index='hour', columns='month', values='value')
+    
+    # 8. Rename month columns to month names
+    month_names = {
+        1: 'january', 2: 'february', 3: 'march', 4: 'april',
+        5: 'may', 6: 'june', 7: 'july', 8: 'august',
+        9: 'september', 10: 'october', 11: 'november', 12: 'december'
+    }
+    df_pivot.rename(columns=month_names, inplace=True)
+    
+    # 9. Reset index to make 'hour' a column
+    df_pivot.reset_index(inplace=True)
+    
+    # 10. Ensure hour is integer type
+    df_pivot['hour'] = df_pivot['hour'].astype(int)
+    
+    # 11. Define target columns in the correct order
+    target_columns = [
+        'hour', 'january', 'february', 'march', 'april', 'may', 'june',
+        'july', 'august', 'september', 'october', 'november', 'december'
+    ]
+    
+    # 12. Sort by hour to ensure correct order
+    df_pivot = df_pivot.sort_values('hour')
+    
+    # 13. Select only the required columns to match target schema exactly
+    # Fill NaNs if any month/hour combination is missing (though unlikely with full data)
+    df_pivot = df_pivot[target_columns]
+    
+    return df_pivot
+```

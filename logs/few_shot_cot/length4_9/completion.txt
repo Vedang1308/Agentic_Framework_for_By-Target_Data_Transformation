@@ -1,0 +1,129 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Source and Target Schemas**:
+   - Source: `date` (string, format `%m/%d/%Y %H:%M`), `zone_016` (float).
+   - Target: `date` (string, format `%m/%d/%Y`), and 24 columns representing hours of the day in 12-hour format with AM/PM (`1:00 AM` to `12:00 AM`).
+   - Row count changes from many (1450) to few (2). This implies an aggregation or pivoting operation where multiple rows per day are collapsed into a single row per day, with values distributed into hourly buckets.
+
+2. **Parse Datetime**:
+   - Convert the source `date` column to a pandas datetime object using `pd.to_datetime`.
+   - Extract the date part (year, month, day) to group by.
+   - Extract the hour part (0-23) to determine which target column the value belongs to.
+
+3. **Map Hours to Target Column Names**:
+   - The target columns use 12-hour clock format.
+   - Mapping logic:
+     - Hour 0 (00:00-00:59) -> `12:00 AM`
+     - Hour 1 (01:00-01:59) -> `1:00 AM`
+     - ...
+     - Hour 11 (11:00-11:59) -> `11:00 AM`
+     - Hour 12 (12:00-12:59) -> `12:00 PM`
+     - Hour 13 (13:00-13:59) -> `1:00 PM`
+     - ...
+     - Hour 23 (23:00-23:59) -> `11:00 PM`
+   - Create a mapping dictionary or function to convert 24-hour integer hours to the specific string labels.
+
+4. **Pivot/Reshape Data**:
+   - Group the data by the extracted date.
+   - For each date group, we need to assign the `zone_016` values to the correct hourly column.
+   - Since there are multiple rows per hour (e.g., 0:11, 0:12, etc.), we need an aggregation strategy. Looking at the target sample:
+     - For `01/02/2018`, the value `67.9` appears in `12:00 AM`. The source has multiple rows for `1/2/2018 0:xx` with value `67.9`.
+     - For `01/01/2018`, the values seem to be distinct per hour.
+     - The most robust general approach for "filling" a cell from multiple source rows is often `mean`, `first`, `last`, or `sum`. Given the context of sensor data (zone_016), `mean` or `first` is likely. Let's look closely at the sample.
+     - Source `1/2/2018 0:11` is `67.9`. Target `01/02/2018` `12:00 AM` is `67.9`.
+     - Source `1/3/2018` rows are `nan`.
+     - If we assume the data is dense enough or we just need to pick a representative value, `mean` is a safe statistical aggregation. However, if the values are constant within the hour (as seen in the sample `67.9` for all 0:xx rows), `first` or `mean` yields the same result. Let's use `mean` to handle potential slight variations, or `first` if we assume the first reading is representative. Actually, looking at the target `01/01/2018`, the values change smoothly. It's likely that for each hour, we take the average or a specific value. Let's try pivoting with `mean`.
+
+5. **Construct Target Columns**:
+   - Define the list of target column names verbatim.
+   - Ensure the final DataFrame has these columns in the correct order.
+   - Format the date index/column as `%m/%d/%Y`.
+
+6. **Implementation Details**:
+   - Parse `date` to datetime.
+   - Create a new column `hour_label` based on the hour of the datetime.
+   - Pivot the table: index=`date` (formatted), columns=`hour_label`, values=`zone_016`.
+   - Fill missing values if necessary (though the target shows `nan` for missing hours, so default pivot behavior is fine).
+   - Reorder columns to match the target schema exactly.
+
+7. **Refining the Hour Mapping**:
+   - 0 -> '12:00 AM'
+   - 1 -> '1:00 AM'
+   - ...
+   - 11 -> '11:00 AM'
+   - 12 -> '12:00 PM'
+   - 13 -> '1:00 PM'
+   - ...
+   - 23 -> '11:00 PM'
+
+8. **Final Check**:
+   - The target has `date` as the first column.
+   - The target has 24 hour columns.
+   - The source has `date` and `zone_016`.
+   - The transformation must generalize.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column
+    # Source format: '%m/%d/%Y %H:%M'
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract date for grouping and formatting
+    # Target date format: '%m/%d/%Y'
+    df['date_only'] = df['datetime'].dt.strftime('%m/%d/%Y')
+    
+    # 3. Extract hour and map to target column names
+    # Mapping 24-hour clock to 12-hour AM/PM format
+    def map_hour_to_label(hour):
+        if hour == 0:
+            return '12:00 AM'
+        elif hour < 12:
+            return f'{hour}:00 AM'
+        elif hour == 12:
+            return '12:00 PM'
+        else:
+            return f'{hour - 12}:00 PM'
+    
+    df['hour_label'] = df['datetime'].dt.hour.apply(map_hour_to_label)
+    
+    # 4. Pivot the data
+    # We group by date_only and hour_label, aggregating zone_016.
+    # Using 'mean' to aggregate multiple readings within the same hour.
+    # If there's only one reading, mean returns that value.
+    pivot_df = df.pivot_table(
+        index='date_only', 
+        columns='hour_label', 
+        values='zone_016', 
+        aggfunc='mean'
+    )
+    
+    # 5. Reset index to make 'date_only' a column
+    pivot_df = pivot_df.reset_index()
+    
+    # 6. Rename the index column to 'date' to match target
+    pivot_df = pivot_df.rename(columns={'date_only': 'date'})
+    
+    # 7. Define the exact target column order
+    target_columns = [
+        'date', 
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', 
+        '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 PM', 
+        '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', 
+        '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 AM'
+    ]
+    
+    # 8. Ensure all target columns exist (fill missing with NaN if necessary)
+    for col in target_columns:
+        if col not in pivot_df.columns:
+            pivot_df[col] = np.nan
+            
+    # 9. Select and order columns verbatim
+    result_df = pivot_df[target_columns]
+    
+    return result_df
+```

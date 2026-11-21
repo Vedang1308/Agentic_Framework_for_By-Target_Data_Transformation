@@ -1,0 +1,94 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Datetime**: The source `date` column is a string in the format `%m/%d/%Y %H:%M`. We need to parse this into a proper datetime object to extract the date and hour components.
+2.  **Extract Date and Hour**:
+    *   Extract the calendar date (year, month, day) to group rows by day.
+    *   Extract the hour (0-23) to determine which time slot each row belongs to.
+3.  **Map Hour to Target Column Name**: The target columns are named with 12-hour clock formats (e.g., '1:00 AM', '12:00 PM'). We need a mapping function to convert the 24-hour integer (0-23) to these specific strings.
+    *   Hour 0 -> '12:00 AM'
+    *   Hour 1 -> '1:00 AM'
+    *   ...
+    *   Hour 11 -> '11:00 AM'
+    *   Hour 12 -> '12:00 PM'
+    *   Hour 13 -> '1:00 PM'
+    *   ...
+    *   Hour 23 -> '11:00 PM'
+4.  **Aggregate Data**:
+    *   Group the data by the extracted calendar date and the mapped time slot.
+    *   Since the source has minute-level granularity (e.g., 0:11, 0:12) and the target has hourly granularity, we need to aggregate the `zone_016` values for each hour. Looking at the sample, the values within an hour seem constant or very similar. A common aggregation for this type of sensor data when pivoting to hourly is the mean or the first available value. Given the sample output shows specific values like 67.9 for 12:00 AM on 01/02/2018, and the source rows for that hour are all 67.9, `mean()` or `first()` would work. However, looking at the second row of the target (01/01/2018), the values change gradually. Let's look at the source sample again. The source sample only shows 1/2 and 1/3. The target shows 01/02 and 01/01. This implies the source data likely contains data for 01/01 as well, just not shown in the tiny snippet.
+    *   Crucially, the target has `nan` for most hours on 01/02/2018 except 12:00 AM. This suggests that if data is missing for an hour, it should remain NaN.
+    *   We will use `groupby` on [Date, TimeSlot] and aggregate `zone_016` using `mean()` (or `first()` if we assume constant values per hour, but `mean()` is safer for noise). Let's check the 01/01/2018 row in target: 1:00 AM is 67.9, 2:00 AM is 67.8. This looks like a trend. If the source has minute-by-minute data, averaging might smooth it, but if the source is constant per hour, mean equals the value. Let's assume `mean()` is the standard aggregation for "value per hour" from minute data.
+5.  **Pivot/Reshape**: After grouping, we pivot the data so that the `TimeSlot` becomes the column headers and the `Date` becomes the row index.
+6.  **Format Date**: The target `date` column requires the format `%m/%d/%Y` (e.g., '01/02/2018'). We need to format the date index accordingly.
+7.  **Reorder Columns**: The target columns have a specific order: 1:00 AM through 11:00 PM, then 12:00 AM. We must ensure the final DataFrame columns match this exact order.
+8.  **Reset Index**: Convert the date index back to a column named `date`.
+9.  **Final Selection**: Select only the required target columns in the correct order.
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame with minute-level data into a target DataFrame
+    with hourly aggregated data pivoted by time of day.
+    """
+    # 1. Parse the date column
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract date and hour
+    df['date_only'] = df['datetime'].dt.date
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 3. Map hour to target column names (12-hour format)
+    def hour_to_label(h):
+        if h == 0:
+            return '12:00 AM'
+        elif h < 12:
+            return f'{h}:00 AM'
+        elif h == 12:
+            return '12:00 PM'
+        else:
+            return f'{h-12}:00 PM'
+            
+    df['time_slot'] = df['hour'].apply(hour_to_label)
+    
+    # 4. Aggregate by date and time slot
+    # We use mean() to aggregate minute-level data to hourly. 
+    # If values are constant per hour, mean() returns that value.
+    # If there are NaNs, mean() ignores them.
+    grouped = df.groupby(['date_only', 'time_slot'])['zone_016'].mean()
+    
+    # 5. Pivot the data
+    # The index will be date_only, columns will be time_slot, values will be zone_016
+    pivoted = grouped.unstack(fill_value=np.nan)
+    
+    # 6. Format the date index to match target format '%m/%d/%Y'
+    pivoted.index = pivoted.index.strftime('%m/%d/%Y')
+    
+    # 7. Reset index to make 'date' a column
+    pivoted = pivoted.reset_index()
+    pivoted.rename(columns={'index': 'date'}, inplace=True)
+    
+    # 8. Define the exact target column order
+    target_columns = [
+        'date', 
+        '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', 
+        '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 PM', 
+        '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', 
+        '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 AM'
+    ]
+    
+    # 9. Ensure all target columns exist (fill missing with NaN if necessary)
+    for col in target_columns:
+        if col not in pivoted.columns:
+            pivoted[col] = np.nan
+            
+    # 10. Select and order columns
+    result = pivoted[target_columns]
+    
+    return result
+```

@@ -1,0 +1,83 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Date/Time**: The source column `date` is a string in the format `%m/%d/%Y %H:%M`. I need to convert this to a pandas `datetime` object to extract temporal components.
+2.  **Extract Hour and Month**:
+    *   Extract the `Hour` component (0-23) from the parsed datetime.
+    *   Extract the `Month` component (1-12) from the parsed datetime.
+    *   Map the numeric month (1-12) to the corresponding month name (e.g., 1 -> 'January', 12 -> 'December') to align with the target column names.
+3.  **Prepare Data for Pivoting**:
+    *   The goal is to have `Hour` as the index (or unique rows) and Months as columns.
+    *   The values in the cells will be the `zone_016_cooling_sp` values.
+    *   Since multiple rows in the source might exist for the same (Hour, Month) combination, I need to decide how to aggregate. Looking at the target sample, the values are consistent (73). If there are multiple values for the same hour/month, a common aggregation like `mean` or `first` is appropriate. Given the distinct values are just 73 and 84, and the target shows specific values, `mean` is a safe default for averaging sensor data, or `first` if they are constant. Let's look at the target: it shows `73` for November/September/October. The source shows `73` for those dates. Let's assume `mean` to handle potential noise, or simply `first` if the data is deterministic. However, usually, in these benchmarks, if the value is constant for that group, any aggregation works. Let's use `mean` to be robust against duplicates.
+4.  **Pivot/Reshape**:
+    *   Use `pivot_table` or `groupby` + `unstack`.
+    *   Index: `Hour`
+    *   Columns: `Month_Name`
+    *   Values: `zone_016_cooling_sp`
+5.  **Handle Missing Values and Columns**:
+    *   The target table has columns for all 12 months. If a specific month has no data for a specific hour, it should be `NaN`.
+    *   Ensure all 12 month columns are present in the final DataFrame, even if empty (filled with NaN).
+6.  **Sort and Format**:
+    *   Sort the index (`Hour`) in ascending order.
+    *   Reset the index to make `Hour` a column.
+    *   Rename the columns to match the exact target schema: `['Hour', 'January', ..., 'December']`.
+    *   Ensure the `Hour` column is of type `int64` and month columns are `float64`.
+
+### Implementation Details
+
+*   **Month Mapping**: Create a dictionary or use `dt.month_name()` to get the month names. `dt.month_name()` returns the full name (e.g., "January"), which matches the target columns exactly.
+*   **Pivot**: `df.pivot_table(index='Hour', columns='Month_Name', values='zone_016_cooling_sp', aggfunc='mean')`.
+*   **Reindexing**: After pivoting, reindex the columns to ensure all 12 months are present in the correct order.
+*   **Final Cleanup**: Reset index, sort by Hour, select columns.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # 1. Parse the date column
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract Hour and Month Name
+    df['Hour'] = df['datetime'].dt.hour
+    df['Month_Name'] = df['datetime'].dt.month_name()
+    
+    # 3. Define the target month columns in order
+    target_months = [
+        'January', 'February', 'March', 'April', 'May', 'June', 
+        'July', 'August', 'September', 'October', 'November', 'December'
+    ]
+    
+    # 4. Pivot the data
+    # We group by Hour and Month_Name and aggregate the cooling_sp values.
+    # Using 'mean' handles potential duplicates for the same hour/month.
+    pivot_df = df.pivot_table(
+        index='Hour', 
+        columns='Month_Name', 
+        values='zone_016_cooling_sp', 
+        aggfunc='mean'
+    )
+    
+    # 5. Ensure all target month columns exist, filling missing with NaN
+    pivot_df = pivot_df.reindex(columns=target_months)
+    
+    # 6. Sort by Hour and reset index
+    pivot_df = pivot_df.sort_index()
+    pivot_df = pivot_df.reset_index()
+    
+    # 7. Define final target columns
+    target_columns = ['Hour'] + target_months
+    
+    # 8. Select and return
+    df_result = pivot_df[target_columns]
+    
+    # Ensure correct types
+    df_result['Hour'] = df_result['Hour'].astype('int64')
+    for col in target_months:
+        df_result[col] = df_result[col].astype('float64')
+        
+    return df_result[target_columns]
+```

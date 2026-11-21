@@ -1,0 +1,219 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains granular energy usage data categorized by `End Use Category` (e.g., Kitchen, Lighting), specific `End Use` (e.g., Freezer, Interior Lighting), `Time Period` (Month name), `Day Type`, `Hour Ending`, and `Average Demand Per Home With This End Use [kW]`.
+    *   **Target**: A flattened table with columns for `month` (numeric), `hour` (numeric), and specific appliance categories (`hvac`, `water_heating`, `refrigerator`, etc.).
+    *   **Key Observation**: The source has multiple rows per hour/month combination due to different `End Use` items and `Day Type`s. The target aggregates these into specific appliance columns. The `month` column in the target is numeric (e.g., 3 for March), while the source has month names. The `hour` corresponds to `Hour Ending`.
+
+2.  **Map Source Columns to Target Columns**:
+    *   `Time Period` -> `month`: Convert month names (e.g., "March") to integers (e.g., 3).
+    *   `Hour Ending` -> `hour`: Direct mapping.
+    *   `Average Demand Per Home With This End Use [kW]` -> Various target columns: This is the value to be aggregated/pivoted.
+
+3.  **Determine Aggregation Strategy**:
+    *   The target has specific columns for appliances like `refrigerator`, `clothes_washer`, etc.
+    *   The source has `End Use` values like "Freezer", "Refrigerator", "Clothes Washer", etc.
+    *   We need to map specific `End Use` strings to the target column names.
+    *   Since the source data includes `Day Type` (Weekend, Weekday, All) and potentially multiple entries for the same hour/month/end-use (though the sample shows unique combinations), we need to aggregate. Looking at the target sample, most values are 0 or specific floats. The source sample shows `nan` for "Remaining Load".
+    *   Crucially, the target columns `refrigerator`, `clothes_washer`, etc., seem to correspond to specific `End Use` values.
+    *   Let's identify the mapping from `End Use` to Target Columns:
+        *   "Refrigerator" or "Freezer" -> `refrigerator`? The sample shows "Freezer" in source. The target has `refrigerator`. Usually, these are grouped. Let's look for other clues. The target has `hvac`, `water_heating`. These likely come from `End Use Category` or specific `End Use` names like "HVAC", "Water Heater".
+        *   "Clothes Washer" -> `clothes_washer`
+        *   "Clothes Dryer" -> `clothes_dryer`
+        *   "Dishwasher" -> `dishwasher`
+        *   "Cooking Range" -> `cooking_range`
+        *   "Pool Spa Pumps" -> `pool_spa_pumps`
+        *   "Interior Lighting" -> `interior_lighting`
+        *   "Exterior Lighting" -> `exterior_lighting`
+        *   "Lighting" (general) -> `lighting`? Or is `lighting` the sum? The target has `interior_lighting`, `exterior_lighting`, and `lighting`. This suggests `lighting` might be a residual or general category.
+        *   "Plug" -> `plug`
+        *   "Pool Spa Heater" -> `pool_spa_heater`
+        *   "HVAC" -> `hvac`
+        *   "Water Heating" -> `water_heating`
+
+    *   **Refining the Mapping**:
+        The source `End Use` column likely contains values that map directly or via a lookup to the target columns.
+        Let's look at the distinct `End Use` values typically found in such datasets (CEC/ResStock).
+        Common mappings:
+        - `hvac`: End Use == "HVAC"
+        - `water_heating`: End Use == "Water Heating"
+        - `refrigerator`: End Use in ["Refrigerator", "Freezer"]
+        - `clothes_washer`: End Use == "Clothes Washer"
+        - `clothes_dryer`: End Use == "Clothes Dryer"
+        - `dishwasher`: End Use == "Dishwasher"
+        - `cooking_range`: End Use == "Cooking Range"
+        - `pool_spa_pumps`: End Use == "Pool Spa Pumps"
+        - `interior_lighting`: End Use == "Interior Lighting"
+        - `exterior_lighting`: End Use == "Exterior Lighting"
+        - `lighting`: End Use == "Lighting" (General) or potentially a sum of unspecified lighting? Given the specific interior/exterior, `lighting` might be a catch-all or specific "Lighting" end use.
+        - `plug`: End Use == "Plug"
+        - `pool_spa_heater`: End Use == "Pool Spa Heater"
+
+    *   **Handling "Remaining Load"**: The sample shows `nan` for "Remaining Load". This suggests these rows should be ignored or contribute 0 to the specific appliance columns.
+
+4.  **Transformation Steps**:
+    1.  **Clean Data**: Drop rows where `Average Demand...` is NaN.
+    2.  **Map Month**: Create a `month` column from `Time Period` using a dictionary or pandas date parsing.
+    3.  **Map End Uses to Target Columns**: Create a mapping dictionary from `End Use` to the target column name.
+    4.  **Pivot/Aggregate**:
+        *   Group by `month`, `hour`.
+        *   For each target column, sum the `Average Demand...` where the `End Use` maps to that column.
+        *   Since the source might have multiple `Day Type`s (Weekend, Weekday) for the same month/hour, we need to decide if we sum them or average them. The target has one row per month/hour. The source has `Number of Homes...` which might be used for weighting, but the target column is `Average Demand Per Home`. Usually, if the source provides "Average Demand Per Home" for specific day types, and we want a general average, we might need to weight by the proportion of homes. However, looking at the target sample, values are low. Let's look at the row count. Source 258k rows. Target 258k rows. This implies a 1-to-1 relationship or very little aggregation.
+        *   Wait, 258,420 rows. 12 months * 24 hours * ~900 days? No.
+        *   Let's check the distinct `Day Type`. If the source has "Weekend", "Weekday", "All", and the target has one row per month/hour, we might be selecting specific rows or aggregating.
+        *   Actually, look at the target sample: `month` is `nan` for hours 1-4, then `3` for hours 9-12. This suggests the target might not be fully populated or the sample is sparse.
+        *   Let's look at the row count again. 258,420. If it's 12 months * 24 hours = 288 rows, that's way off.
+        *   Maybe the target is NOT aggregated to a single row per month/hour?
+        *   Let's re-read the target schema. `month` (float64), `hour` (int64).
+        *   If the source has 258k rows and target has 258k rows, the transformation is likely **row-wise** or **preserves granularity**.
+        *   But the target columns are specific appliances. The source rows are specific appliances.
+        *   Hypothesis: The target is a "wide" format of the source "long" format, but **not aggregated**. Each source row becomes a target row?
+        *   If each source row becomes a target row, how do we handle the multiple columns?
+        *   If a source row is for "Refrigerator", then `refrigerator` = value, others = 0.
+        *   This would result in a target table with the same number of rows as the source.
+        *   Let's verify this hypothesis.
+            *   Source Row: `Kitchen | Freezer | March | Weekend | 13 | 11 | 0.031`
+            *   Target Row: `month=3, hour=13, refrigerator=0.031, others=0`
+            *   This fits the 1-to-1 row count.
+            *   The target columns `hvac`, `water_heating` etc. will be sparse (mostly 0).
+            *   This explains why `month` is `nan` in the first few target rows (maybe those source rows had invalid month data or were dropped? Or maybe the sample just shows specific rows).
+            *   Actually, if it's 1-to-1, the order might change due to sorting or pivot operations, but the row count matches.
+
+5.  **Refined Plan (1-to-1 Mapping)**:
+    1.  **Filter**: Keep only rows with valid `Average Demand`.
+    2.  **Map Month**: Convert `Time Period` to numeric `month`.
+    3.  **Map End Use to Column**: Create a mapping from `End Use` string to the target column name.
+    4.  **Create Target Columns**: Initialize all target appliance columns to 0.
+    5.  **Assign Values**: For each row, based on the `End Use`, assign the `Average Demand` value to the corresponding target column.
+    6.  **Select Columns**: Return the DataFrame with the exact target column names.
+
+    *Mapping Details*:
+    - `End Use` -> Target Col
+    - "HVAC" -> `hvac`
+    - "Water Heating" -> `water_heating`
+    - "Refrigerator", "Freezer" -> `refrigerator`
+    - "Clothes Washer" -> `clothes_washer`
+    - "Clothes Dryer" -> `clothes_dryer`
+    - "Dishwasher" -> `dishwasher`
+    - "Cooking Range" -> `cooking_range`
+    - "Pool Spa Pumps" -> `pool_spa_pumps`
+    - "Interior Lighting" -> `interior_lighting`
+    - "Exterior Lighting" -> `exterior_lighting`
+    - "Lighting" -> `lighting` (Assuming a generic "Lighting" end use exists)
+    - "Plug" -> `plug`
+    - "Pool Spa Heater" -> `pool_spa_heater`
+
+    *Note on "Remaining Load"*: These rows have `nan` demand in the sample. They should be filtered out or result in 0s. Since the target row count matches the source, and "Remaining Load" has `nan`, they might be filtered out *if* the row counts match after filtering.
+    Source: 258,420. Target: 258,420.
+    If "Remaining Load" rows are filtered, the count would drop.
+    Let's check if "Remaining Load" rows have non-NaN values in other cases. The sample shows `nan`.
+    If the row counts are identical, maybe "Remaining Load" rows are kept but have 0 demand? Or maybe they are not in the source count provided?
+    Actually, looking at the sample, `Remaining Load` has `nan`. If we filter `dropna()`, we lose rows.
+    However, if the task is to transform *source* to *target*, and the row counts are equal, it implies either:
+    a) No rows are dropped.
+    b) The "Remaining Load" rows are mapped to a column not shown? No, the target columns are fixed.
+    c) The "Remaining Load" rows are excluded from the *source count* mentioned? Unlikely.
+    d) The target includes rows for "Remaining Load" but with 0s in all appliance columns?
+    
+    Let's look at the target sample again.
+    Rows 1-4: `month` is `nan`. `hvac` has values (1.07, 0.87...).
+    Rows 5-8: `month` is 3. `hvac` is 0.
+    
+    If the source row for `hvac` had a valid month, why is the target `month` `nan`?
+    Maybe the `Time Period` was missing or invalid in those source rows?
+    
+    Let's assume the standard approach:
+    1. Map `Time Period` to `month`. If invalid, `month` remains `nan`.
+    2. Map `End Use` to the specific column.
+    3. If an `End Use` doesn't map to any target column (e.g., "Remaining Load"), all appliance columns are 0.
+    
+    This preserves the row count.
+
+6.  **Implementation Details**:
+    - Use `pd.Series.map` for month conversion.
+    - Use a dictionary for `End Use` to Column mapping.
+    - Create a sparse matrix or initialize zeros and fill.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # Define target columns verbatim
+    target_columns = [
+        'month', 'hour', 'hvac', 'water_heating', 'refrigerator', 'clothes_washer', 
+        'clothes_dryer', 'dishwasher', 'cooking_range', 'pool_spa_pumps', 
+        'interior_lighting', 'exterior_lighting', 'lighting', 'plug', 'pool_spa_heater'
+    ]
+    
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Map Time Period (Month Name) to Numeric Month
+    month_map = {
+        'January': 1, 'February': 2, 'March': 3, 'April': 4,
+        'May': 5, 'June': 6, 'July': 7, 'August': 8,
+        'September': 9, 'October': 10, 'November': 11, 'December': 12
+    }
+    df['month'] = df['Time Period'].map(month_map)
+    
+    # 2. Map Hour Ending to hour
+    df['hour'] = df['Hour Ending'].astype(int)
+    
+    # 3. Define mapping from End Use to Target Column
+    # Note: "Freezer" and "Refrigerator" both map to "refrigerator"
+    end_use_to_col = {
+        'HVAC': 'hvac',
+        'Water Heating': 'water_heating',
+        'Refrigerator': 'refrigerator',
+        'Freezer': 'refrigerator',
+        'Clothes Washer': 'clothes_washer',
+        'Clothes Dryer': 'clothes_dryer',
+        'Dishwasher': 'dishwasher',
+        'Cooking Range': 'cooking_range',
+        'Pool Spa Pumps': 'pool_spa_pumps',
+        'Interior Lighting': 'interior_lighting',
+        'Exterior Lighting': 'exterior_lighting',
+        'Lighting': 'lighting', # Generic lighting
+        'Plug': 'plug',
+        'Pool Spa Heater': 'pool_spa_heater'
+    }
+    
+    # 4. Initialize target appliance columns with 0
+    for col in target_columns:
+        if col not in ['month', 'hour']:
+            df[col] = 0.0
+            
+    # 5. Assign values based on End Use
+    # We iterate through the unique End Uses present in the source
+    # to avoid creating unnecessary intermediate series
+    
+    # Get the demand column
+    demand_col = 'Average Demand Per Home With This End Use [kW]'
+    
+    # Create a mask for valid end uses
+    valid_end_uses = df['End Use'].isin(end_use_to_col.keys())
+    
+    # For each target column, find rows where End Use maps to it
+    for end_use, target_col in end_use_to_col.items():
+        # Mask for this specific end use
+        mask = df['End Use'] == end_use
+        # Assign the demand value to the target column for these rows
+        # Use where to keep existing 0s for other rows
+        df[target_col] = df[target_col].where(~mask, df.loc[mask, demand_col])
+        
+    # 6. Select and return the target columns
+    # Ensure types match if necessary, though pandas usually handles float/int inference
+    # The target schema specifies int64 for some appliance columns, but they contain floats in source.
+    # However, the sample target shows integers (0) and floats (1.07).
+    # The schema says 'hvac' is float64, 'refrigerator' is int64.
+    # This is contradictory if 'refrigerator' has non-integer values.
+    # Looking at the sample target: 'refrigerator' is 0 (int). 'hvac' is 1.07 (float).
+    # It's likely the schema types in the prompt are hints but the data is float.
+    # We will return the data as is, letting pandas determine types, or cast if strictly required.
+    # Given "Strict Requirements", we just return the dataframe.
+    
+    return df[target_columns]
+```

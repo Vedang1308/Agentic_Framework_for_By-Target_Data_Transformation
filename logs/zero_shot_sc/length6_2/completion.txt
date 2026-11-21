@@ -1,0 +1,82 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a date column `CST` (format: 'Day M/D/YYYY') and 24 hourly columns named `1:00` through `24:00:00`.
+    *   **Target**: Contains a date column `Date` (format: 'M/D/YYYY') and 24 hourly columns named `Hr 1` through `Hr 24`.
+    *   **Row Count Change**: The problem statement notes a change from 1339 to 1340 rows. However, looking at the data structure, it appears to be a direct 1-to-1 mapping of rows (one row per day). The slight discrepancy in the "Notice" might be due to specific test data variations or an extra header/row in the raw file not shown in the sample. Given the column mapping is 1-to-1, we assume a row-wise transformation without aggregation. If the source has duplicate dates, the problem doesn't specify aggregation logic (like mean/sum), so we assume unique dates or that the order is preserved. The most robust approach for TbT is usually preserving row order unless grouping is explicitly evident. The sample data shows consecutive dates.
+
+2.  **Date Parsing and Formatting**:
+    *   The source column `CST` contains strings like `'Sat 12/01/2012'`.
+    *   We need to parse this into a datetime object to extract the date part.
+    *   The target column `Date` requires the format `'MM/DD/YYYY'` (e.g., `'12/01/2012'`).
+    *   We can use `pd.to_datetime` with the format `'%a %m/%d/%Y'` to parse the source, then format it to `'%m/%d/%Y'` for the target. Alternatively, since the day-of-week prefix is consistent, we could just strip the first 4 characters, but parsing is safer and more general.
+
+3.  **Column Renaming**:
+    *   Source columns: `1:00`, `2:00`, ..., `23:00`, `24:00:00`.
+    *   Target columns: `Hr 1`, `Hr 2`, ..., `Hr 23`, `Hr 24`.
+    *   We need a mapping dictionary to rename these columns.
+    *   Note the last column is `24:00:00` in source but corresponds to `Hr 24` in target.
+
+4.  **Data Transformation Steps**:
+    *   Create a copy of the source DataFrame to avoid modifying the original.
+    *   Parse the `CST` column to create the new `Date` column.
+    *   Drop the original `CST` column.
+    *   Rename the hourly columns according to the mapping.
+    *   Ensure the final column order matches the target schema: `Date` followed by `Hr 1` to `Hr 24`.
+
+5.  **Handling Potential Edge Cases**:
+    *   The row count note suggests there might be an extra row in the target. In many TbT benchmarks, if the row count increases by 1, it *could* imply an index reset or a specific aggregation. However, without evidence of grouping keys in the source, and given the 1-to-1 nature of the daily data, it's highly likely the "1340" vs "1339" is either a red herring, a result of an empty row in the target file, or specific to the test file having one more day. Since we must write a general function, we process all rows in the source. If the target has more rows, it's likely outside the scope of a deterministic function without more info (e.g., "append a zero row"). Given the strict "generalize to any unseen test table" requirement, we assume the transformation is row-wise. *Self-correction*: In some datasets, the first row might be a header or metadata. But here `CST` has data. Let's stick to the 1-to-1 mapping. If the test case has 1339 source rows and expects 1340 target rows, and we can't invent data, we assume the standard transformation. *Wait*, looking closely at the sample, the source has 8 rows, target has 8 rows. The "Notice" is likely about the specific training/test split files where one might have an extra empty row or similar. We will proceed with the 1-to-1 transformation.
+
+6.  **Implementation Details**:
+    *   Use `pd.to_datetime(source['CST'], format='%a %m/%d/%Y')` to parse.
+    *   Format as `dt.strftime('%m/%d/%Y')`.
+    *   Construct the rename map.
+    *   Select and order columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame with daily hourly data into the target format.
+    
+    Steps:
+    1. Parse the 'CST' column to extract the date in 'MM/DD/YYYY' format.
+    2. Rename the hourly columns from 'H:00' format to 'Hr H' format.
+    3. Reorder columns to match the target schema.
+    """
+    # Create a copy to avoid SettingWithCopyWarning and modify freely
+    df = source.copy()
+    
+    # 1. Parse and format the Date column
+    # Source format: 'Sat 12/01/2012' -> '%a %m/%d/%Y'
+    # Target format: '12/01/2012' -> '%m/%d/%Y'
+    df['Date'] = pd.to_datetime(df['CST'], format='%a %m/%d/%Y').dt.strftime('%m/%d/%Y')
+    
+    # 2. Define the column mapping for hours
+    # Source columns: '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target columns: 'Hr 1', 'Hr 2', ..., 'Hr 23', 'Hr 24'
+    
+    # Generate the list of source hour columns
+    # Hours 1-23 are 'H:00', Hour 24 is '24:00:00'
+    source_hour_cols = [f"{h}:00" for h in range(1, 24)] + ["24:00:00"]
+    
+    # Generate the list of target hour columns
+    target_hour_cols = [f"Hr {h}" for h in range(1, 25)]
+    
+    # Create the mapping dictionary
+    rename_map = dict(zip(source_hour_cols, target_hour_cols))
+    
+    # Rename the columns
+    df.rename(columns=rename_map, inplace=True)
+    
+    # 3. Drop the original CST column
+    df.drop(columns=['CST'], inplace=True)
+    
+    # 4. Define the final column order
+    target_columns = ['Date'] + target_hour_cols
+    
+    # 5. Select and return the columns in the correct order
+    # Ensure all target columns exist (they should based on the schema)
+    return df[target_columns]
+```

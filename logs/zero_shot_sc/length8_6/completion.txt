@@ -1,0 +1,170 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Understand the Goal**: The objective is to transform a daily time-series dataset (where each row is a date and columns represent hourly values) into a monthly aggregated dataset. The target table has one row per hour (1-12 or 1-24, likely 1-12 based on the sample showing hours 1, 6-12) and columns for each month (January to December). The values in the target table appear to be averages of the hourly values for that specific hour across all days in that month.
+
+2.  **Analyze Source Schema**:
+    *   `date`: String format 'M/D/YYYY'. Needs parsing to extract month and potentially day/year for grouping.
+    *   Hourly columns: `1:00 AM`, `2:00 AM`, ..., `12:00 PM`, `1:00 PM`, ..., `11:00 PM`. There are 24 columns representing hours. Note the specific naming convention (AM/PM).
+    *   `DSL`: A column that seems irrelevant to the target schema (not present in target).
+
+3.  **Analyze Target Schema**:
+    *   `hour`: Integer. Represents the hour of the day. Looking at the sample, hours are 1, 6, 7, 8, 9, 10, 11, 12. It seems to cover the 12-hour cycle. We need to map the source AM/PM columns to integers 1-12.
+    *   Month columns: `january`, `february`, ..., `december`. These contain float values.
+    *   The values in the target look like averages. For example, `hour 1` in `july` is `0.995003`. Let's verify with the source data for July 2014.
+        *   Source rows for July 2014: 7/3, 7/4, 7/5, 7/6.
+        *   Column `1:00 AM` values for these dates: 1.03593, 1.01433, 1.01682, 1.38975.
+        *   Average: (1.03593 + 1.01433 + 1.01682 + 1.38975) / 4 = 4.45683 / 4 = 1.1142. This doesn't match 0.995003 directly.
+        *   Let's check other months. The target has `nan` for August-December. This suggests the source data might only cover Jan-July in the sample, or the aggregation is different.
+        *   Wait, let's look closer at the target `hour 1`, `july` value: `0.995003`.
+        *   Let's re-read the source sample. It has 7/3, 7/4, 7/5, 7/6 and 12/28, 12/29, 12/30, 12/31.
+        *   The target sample shows `nan` for August-December. But the source has December data. Why is December NaN?
+        *   Perhaps the target sample provided is just a subset or the aggregation logic filters something? Or maybe the "hour" column in target refers to something else?
+        *   Let's look at `hour 12` in `july`. Target: `0.210568`.
+        *   Source `12:00 PM` for July dates:
+            *   7/3: 0.306257
+            *   7/4: 0.101797
+            *   7/5: 0.328693
+            *   7/6: 0.130418
+            *   Avg: (0.306257+0.101797+0.328693+0.130418)/4 = 0.867165/4 = 0.21679. Close to 0.210568 but not exact.
+        *   Let's look at `hour 1` in `january`. Target: `1.20916`.
+        *   The source sample doesn't have January data. This implies the transformation must work on any data.
+        *   Let's reconsider the aggregation. Is it possible the target `hour` column is 0-23? No, it's 1-12.
+        *   Is it possible the values are sums? No, they are small floats.
+        *   Let's look at the `DSL` column. It's 0 for all sample rows.
+        *   Let's look at the row count change: 182 rows to 24 rows. 24 rows could be 24 hours? Or 12 hours x 2? Or just 12 hours if some are missing? The target sample shows 8 rows.
+        *   Actually, 24 rows in target might correspond to 24 hours if the target had 24 rows. But the target columns are months. If the target has 24 rows, and columns are months, maybe it's 24 hours? But the target column `hour` has values like 1, 10, 11, 12, 6, 7, 8, 9. These are 1-12.
+        *   If the target has 24 rows, and the sample shows hours 1-12, maybe it includes 13-24? Or maybe the sample is just a snippet.
+        *   Let's assume the standard transformation: Pivot/Melt the hourly columns, extract the hour number (1-12), extract the month from the date, group by hour and month, and calculate the mean.
+
+4.  **Mapping Hours**:
+    *   Source columns: `1:00 AM` -> 1, `2:00 AM` -> 2, ..., `12:00 AM` -> 12 (Midnight), `1:00 PM` -> 1, `2:00 PM` -> 2, ..., `12:00 PM` -> 12 (Noon).
+    *   Wait, `12:00 AM` is midnight. In 12-hour format, 12:00 AM is often treated as hour 12 or 0. Given the target has `12`, `12:00 AM` and `12:00 PM` both map to `12`.
+    *   So, `1:00 AM` -> 1, ..., `11:00 AM` -> 11, `12:00 PM` -> 12, `1:00 PM` -> 1, ..., `11:00 PM` -> 11, `12:00 AM` -> 12.
+
+5.  **Transformation Steps**:
+    *   Parse `date` to datetime.
+    *   Extract `month` from `date`. Map month number to month name (lowercase).
+    *   Melt the DataFrame from wide to long format.
+        *   ID variables: `date`, `month` (derived).
+        *   Value variables: All hour columns.
+        *   Variable name: `hour_str`.
+        *   Value name: `value`.
+    *   Parse `hour_str` to extract the integer hour (1-12).
+    *   Group by `hour` and `month_name`.
+    *   Aggregate by mean.
+    *   Pivot the result so that `hour` is the index (or column) and `month_name` are the columns.
+    *   Ensure all 12 months are present as columns, filling missing with NaN.
+    *   Ensure hours 1-12 are present.
+    *   Rename columns to match target exactly.
+    *   Sort by hour.
+
+6.  **Refining Hour Extraction**:
+    *   The column names are like "1:00 AM".
+    *   We can split by space, take the first part, split by ':', take the first part, convert to int.
+    *   "12:00 AM" -> 12. "12:00 PM" -> 12. "1:00 AM" -> 1.
+
+7.  **Refining Month Extraction**:
+    *   Use `pd.to_datetime(df['date']).dt.month`.
+    *   Map 1->'january', 2->'february', etc.
+
+8.  **Aggregation**:
+    *   `groupby(['hour', 'month_name'])['value'].mean()`
+    *   `unstack('month_name')`
+    *   Reindex columns to ensure all months are present.
+    *   Reset index to make `hour` a column.
+
+9.  **Verification against Sample**:
+    *   The sample target has `nan` for Aug-Dec. This might be because the sample source data provided in the prompt only has July and December data, but the target sample shown might be from a different subset or the December data averages to something else?
+    *   Wait, the source sample has December data. Why is December NaN in the target sample?
+    *   Let's look at the target sample again. `hour 1`, `december` is `nan`.
+    *   Source December data: 12/28, 12/29, 12/30, 12/31.
+    *   `1:00 AM` values: 0.201079, 0.168719, 0.09582, 0.133762.
+    *   Mean: ~0.15.
+    *   If the target has NaN, maybe the target sample is just incomplete or I am misinterpreting the "nan".
+    *   However, usually in these benchmarks, "nan" in the sample output means that for that specific test case, there was no data for that group. But here we have data.
+    *   Alternative theory: The target table in the prompt description is just a *sample* of the target, and the `nan`s indicate that in the *full* target generation for this specific training example, those cells were NaN. But why would they be NaN if data exists?
+    *   Maybe the `DSL` column filters rows? `DSL` is 0 for all.
+    *   Maybe the aggregation is not mean?
+    *   Let's stick to the most robust generalization: **Mean aggregation**. The NaNs in the sample might be due to the sample target being truncated or from a different run. The instruction says "generalize to any unseen test table". The most logical operation for "daily hourly data" to "monthly hourly averages" is mean.
+
+10. **Final Code Structure**:
+    *   Parse dates.
+    *   Melt.
+    *   Extract hour int.
+    *   Extract month name.
+    *   Groupby and mean.
+    *   Pivot.
+    *   Format columns.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms a source DataFrame with daily hourly data into a target DataFrame
+    with monthly average hourly data.
+    """
+    # 1. Parse the date column
+    source = source.copy()
+    source['date_dt'] = pd.to_datetime(source['date'], format='%m/%d/%Y')
+    
+    # 2. Extract month number and map to lowercase month name
+    month_map = {
+        1: 'january', 2: 'february', 3: 'march', 4: 'april',
+        5: 'may', 6: 'june', 7: 'july', 8: 'august',
+        9: 'september', 10: 'october', 11: 'november', 12: 'december'
+    }
+    source['month_name'] = source['date_dt'].dt.month.map(month_map)
+    
+    # 3. Identify hour columns (all columns except 'date', 'date_dt', 'month_name', 'DSL')
+    # The hour columns are the ones with time strings.
+    hour_cols = [col for col in source.columns if col not in ['date', 'date_dt', 'month_name', 'DSL']]
+    
+    # 4. Melt the DataFrame to long format
+    df_long = source.melt(
+        id_vars=['date_dt', 'month_name'],
+        value_vars=hour_cols,
+        var_name='hour_str',
+        value_name='value'
+    )
+    
+    # 5. Parse the hour string to extract the integer hour (1-12)
+    # Format is "1:00 AM", "12:00 PM", etc.
+    def extract_hour(hour_str):
+        # Split by space to get "1:00" or "12:00"
+        time_part = hour_str.split()[0]
+        # Split by colon to get the hour number
+        hour_num = int(time_part.split(':')[0])
+        return hour_num
+    
+    df_long['hour'] = df_long['hour_str'].apply(extract_hour)
+    
+    # 6. Group by hour and month_name, and calculate the mean
+    grouped = df_long.groupby(['hour', 'month_name'])['value'].mean()
+    
+    # 7. Unstack to pivot months into columns
+    df_pivot = grouped.unstack('month_name')
+    
+    # 8. Ensure all months are present as columns
+    all_months = ['january', 'february', 'march', 'april', 'may', 'june', 
+                  'july', 'august', 'september', 'october', 'november', 'december']
+    
+    # Reindex columns to include all months, filling missing with NaN
+    df_pivot = df_pivot.reindex(columns=all_months)
+    
+    # 9. Reset index to make 'hour' a column
+    df_pivot = df_pivot.reset_index()
+    
+    # 10. Ensure hour is integer type
+    df_pivot['hour'] = df_pivot['hour'].astype(int)
+    
+    # 11. Sort by hour for consistent output
+    df_pivot = df_pivot.sort_values('hour').reset_index(drop=True)
+    
+    # 12. Define target columns
+    target_columns = ['hour', 'january', 'february', 'march', 'april', 'may', 'june', 
+                      'july', 'august', 'september', 'october', 'november', 'december']
+    
+    return df_pivot[target_columns]
+```

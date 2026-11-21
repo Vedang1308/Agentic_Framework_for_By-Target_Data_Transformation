@@ -1,0 +1,45 @@
+### Benchmark Case: length8_1
+- Source sample rows: 74848 rows (Note: test_0.csv may have different row count)
+- Target rows: 24 rows
+- Notice: Row count changes from 74848 to 24. Check if an aggregation, grouping, or pivoting operation is required.
+
+### Exact Target Columns (Must match verbatim):
+['Hour', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
+### Datetime Format Inferences:
+- Source column 'date' has date format '%m/%d/%Y %H:%M' (sample: '7/28/2019 4:50')
+
+### Source Schema and Types:
+date (object), cerc_logger_1 (float64)
+
+### Target Schema and Types:
+Hour (int64), January (float64), February (float64), March (float64), April (float64), May (float64), June (float64), July (float64), August (float64), September (float64), October (float64), November (float64), December (float64)
+
+### Source Table Sample (training_0.csv):
+| date             |   cerc_logger_1 |
+|:-----------------|----------------:|
+| 7/28/2019 4:50   |          24.562 |
+| 7/28/2019 5:00   |          24.625 |
+| 7/28/2019 5:10   |          24.562 |
+| 7/28/2019 5:20   |          24.562 |
+| 12/31/2020 23:30 |          22.062 |
+| 12/31/2020 23:40 |          22.125 |
+| 12/31/2020 23:50 |          22.312 |
+| 1/1/2021 0:00    |          22.437 |
+
+### Desired Target Table Sample (target.csv):
+|   Hour |   January |   February |   March |   April |    May |   June |   July |   August |   September |   October |   November |   December |
+|-------:|----------:|-----------:|--------:|--------:|-------:|-------:|-------:|---------:|------------:|----------:|-----------:|-----------:|
+|      0 |    24.562 |     24     |  25     |  24.937 | 24.312 | 24.187 | 24.437 |   24.312 |      25.875 |    25.75  |     25.5   |      85    |
+|      1 |    24.312 |     24     |  24.875 |  24.937 | 24.312 | 24.062 | 24.437 |   24.437 |      25.812 |    25.5   |     25.312 |      85    |
+|      2 |    24.25  |     23.687 |  24.812 |  24.812 | 24.312 | 24.062 | 24.437 |   24.75  |      25.625 |    25.25  |     25.312 |      23.5  |
+|      3 |    24.062 |     23.562 |  24.625 |  24.75  | 24.25  | 24     | 24.562 |   24.812 |      25.312 |    25.125 |     25.062 |      85    |
+|     20 |    85     |     24     |  24.937 |  24.625 | 24.375 | 24.125 | 24.187 |   24.375 |      25.75  |    25.625 |     25.5   |      85    |
+|     21 |    85     |     23.875 |  25.062 |  24.75  | 24.437 | 24.187 | 24.625 |   24.375 |      25.625 |    25.687 |     25.375 |      85    |
+|     22 |    24.312 |     24     |  25.062 |  24.875 | 24.437 | 24.125 | 24.375 |   24.312 |      25.625 |    25.937 |     25.437 |      85    |
+|     23 |    24.5   |     23.937 |  25.062 |  24.937 | 24.5   | 24.187 | 24.437 |   24.375 |      25.812 |    25.937 |     25.5   |      25.75 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

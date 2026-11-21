@@ -1,0 +1,92 @@
+Step-by-Step Reasoning Plan:
+1. **Analyze Input and Output Schemas**:
+   - Source: Wide format with columns `Date`, `Hr 1` through `Hr 24`. Each row represents a day's hourly data.
+   - Target: Wide format with columns `hour` (1-24) and months `january` through `december`. Each row represents an hour of the day, and columns represent the average value for that hour across all days in that specific month.
+   - Transformation Type: This is a pivot/aggregation operation. We need to melt the wide source table into a long format, extract the month from the date, and then pivot back to wide format aggregating by month.
+
+2. **Data Cleaning and Preparation**:
+   - Parse the `Date` column into datetime objects to extract the month.
+   - Identify the hourly columns: `Hr 1` to `Hr 24`.
+
+3. **Reshaping (Melt)**:
+   - Use `pd.melt` to transform the source DataFrame from wide to long.
+   - `id_vars`: `['Date']` (and potentially other metadata if needed, but here we just need the date to determine the month).
+   - `value_vars`: All `Hr` columns.
+   - `var_name`: `'hour'` (will store strings like 'Hr 1').
+   - `value_name`: `'value'`.
+
+4. **Feature Engineering**:
+   - Extract the hour number from the `hour` column (e.g., convert 'Hr 1' to integer 1).
+   - Extract the month name from the `Date` column. Convert to lowercase to match target schema (`january`, `february`, etc.).
+
+5. **Aggregation**:
+   - Group by `hour` (integer) and `month` (string).
+   - Calculate the mean of the `value` column for each group. This averages all days in a specific month for a specific hour.
+
+6. **Reshaping (Pivot)**:
+   - Pivot the aggregated data so that `hour` becomes the index, `month` becomes the column headers, and the values are the calculated means.
+   - Ensure the resulting DataFrame has columns for all 12 months. If a month is missing (unlikely given the sample covers a full year, but good practice), fill with NaN or 0 depending on context, though mean aggregation usually handles existing data.
+
+7. **Formatting and Final Selection**:
+   - Reset the index to make `hour` a column.
+   - Rename columns to match the target schema exactly: `hour`, `january`, `february`, ..., `december`.
+   - Sort by `hour` to ensure the order 1..24.
+   - Select only the target columns in the correct order.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse Date column
+    df['Date'] = pd.to_datetime(df['Date'])
+    
+    # 2. Identify hourly columns
+    hr_cols = [c for c in df.columns if c.startswith('Hr ')]
+    
+    # 3. Melt the dataframe to long format
+    # id_vars keeps Date, value_vars are the hour columns
+    melted = df.melt(
+        id_vars=['Date'], 
+        value_vars=hr_cols, 
+        var_name='hour_str', 
+        value_name='value'
+    )
+    
+    # 4. Extract hour integer from 'Hr X' string
+    melted['hour'] = melted['hour_str'].str.extract(r'(\d+)').astype(int)
+    
+    # 5. Extract month name from Date and convert to lowercase
+    melted['month'] = melted['Date'].dt.month_name().str.lower()
+    
+    # 6. Group by hour and month, then calculate the mean
+    # This aggregates all days for each month for each specific hour
+    aggregated = melted.groupby(['hour', 'month'])['value'].mean().reset_index()
+    
+    # 7. Pivot to wide format: index=hour, columns=month, values=value
+    pivoted = aggregated.pivot(index='hour', columns='month', values='value')
+    
+    # 8. Reset index to make 'hour' a column
+    pivoted = pivoted.reset_index()
+    
+    # 9. Define target column names
+    month_cols = [
+        'january', 'february', 'march', 'april', 'may', 'june', 
+        'july', 'august', 'september', 'october', 'november', 'december'
+    ]
+    
+    # Ensure all month columns exist (fill NaN if any month is missing in data)
+    for col in month_cols:
+        if col not in pivoted.columns:
+            pivoted[col] = float('nan')
+            
+    # 10. Select and order columns exactly as required
+    target_columns = ['hour'] + month_cols
+    
+    # Sort by hour to ensure 1-24 order
+    pivoted = pivoted.sort_values('hour').reset_index(drop=True)
+    
+    return pivoted[target_columns]
+```

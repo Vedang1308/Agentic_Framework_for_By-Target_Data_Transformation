@@ -1,0 +1,158 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Date/Time**: The source column `date` is a string in the format `%m/%d/%Y %H:%M`. We need to convert this into a pandas `datetime` object to extract temporal components.
+2.  **Extract Components**: From the parsed datetime, extract:
+    *   `Hour`: The hour of the day (0-23). This will be the index/key for the rows in the target table.
+    *   `Month`: The month number (1-12). This will determine which column the data falls into.
+3.  **Map Month Numbers to Names**: Create a mapping from month integers (1-12) to their full names (January, February, etc.) to match the target column names.
+4.  **Pivot/Reshape**: The target table has `Hour` as rows and Months as columns. This suggests a pivot operation.
+    *   We need to group by `Hour` and `Month`.
+    *   Since there are multiple rows per hour/month combination in the source (e.g., multiple minutes within an hour), we need an aggregation function. Looking at the sample:
+        *   Source `1/2/2018 0:11` to `0:14` all have `67.9`. Target `Hour 0`, `January` is `67.9`.
+        *   Source `1/3/2018 0:17` is `69`, but `0:18-0:20` are `nan`. Target `Hour 0` is `67.9` (from Jan 2nd). Wait, let's look closer.
+        *   The target sample shows `Hour 0` has `67.9` for January. The source has `67.9` for Jan 2nd 0:11-0:14. It also has `69` for Jan 3rd 0:17.
+        *   The target row for `Hour 0` only shows one value for January. This implies that for a given `Hour` and `Month`, we need to aggregate the values.
+        *   Common aggregations are `mean`, `median`, `first`, `last`, or `sum`.
+        *   Let's check `Hour 20`. Source sample doesn't show Hour 20 explicitly in the snippet, but let's look at the structure.
+        *   Usually, in these TbT tasks, if the values are constant within a small window, `mean` or `first` might work. However, looking at `Hour 0`:
+            *   Jan 2, 0:11-0:14: 67.9
+            *   Jan 3, 0:17: 69
+            *   Jan 3, 0:18-0:20: nan
+            *   If we take the mean of [67.9, 67.9, 67.9, 67.9, 69, nan, nan, nan], the result would be different from 67.9.
+            *   If we take the `first` value encountered (sorted by date), it would be 67.9.
+            *   If we take the `last` value, it might be nan or 69 depending on sort order.
+            *   Let's look at `Hour 23`. Target is `67.8`.
+            *   Let's look at `Hour 22`. Target is `67.6`.
+            *   Let's look at `Hour 21`. Target is `67.3`.
+            *   Let's look at `Hour 20`. Target is `67`.
+            *   Let's look at `Hour 3`. Target is `67.7`.
+            *   Let's look at `Hour 2`. Target is `67.8`.
+            *   Let's look at `Hour 1`. Target is `67.9`.
+            *   Let's look at `Hour 0`. Target is `67.9`.
+            *   The values seem to be decreasing slightly from 67.9 to 67.7 then up to 67.8? No, 67.9 -> 67.9 -> 67.8 -> 67.7 -> ... -> 67 -> 67.3 -> 67.6 -> 67.8.
+            *   This looks like a daily cycle.
+            *   Crucially, the target has `nan` for all other months. This means the aggregation is done per `Hour` and `Month`.
+            *   Since the source data likely spans multiple years or months, but the target only shows January data populated (others are nan), it implies that for the specific test case, only January data exists or is relevant.
+            *   How to aggregate? If I have multiple entries for Hour 0 in January, which one do I pick?
+            *   In many sensor datasets, `mean` is a safe bet for "average value at this hour". However, if there are NaNs, `mean` ignores them.
+            *   Let's re-examine `Hour 0`. Values: 67.9 (4 times), 69 (1 time), nan (3 times). Mean = (67.9*4 + 69) / 5 = (271.6 + 69) / 5 = 340.6 / 5 = 68.12. This does not match 67.9.
+            *   Median? Sorted: 67.9, 67.9, 67.9, 67.9, 69. Median is 67.9. This matches!
+            *   Let's check if `first` works. If sorted by time, the first value is 67.9. This also matches.
+            *   Let's check `last`. Last non-nan is 69. Last is nan. Doesn't match.
+            *   Let's look at another hour if possible. The sample is limited.
+            *   However, `median` is robust against outliers (like the 69 spike). `first` is sensitive to ordering. `mean` is sensitive to outliers.
+            *   Let's look at `Hour 20` target: 67.
+            *   Let's look at `Hour 21` target: 67.3.
+            *   Let's look at `Hour 22` target: 67.6.
+            *   Let's look at `Hour 23` target: 67.8.
+            *   Let's look at `Hour 0` target: 67.9.
+            *   Let's look at `Hour 1` target: 67.9.
+            *   Let's look at `Hour 2` target: 67.8.
+            *   Let's look at `Hour 3` target: 67.7.
+            *   This pattern (67.8, 67.7, 67.9, 67.9, 67.8, 67.7...) suggests a smooth curve.
+            *   If I use `mean`, the 69 outlier would skew Hour 0.
+            *   If I use `median`, the 69 outlier is ignored if there are enough 67.9s.
+            *   Given the "sensor" nature of `zone_016`, `mean` is very common. But the mismatch with Hour 0 mean calculation suggests either:
+                1. My assumption about the data points for Hour 0 is incomplete (maybe there are more 67.9s from other days?).
+                2. The aggregation is `median`.
+                3. The aggregation is `first` (assuming data is sorted and the "true" value is the start of the hour).
+                4. The aggregation is `mode`.
+            *   Let's consider the source row count: 1450 rows. Target: 24 rows.
+            *   1450 / 24 ≈ 60. This suggests roughly 60 data points per hour/month bucket? Or maybe the data spans ~24 hours * 60 minutes = 1440 minutes.
+            *   If the data is minute-by-minute for one day (or one month's worth of specific hours), then for each Hour/Month combo, there might be ~60 rows.
+            *   If there are 60 rows, and most are 67.9, and one is 69, the mean would be very close to 67.9.
+            *   Calculation: (59 * 67.9 + 1 * 69) / 60 = (4006.1 + 69) / 60 = 4075.1 / 60 = 67.918.
+            *   The target shows `67.9`. This is likely rounded or truncated.
+            *   Let's check `Hour 20` target `67`. If the values are around 67, mean is likely 67.
+            *   Let's assume `mean` is the standard aggregation for this type of problem unless `median` is explicitly required by outliers. Given the precision in the target (1 decimal place), `mean` rounded to 1 decimal place is a strong candidate.
+            *   However, pandas `pivot_table` with `aggfunc='mean'` is the standard approach.
+            *   Let's try `mean`. If the result needs to be formatted to 1 decimal, we might need to round. But the target schema says `float64`. The sample shows `67.9`, `67.8`, `67`. `67` is an integer representation of a float.
+            *   Let's stick with `mean`.
+
+5.  **Construct Pivot Table**:
+    *   Index: `Hour`
+    *   Columns: `Month` (mapped to names)
+    *   Values: `zone_016`
+    *   Aggregation: `mean`
+
+6.  **Handle Missing Months**: The target has columns for all 12 months. If a month is not present in the source, the pivot will not create that column. We need to ensure all 12 month columns exist, filled with `NaN` if not present.
+
+7.  **Reset Index and Rename**:
+    *   Reset the index to make `Hour` a column.
+    *   Ensure column names match exactly: `['Hour', 'January', ..., 'December']`.
+
+8.  **Sort and Format**:
+    *   Sort by `Hour` (0-23).
+    *   The target sample shows `Hour` as `int64`. Ensure this type.
+    *   The target values are floats.
+
+9.  **Final Output**: Return the DataFrame with the exact target columns.
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame.
+    
+    Steps:
+    1. Parse the 'date' column into datetime objects.
+    2. Extract 'Hour' and 'Month' from the datetime.
+    3. Map month numbers to month names.
+    4. Pivot the data to have Hours as rows and Months as columns.
+    5. Aggregate values using mean.
+    6. Ensure all 12 month columns are present.
+    7. Format and return the result.
+    """
+    # 1. Parse date
+    df = source.copy()
+    df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract Hour and Month
+    df['Hour'] = df['date'].dt.hour
+    df['Month'] = df['date'].dt.month
+    
+    # 3. Map Month numbers to names
+    month_map = {
+        1: 'January', 2: 'February', 3: 'March', 4: 'April',
+        5: 'May', 6: 'June', 7: 'July', 8: 'August',
+        9: 'September', 10: 'October', 11: 'November', 12: 'December'
+    }
+    df['Month_Name'] = df['Month'].map(month_map)
+    
+    # 4. Pivot Table
+    # We group by Hour and Month_Name, and aggregate zone_016 using mean
+    pivot_df = df.pivot_table(
+        index='Hour',
+        columns='Month_Name',
+        values='zone_016',
+        aggfunc='mean'
+    )
+    
+    # 5. Ensure all month columns exist
+    target_months = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+    ]
+    
+    # Reindex columns to ensure all months are present, filling missing with NaN
+    pivot_df = pivot_df.reindex(columns=target_months)
+    
+    # 6. Reset index to make Hour a column
+    pivot_df = pivot_df.reset_index()
+    
+    # 7. Ensure Hour is integer
+    pivot_df['Hour'] = pivot_df['Hour'].astype(int)
+    
+    # 8. Sort by Hour to match typical target order (0-23)
+    pivot_df = pivot_df.sort_values('Hour').reset_index(drop=True)
+    
+    # 9. Define final target columns
+    target_columns = ['Hour'] + target_months
+    
+    # 10. Return the DataFrame with exact column names
+    return pivot_df[target_columns]
+```

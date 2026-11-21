@@ -1,0 +1,79 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Datetime**: The source column `date` is a string in the format `%m/%d/%Y %H:%M`. We need to parse this into a proper datetime object to extract the date and hour components.
+2.  **Extract Date and Hour**:
+    *   Extract the calendar date (year, month, day) from the parsed datetime. This will serve as the grouping key.
+    *   Extract the hour of the day (0-23). Note that the target columns are labeled "Hour 1" to "Hour 24". This implies a 1-based indexing where Hour 1 corresponds to 00:00-00:59, Hour 2 to 01:00-01:59, ..., and Hour 24 to 23:00-23:59. So, `Target_Hour_Index = Extracted_Hour + 1`.
+3.  **Format Date Column**: The target `date` column requires the format `%m/%d/%Y` (e.g., '05/08/2019'). We will format the extracted date accordingly.
+4.  **Pivot/Reshape**:
+    *   We need to aggregate the `cerc_logger_1` values for each unique combination of (Date, Hour).
+    *   Since the source data has multiple readings per hour (e.g., every 10 minutes), we need an aggregation function. Looking at the sample data, the values within an hour are very close. A common approach for sensor data like this is to take the **mean** or **median**. Given the precision (3 decimal places) and the nature of "logger" data, `mean` is a standard default unless specified otherwise. Let's verify with a quick mental check: if there are 6 readings per hour, averaging them smooths out noise.
+    *   We will group by the formatted date string and the calculated hour index (1-24).
+    *   We will aggregate `cerc_logger_1` using `mean`.
+5.  **Pivot Table**:
+    *   Create a pivot table where:
+        *   Index: `date` (formatted string)
+        *   Columns: Hour index (1-24)
+        *   Values: Aggregated `cerc_logger_1`
+6.  **Rename Columns**:
+    *   The pivot columns will be integers 1-24. We need to rename them to "Hour 1", "Hour 2", ..., "Hour 24".
+7.  **Handle Missing Data**:
+    *   If a specific hour has no data for a day, the pivot will produce NaN. The target schema implies float64, so NaN is acceptable, or we might need to fill with 0 or interpolate. However, looking at the target sample, all cells are filled. It's likely the source data is dense. If there are gaps, `fillna(0)` or similar might be needed, but usually, in these benchmarks, if data is missing, it stays NaN or is handled by the aggregation. Let's stick to the aggregation result. If the target expects specific handling for missing hours, it's usually explicit. Given the "logger" context, missing hours might just be NaN. However, to be safe and match typical "daily summary" expectations, we'll leave them as NaN unless the target sample shows 0s for missing data (which it doesn't seem to, it shows full days).
+8.  **Reset Index and Finalize**:
+    *   Reset the index to make `date` a column.
+    *   Ensure the column order matches the target: `date`, `Hour 1`, ..., `Hour 24`.
+    *   Return the DataFrame with the exact target column names.
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame with columns ['date', 'cerc_logger_1']
+    into a target DataFrame with daily hourly averages pivoted into columns
+    'Hour 1' through 'Hour 24'.
+    """
+    # 1. Parse the date column
+    # Source format: '%m/%d/%Y %H:%M'
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract date and hour
+    # Target date format: '%m/%d/%Y'
+    df['date_str'] = df['datetime'].dt.strftime('%m/%d/%Y')
+    
+    # Extract hour (0-23) and convert to 1-24 for target column naming
+    # Hour 1 corresponds to 00:xx, Hour 24 corresponds to 23:xx
+    df['hour_idx'] = df['datetime'].dt.hour + 1
+    
+    # 3. Aggregate
+    # Group by date and hour, calculate the mean of cerc_logger_1
+    # Using mean as a standard aggregation for sensor readings within an hour
+    grouped = df.groupby(['date_str', 'hour_idx'])['cerc_logger_1'].mean().reset_index()
+    
+    # 4. Pivot
+    # Pivot the table so that each hour becomes a column
+    pivot_df = grouped.pivot(index='date_str', columns='hour_idx', values='cerc_logger_1')
+    
+    # 5. Rename columns
+    # The columns are currently integers 1-24. Rename them to "Hour 1", "Hour 2", etc.
+    pivot_df.columns = [f"Hour {int(col)}" for col in pivot_df.columns]
+    
+    # 6. Reset index to make 'date' a column
+    pivot_df = pivot_df.reset_index()
+    pivot_df.rename(columns={'date_str': 'date'}, inplace=True)
+    
+    # 7. Ensure all 24 hours are present, filling missing ones with NaN (or 0 if preferred, but NaN is standard for missing)
+    # Define the expected columns
+    target_columns = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    
+    # Reindex columns to ensure order and presence of all hours
+    # If a day is missing an hour, it will be NaN.
+    pivot_df = pivot_df.reindex(columns=target_columns)
+    
+    # 8. Return the final DataFrame
+    return pivot_df[target_columns]
+```

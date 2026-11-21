@@ -1,0 +1,91 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a date column `CST` (format: `%a %m/%d/%Y`) and 24 hourly columns named `1:00` through `24:00:00`.
+    *   **Target**: Contains a date column `Date` (format: `%m/%d/%Y`) and 24 hourly columns named `Hr 1` through `Hr 24`.
+    *   **Row Count Change**: The source has 1339 rows, and the target has 1340 rows. This suggests that the transformation might involve sorting or re-indexing, but more likely, it implies that the data is simply being reformatted. However, looking at the sample data, the source rows are not necessarily sorted by date (e.g., `Sat 12/01/2012` appears before `Thu 07/28/2016` in the sample snippet, but the target sample shows `04/01/2009` first). The target sample is sorted chronologically. The row count difference (1339 vs 1340) is suspicious. Let's look closer. Actually, in many TbT tasks, if the row count changes slightly, it might be due to a header row being treated as data or vice versa, or a specific aggregation. However, looking at the columns, it's a 1-to-1 mapping of rows. The difference of 1 row might be an artifact of the specific sample provided in the prompt description vs the actual file content, or perhaps one row is dropped/added. But wait, the prompt says "Source sample rows: 1339" and "Target rows: 1340". Let's look at the data. The source has `CST` and 24 hour columns. The target has `Date` and 24 hour columns. It is a direct column rename and date format change. Why the row count difference?
+    *   *Hypothesis*: The source data might contain a header row that was parsed as data, or the target includes an index row? No, pandas DataFrames don't include index in row count usually.
+    *   *Alternative Hypothesis*: The source data might have duplicate dates that are aggregated? No, the values in the target sample (e.g., `1.02` for Hr 1 on `04/01/2009`) look like specific values, not averages of multiple rows.
+    *   *Re-evaluating the row count*: In many benchmark datasets, the "sample rows" count in the description might refer to the number of *data* rows in the CSV file excluding the header, while the target might include a header or vice versa? Or perhaps the source has a trailing empty row?
+    *   *Crucial Observation*: The transformation is fundamentally a **column rename** and **date formatting**. The row count discrepancy is likely due to the specific test file having one more row than the training sample, or a minor data cleaning step (like dropping NaNs). However, since the mapping is 1-to-1 for the columns, I will assume a direct transformation. If the row count increases, it's possible the source has a header row that looks like data? Unlikely given the float values.
+    *   *Let's check the date parsing*: Source `CST` is `Sat 12/01/2012`. Target `Date` is `04/01/2009`. The format changes from `%a %m/%d/%Y` to `%m/%d/%Y`.
+    *   *Let's check the column names*: Source `1:00` -> Target `Hr 1`. Source `24:00:00` -> Target `Hr 24`.
+
+2.  **Transformation Steps**:
+    *   **Step 1: Parse and Format Date**:
+        *   Extract the date part from the `CST` column. The format is `%a %m/%d/%Y`. We can use `pd.to_datetime` or string manipulation. Since we need `%m/%d/%Y`, we can parse the string.
+        *   `source['CST'].str.split(' ').str[1:]` might help, or just `pd.to_datetime(source['CST'], format='%a %m/%d/%Y')` and then `.dt.strftime('%m/%d/%Y')`.
+    *   **Step 2: Rename Columns**:
+        *   Create a mapping dictionary for the 24 hour columns.
+        *   `1:00` -> `Hr 1`
+        *   `2:00` -> `Hr 2`
+        *   ...
+        *   `24:00:00` -> `Hr 24`
+        *   Note: The source column `24:00:00` is distinct from `1:00` etc.
+    *   **Step 3: Construct Target DataFrame**:
+        *   Create a new DataFrame with the renamed columns.
+        *   Ensure the column order matches the target: `Date`, `Hr 1`, ..., `Hr 24`.
+    *   **Step 4: Handle Row Count/Sorting**:
+        *   The target sample is sorted by Date. The source sample is not strictly sorted (Dec 2012, then July 2016). It is good practice to sort by Date to match the target structure, although the prompt doesn't explicitly demand sorting, the target sample is sorted.
+        *   Regarding the row count (1339 vs 1340): If the source has 1339 rows and target has 1340, and it's a 1-to-1 mapping, this is contradictory unless one row is generated or one is dropped. However, in TbT tasks, usually the transformation is deterministic. If I simply rename and format, I get 1339 rows. If the target has 1340, maybe the source file actually has 1340 rows and the description "1339 rows" is a typo or refers to non-empty rows? Or maybe the target includes a header? No, `df` doesn't include header.
+        *   Let's look at the source schema again. `24:00:00` is the last column.
+        *   Let's assume the standard transformation: Rename columns, format date. If the row count differs in the *description* but the logic is 1-to-1, the code should just perform the 1-to-1 mapping. The "1340" might be the total rows in the test file including a header or footer, or the description is slightly off. I will proceed with the 1-to-1 mapping as it's the only logical transformation for this schema.
+
+3.  **Refining the Column Mapping**:
+    *   Source columns: `['1:00', '2:00', ..., '23:00', '24:00:00']`
+    *   Target columns: `['Hr 1', 'Hr 2', ..., 'Hr 23', 'Hr 24']`
+    *   I need to generate this mapping programmatically or explicitly. Explicit is safer for 24 columns.
+
+4.  **Implementation Details**:
+    *   Use `df.rename()` for columns.
+    *   Use `pd.to_datetime()` and `.dt.strftime()` for the date.
+    *   Select and reorder columns to match target exactly.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame by:
+    1. Parsing the 'CST' date column and formatting it to 'MM/DD/YYYY'.
+    2. Renaming the hourly columns from 'H:MM' format to 'Hr H' format.
+    3. Reordering columns to match the target schema.
+    """
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Process the Date column
+    # Source format: '%a %m/%d/%Y' (e.g., 'Sat 12/01/2012')
+    # Target format: '%m/%d/%Y' (e.g., '12/01/2012')
+    # We parse the datetime and then format it back to string
+    df['Date'] = pd.to_datetime(df['CST'], format='%a %m/%d/%Y').dt.strftime('%m/%d/%Y')
+    
+    # 2. Define the column mapping for the 24 hours
+    # Source columns: '1:00', '2:00', ..., '23:00', '24:00:00'
+    # Target columns: 'Hr 1', 'Hr 2', ..., 'Hr 23', 'Hr 24'
+    
+    col_mapping = {}
+    for i in range(1, 24):
+        col_mapping[f'{i}:00'] = f'Hr {i}'
+    col_mapping['24:00:00'] = 'Hr 24'
+    
+    # Apply the rename
+    df = df.rename(columns=col_mapping)
+    
+    # 3. Define the target column order
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # 4. Select and reorder columns
+    # Ensure we only select the columns that exist and are in the target order
+    df = df[target_columns]
+    
+    # Optional: Sort by Date if the target is expected to be sorted chronologically
+    # The target sample is sorted. The source sample is not.
+    # To be safe and match the target sample structure, we sort by Date.
+    # However, sorting might change the row order. If the row count is strictly 1-to-1,
+    # sorting is a valid transformation step if the target is sorted.
+    # Given the target sample is sorted, we will sort.
+    df = df.sort_values(by='Date').reset_index(drop=True)
+    
+    return df[target_columns]
+```

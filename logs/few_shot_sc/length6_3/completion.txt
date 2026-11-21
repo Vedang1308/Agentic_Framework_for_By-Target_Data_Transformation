@@ -1,0 +1,77 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source has columns: `class`, `Description`, `analysis`, `date`, `value1`...`value24`, `uom`.
+    *   Target has columns: `Date`, `Hr 1`...`Hr 24`.
+    *   The source contains multiple rows per date? Looking at the sample, the source has dates like '7/3/2011', '7/4/2011', etc. The target has dates starting from '2011-01-01'. The source sample provided only shows a few rows at the end of the year (July and December), but the target shows the beginning of the year. This suggests the source DataFrame likely contains all days of the year, but the sample provided is just a slice.
+    *   The row count increases from 182 to 183. This is a significant hint. 182 rows in source vs 183 in target. Let's look at the dates. The target dates are continuous daily records. The source dates are also daily records. If the source has 182 rows and target has 183, it implies one date might be missing in the source sample or there's an aggregation. However, looking at the values, they seem to be direct mappings. Wait, let's look closer. The source sample has `value1` to `value24`. The target has `Hr 1` to `Hr 24`. This is a 1-to-1 column mapping for the hourly values.
+    *   Why the row count difference? 182 vs 183. A non-leap year has 365 days. Half of that is ~182.5. Maybe the data is for half a year? Or maybe one day is added? Or maybe the source has a header row counted differently? No, pandas DataFrames don't include headers in row count.
+    *   Let's check the dates in the target sample: `2011-01-01` to `2011-07-02`. That's roughly 7 months. 31+28+31+30+31+30+2 = 183 days. Ah! The target sample shows 183 rows corresponding to Jan 1 to July 2, 2011.
+    *   The source sample shows rows for July and December 2011. This implies the source DataFrame contains the *entire* year or a large chunk, but the sample rows displayed are just from the tail.
+    *   Crucially, the transformation is likely just renaming columns and formatting the date. The row count change in the *sample description* (182 vs 183) might refer to the specific test file vs training file, or perhaps the training file had 182 rows and the target has 183 because of a specific date range.
+    *   However, the instruction says "Do NOT hardcode target rows". The function must generalize.
+    *   The primary transformation is:
+        1.  Parse the `date` column from `%m/%d/%Y` to a datetime object.
+        2.  Format the datetime as `%Y-%m-%d %H:%M:%S` (specifically midnight `00:00:00`) for the `Date` column.
+        3.  Rename `value1` to `Hr 1`, `value2` to `Hr 2`, ..., `value24` to `Hr 24`.
+        4.  Select only the `Date` and `Hr 1`...`Hr 24` columns.
+        5.  Sort by `Date`? The target sample is sorted by date. It is good practice to sort by date to ensure deterministic output, especially if the source order is arbitrary.
+
+2.  **Date Formatting**:
+    *   Source `date`: '7/3/2011' -> `pd.to_datetime` -> `2011-07-03`.
+    *   Target `Date`: '2011-01-01 00:00:00'.
+    *   Operation: `df['Date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')`.
+
+3.  **Column Renaming**:
+    *   Source: `value1`, `value2`, ..., `value24`.
+    *   Target: `Hr 1`, `Hr 2`, ..., `Hr 24`.
+    *   Create a mapping dictionary: `{f'value{i}': f'Hr {i}' for i in range(1, 25)}`.
+    *   Apply `df.rename(columns=rename_dict)`.
+
+4.  **Column Selection**:
+    *   Target columns: `['Date', 'Hr 1', ..., 'Hr 24']`.
+    *   Construct this list programmatically.
+    *   Return `df[target_columns]`.
+
+5.  **Handling Row Count/Ordering**:
+    *   The target sample is sorted chronologically. The source sample provided is not strictly sorted (July then December). To match the target schema and typical time-series expectations, we should sort the final DataFrame by the `Date` column.
+    *   `df = df.sort_values('Date').reset_index(drop=True)`.
+
+6.  **Verification**:
+    *   Does the logic hold for any input? Yes, as long as the source has the expected columns.
+    *   Are there any aggregations? The values in the target sample for `2011-07-02` (Hr 1 = 0.8341) match the source sample for `7/2/2011` (value1 = 0.8341). This confirms it's a direct row-wise transformation, not an aggregation. The row count difference in the prompt description (182 vs 183) is likely due to the specific subset of data in the training vs target files (e.g., training might be missing one day or covering a different range), but the transformation logic remains a 1-to-1 row mapping.
+
+7.  **Final Code Structure**:
+    *   Copy source.
+    *   Create `Date` column.
+    *   Rename value columns.
+    *   Sort by `Date`.
+    *   Select and return target columns.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the source date column and format it to the target format
+    # Source format: '%m/%d/%Y' (e.g., '7/3/2011')
+    # Target format: '%Y-%m-%d %H:%M:%S' (e.g., '2011-01-01 00:00:00')
+    df['Date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Rename value columns to Hr columns
+    # value1 -> Hr 1, value2 -> Hr 2, ..., value24 -> Hr 24
+    rename_dict = {f'value{i}': f'Hr {i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    
+    # 3. Define the target columns in the correct order
+    target_columns = ['Date'] + [f'Hr {i}' for i in range(1, 25)]
+    
+    # 4. Select only the required columns
+    df = df[target_columns]
+    
+    # 5. Sort by Date to ensure chronological order, matching the target sample style
+    df = df.sort_values('Date').reset_index(drop=True)
+    
+    return df[target_columns]
+```

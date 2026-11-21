@@ -1,0 +1,129 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a `Date` column (string format 'M/D/YYYY'), a `Class` column, and 24 numeric columns named '1' through '24' representing hourly data.
+    *   **Target**: Contains an `hour` column (integer 1-24) and 12 columns named after months ('january' through 'december'). The row count drops from ~182 to 24, indicating a pivot/aggregation operation where each row in the target corresponds to a specific hour of the day, and the values are aggregated by month.
+
+2.  **Determine Transformation Logic**:
+    *   The source data is in a "wide" format where each row is a day and columns are hours.
+    *   The target data is also "wide" but transposed in a sense: rows are hours, and columns are months.
+    *   To achieve this, we first need to extract the `month` from the `Date` column.
+    *   We need to reshape the data so that we can aggregate values by `hour` and `month`.
+    *   A good approach is to `melt` the source DataFrame to convert the 24 hour columns into two columns: `hour` (variable) and `value` (value).
+    *   After melting, we will have columns: `Date`, `Class`, `hour`, `value`.
+    *   Parse `Date` to datetime to extract the `month` number (1-12).
+    *   Map the month number to the lowercase month name (e.g., 1 -> 'january').
+    *   Group by `hour` and `month_name` and calculate the mean (or sum, but given the sample values look like averages of daily profiles, mean is the standard aggregation for such load profiles). Looking at the sample:
+        *   Source has July 2013 data. Target has 'july' column.
+        *   Let's check a value. Source July 3, Hour 1 is 0.56. July 4, Hour 1 is 0.81. July 5, Hour 1 is 0.91. July 6, Hour 1 is 0.97.
+        *   Target 'july' for hour 1 is 0.68.
+        *   Average of (0.56, 0.81, 0.91, 0.97) = 3.25 / 4 = 0.8125. This doesn't match 0.68.
+        *   Let's check other months. The source sample only shows July and December 2013. The target has values for Jan, Feb, Mar, Apr, May, Jun, Jul. This implies the full source dataset (182 rows) contains data for multiple months.
+        *   Let's re-examine the aggregation. Is it mean?
+        *   Let's look at Hour 10 in Target for July: 0.88.
+        *   Source July 3, Hour 10: 0.81. July 4: 1.17. July 5: 1.22. July 6: 1.30.
+        *   Mean: (0.81+1.17+1.22+1.30)/4 = 4.5/4 = 1.125. Not 0.88.
+        *   Maybe the source sample provided is just a snippet and the 182 rows cover a full year? 182 days is roughly half a year.
+        *   Let's look at the target values again. They are quite low.
+        *   Wait, look at the target sample again.
+            *   Hour 1, January: 1.03
+            *   Hour 1, July: 0.68
+        *   Let's look at the source sample for December.
+            *   Dec 28, Hour 1: 0.86
+            *   Dec 29, Hour 1: 0.79
+            *   Dec 30, Hour 1: 0.73
+            *   Dec 31, Hour 1: 0.94
+            *   Mean: (0.86+0.79+0.73+0.94)/4 = 3.32/4 = 0.83.
+            *   Target December column is all NaN in the sample. This suggests the sample target might not have December data or it's filtered.
+        *   Let's reconsider the aggregation. Is it possible the values are normalized or scaled? Or is it a specific subset of days?
+        *   Actually, usually in these TbT tasks, if the row count changes significantly and we are pivoting, it's a `groupby` + `mean` or `sum`. Given these are likely load factors or percentages (values around 1.0), `mean` is the most statistically sound aggregation for "average profile". The discrepancy in my manual calculation might be due to the source sample being incomplete (only showing 4 days of July, but the full dataset has more days in July, or the 182 rows include other months that affect the average if not filtered correctly).
+        *   However, looking at the target, `august` through `december` are NaN. This implies that for the specific test case or the general transformation, if there is no data for a month, it should be NaN.
+        *   Let's assume the standard operation: Melt -> Extract Month -> GroupBy Hour and Month -> Mean -> Pivot.
+
+3.  **Refining the Steps**:
+    *   **Step 1**: Copy source.
+    *   **Step 2**: Melt the DataFrame. `id_vars=['Date', 'Class']`, `value_vars=[str(i) for i in range(1, 25)]`, `var_name='hour'`, `value_name='value'`.
+    *   **Step 3**: Convert `hour` to integer.
+    *   **Step 4**: Parse `Date` to datetime. Extract `month` number.
+    *   **Step 5**: Map month number to lowercase month name using `calendar.month_name` or a dictionary.
+    *   **Step 6**: Group by `hour` and `month_name`. Calculate the mean of `value`.
+    *   **Step 7**: Pivot the result so `hour` is the index, `month_name` are columns, and values are the aggregated means.
+    *   **Step 8**: Reset index to make `hour` a column.
+    *   **Step 9**: Ensure column order matches target: `['hour', 'january', ..., 'december']`.
+    *   **Step 10**: Handle missing months (NaNs are naturally produced by pivot if data is missing).
+
+4.  **Verification with Sample Data**:
+    *   If I melt the provided 8 rows:
+        *   July rows: 4 days.
+        *   December rows: 4 days.
+    *   If I group by hour and month:
+        *   July Hour 1: Mean of [0.56, 0.81, 0.91, 0.97] = 0.8125.
+        *   Target July Hour 1: 0.68.
+    *   There is a mismatch. Why?
+    *   Maybe the aggregation is not mean?
+    *   Maybe the source data in the *full* 182 rows is different? The prompt says "Source sample rows: 182 rows". The table shown is just a sample. The target is derived from the *full* source.
+    *   Is it possible the values are summed? No, they are small.
+    *   Is it possible the target is *not* an average of all days, but a specific profile?
+    *   Let's look at the target values for January: 1.03, 1.29, 1.26...
+    *   Let's look at the target values for July: 0.68, 0.88, 0.89...
+    *   The July values in the target are *lower* than the July values in the source sample.
+    *   The January values in the target are *higher* than the December values in the source sample (Dec is usually similar to Jan in load profiles, but Dec sample is ~0.8-0.9, Jan target is ~1.0-1.2).
+    *   This suggests the source sample provided (July/Dec 2013) is just a tiny slice of the 182 rows. The 182 rows likely cover a full year or significant portions of it. The transformation logic must be general: **Aggregate by Hour and Month**. The specific numbers in the target are the result of aggregating the *entire* source dataset, not just the sample rows shown. Therefore, the logic `groupby(['hour', 'month']).mean()` is the correct generalizable transformation. The discrepancy is due to the sample rows not representing the full dataset used to generate the target.
+
+5.  **Final Code Structure**:
+    *   Melt.
+    *   Parse Date -> Month Name.
+    *   GroupBy Hour, Month Name -> Mean.
+    *   Pivot.
+    *   Select/Order Columns.
+
+```python
+import pandas as pd
+import calendar
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Melt the dataframe to convert hour columns into rows
+    # Columns '1' through '24' become 'hour' variable
+    hour_cols = [str(i) for i in range(1, 25)]
+    df_melted = df.melt(
+        id_vars=['Date', 'Class'],
+        value_vars=hour_cols,
+        var_name='hour',
+        value_name='value'
+    )
+    
+    # 2. Convert 'hour' to integer
+    df_melted['hour'] = df_melted['hour'].astype(int)
+    
+    # 3. Parse 'Date' and extract month name
+    df_melted['date_dt'] = pd.to_datetime(df_melted['Date'])
+    df_melted['month_num'] = df_melted['date_dt'].dt.month
+    # Map month number to lowercase month name
+    month_map = {i: calendar.month_name[i].lower() for i in range(1, 13)}
+    df_melted['month_name'] = df_melted['month_num'].map(month_map)
+    
+    # 4. Aggregate by hour and month
+    # Calculate the mean value for each hour in each month
+    df_agg = df_melted.groupby(['hour', 'month_name'])['value'].mean().reset_index()
+    
+    # 5. Pivot to get months as columns
+    df_pivot = df_agg.pivot(index='hour', columns='month_name', values='value').reset_index()
+    
+    # 6. Define target columns
+    target_columns = ['hour'] + [calendar.month_name[i].lower() for i in range(1, 13)]
+    
+    # 7. Ensure all target columns exist (fill missing with NaN if necessary)
+    for col in target_columns:
+        if col not in df_pivot.columns:
+            df_pivot[col] = float('nan')
+            
+    # 8. Select and order columns verbatim
+    result = df_pivot[target_columns]
+    
+    # 9. Ensure 'hour' is integer type
+    result['hour'] = result['hour'].astype(int)
+    
+    return result
+```

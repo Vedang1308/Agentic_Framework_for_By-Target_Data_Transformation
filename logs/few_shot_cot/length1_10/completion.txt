@@ -1,0 +1,155 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   Source: `date` (string, format '%m/%d/%Y %H:%M'), `zone_016_cooling_sp` (float).
+    *   Target: `cst` (string, format '%a %m/%d/%Y'), and 24 hourly columns `1:00` through `24:00`.
+    *   Observation: The source has high-frequency data (5-minute intervals implied by samples like 21:45, 21:50). The target has daily aggregates per hour. The row count drops significantly (15117 -> 53), indicating aggregation.
+
+2.  **Parse Datetime**:
+    *   Convert the `date` column to pandas datetime objects using `pd.to_datetime`.
+
+3.  **Extract Date and Hour Components**:
+    *   Extract the date part (year, month, day) to group by day.
+    *   Extract the hour part (0-23) to determine which hourly bucket the data belongs to.
+    *   Note: The target columns are `1:00` to `24:00`. Standard pandas hours are 0-23.
+        *   Hour 0 (00:00-00:59) usually maps to `24:00` in some conventions or `1:00` in others? Let's look at the target sample. The target sample shows constant values `876` for all hours. This is suspicious. Let's look closer at the source sample.
+        *   Source sample: `11/6/2018 21:45` -> value 73.
+        *   Target sample: `Sun 09/30/2018` -> value 876.
+        *   Wait, the values in the target sample (876) do not match the source sample values (73). This suggests the target sample provided in the prompt might be from a different dataset or a placeholder, OR there is a specific aggregation logic.
+        *   However, usually in these TbT tasks, if the values don't match the sample directly, we look for standard aggregations. Common aggregations for time-series to hourly are `mean`, `sum`, `count`, `max`, `min`.
+        *   Let's re-read the prompt carefully. "Source sample rows: 15117... Target rows: 53".
+        *   If we group by Date and Hour, we get one row per hour per day.
+        *   How to map pandas hour (0-23) to target columns (1:00-24:00)?
+            *   Convention A: Hour 1:00 corresponds to 01:00-01:59 (pandas hour 1). Hour 24:00 corresponds to 00:00-03:59? No, usually 24:00 is midnight end of day.
+            *   Convention B: Hour 1:00 is 00:00-00:59?
+            *   Let's look at Example 1 and 2. Example 1 maps `PCT_HOURLY_0100` to `1:00`. Example 2 maps `1:00` to `pct_hourly_0100`.
+            *   In energy/load data, "Hour 1" often means the first hour of the day (00:00-00:59) or the hour starting at 1:00 AM.
+            *   Let's assume standard mapping:
+                *   Target `1:00` <- Source Hour 1 (01:00-01:59)
+                *   ...
+                *   Target `23:00` <- Source Hour 23 (23:00-23:59)
+                *   Target `24:00` <- Source Hour 0 (00:00-00:59) ?? Or is it a 24-hour clock where 24:00 is midnight?
+            *   Actually, a common convention in some datasets (like UCI or specific energy datasets) is:
+                *   1:00 = 00:00-00:59
+                *   2:00 = 01:00-01:59
+                *   ...
+                *   24:00 = 23:00-23:59
+            *   Let's check the source sample again. `11/6/2018 21:45`. This is hour 21. If the convention is 1:00=00:00, then 21:45 falls into bucket `22:00` (21:00-21:59 is bucket 22? No, 00:00 is bucket 1. 01:00 is bucket 2. So 21:00 is bucket 22).
+            *   Alternative convention: 1:00 = 01:00-01:59. Then 21:45 is bucket `22:00`? No, 21:00-21:59 is bucket `22:00`? No, if 1:00 is 01:00, then 21:00 is `22:00`? No, 21:00 is `22:00` only if offset is 1.
+            *   Let's look at the target columns: `1:00` ... `24:00`.
+            *   If I use `df['hour'] = df['dt'].dt.hour`, I get 0-23.
+            *   If I map 0->24, 1->1, 2->2... 23->23.
+            *   Or 0->1, 1->2... 23->24.
+            *   Let's look at the target sample values again. They are all 876. This is likely a "count" or a specific constant if the data is missing? No, 876 is not a standard count for 5-min data (12 per hour). 12 * 24 = 288.
+            *   Wait, the target sample in the prompt might be illustrative or from a different run. I must rely on the schema transformation logic.
+            *   Standard approach for "Hour 1..24" from datetime:
+                *   Group by Date.
+                *   Pivot/Reshape by Hour.
+                *   Map pandas hour `h` to target column.
+                *   Most likely mapping: `1:00` corresponds to hour 1 (01:00-01:59) and `24:00` corresponds to hour 0 (00:00-00:59) OR `1:00` corresponds to hour 0 (00:00-00:59).
+                *   Let's check the distinct values. `zone_016_cooling_sp` has 73 and 84.
+                *   If I aggregate, what function? `mean`? `sum`?
+                *   Given the lack of specific instruction on aggregation type, `mean` is the standard default for continuous variables. However, if the target values in the sample are integers (876), and source are floats (73.0), maybe it's `sum`? Or `count`?
+                *   Let's look at the row counts. 15117 rows. 53 days. 15117 / 53 ≈ 285.2 rows per day. 288 rows per day (24 hours * 60 mins / 5 mins). This confirms 5-minute intervals.
+                *   If we sum 12 values of ~73, we get ~876. (12 * 73 = 876).
+                *   **Aha!** The target sample value `876` is exactly `12 * 73`.
+                *   Therefore, the aggregation is **SUM**.
+                *   And the mapping: If 12 values of 73 sum to 876, and they are all in the same hour bucket, then the bucket contains 12 rows.
+                *   Which hour bucket? The source sample has `21:45`, `21:50`, `21:55`, `22:00`.
+                *   `21:45`, `21:50`, `21:55` are in hour 21. `22:00` is in hour 22.
+                *   If the target column `22:00` contains the sum of hour 21 data, then the mapping is `Target_Hour = Source_Hour + 1`.
+                *   Let's verify:
+                    *   Source Hour 0 (00:00-00:59) -> Target `1:00`
+                    *   Source Hour 1 (01:00-01:59) -> Target `2:00`
+                    *   ...
+                    *   Source Hour 23 (23:00-23:59) -> Target `24:00`
+                *   This is a very common convention in some energy datasets (Hour 1 is the first hour of the day).
+
+4.  **Execution Steps**:
+    *   Parse `date` to datetime.
+    *   Create a column `date_only` (normalized to midnight) for grouping.
+    *   Create a column `hour` from datetime.
+    *   Map `hour` to target column names: `hour + 1`. So 0->'1:00', 1->'2:00', ..., 23->'24:00'.
+    *   Group by `date_only` and the mapped hour column.
+    *   Aggregate `zone_016_cooling_sp` using `sum`.
+    *   Pivot/Unstack so that the hour columns become the wide format.
+    *   Format `date_only` to `'%a %m/%d/%Y'` for the `cst` column.
+    *   Rename columns to match `1:00`, `2:00`, etc.
+    *   Ensure all 24 columns exist (fill NaN with 0 if necessary, though sum of empty group is 0).
+    *   Sort by date? The target sample is not sorted chronologically (Sun 09/30, Fri 10/12, Tue 10/02...). It seems random or sorted by something else. I will just return the dataframe. Usually, sorting by date is safe, but if the target is unordered, I should check. The prompt doesn't specify order. I'll sort by `cst` to be deterministic.
+
+5.  **Refining the Mapping**:
+    *   Source Hour 0 -> '1:00'
+    *   Source Hour 23 -> '24:00'
+    *   Code: `df['target_hour'] = df['dt'].dt.hour + 1`
+    *   Then rename columns after pivot.
+
+6.  **Final Code Structure**:
+    *   `df['dt'] = pd.to_datetime(df['date'])`
+    *   `df['date_key'] = df['dt'].dt.normalize()`
+    *   `df['hour_label'] = df['dt'].dt.hour + 1`
+    *   `df['hour_label_str'] = df['hour_label'].astype(str) + ':00'`
+    *   `grouped = df.groupby(['date_key', 'hour_label_str'])['zone_016_cooling_sp'].sum().reset_index()`
+    *   `pivot = grouped.pivot(index='date_key', columns='hour_label_str', values='zone_016_cooling_sp')`
+    *   `pivot = pivot.fillna(0)`
+    *   `pivot['cst'] = pivot.index.strftime('%a %m/%d/%Y')`
+    *   `pivot = pivot.reset_index(drop=True)`
+    *   `pivot = pivot.rename_axis(None, axis=1)`
+    *   `target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]`
+    *   `return pivot[target_cols]`
+
+Let's double check the aggregation.
+Source: 73.0.
+Target: 876.
+12 * 73 = 876.
+Yes, Sum is correct.
+
+Let's double check the hour mapping.
+If Source Hour 21 (21:00-21:59) maps to Target `22:00`.
+Source Hour 0 (00:00-00:59) maps to Target `1:00`.
+This seems consistent with "Hour 1 is the first hour of the day".
+
+One detail: The target sample has `cst` as the first column.
+The pivot index is `date_key`. I need to move `cst` to the front.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # 1. Parse datetime
+    df['dt'] = pd.to_datetime(df['date'])
+    
+    # 2. Extract date key for grouping and hour for bucketing
+    # Normalize to midnight for grouping by day
+    df['date_key'] = df['dt'].dt.normalize()
+    
+    # Map pandas hour (0-23) to target hour labels (1-24)
+    # Hour 0 (00:00-00:59) -> '1:00'
+    # Hour 23 (23:00-23:59) -> '24:00'
+    df['hour_label'] = df['dt'].dt.hour + 1
+    df['hour_col'] = df['hour_label'].astype(str) + ':00'
+    
+    # 3. Aggregate
+    # Based on sample analysis: 12 rows of 73 sum to 876. Aggregation is SUM.
+    agg_df = df.groupby(['date_key', 'hour_col'])['zone_016_cooling_sp'].sum().reset_index()
+    
+    # 4. Pivot to wide format
+    pivot_df = agg_df.pivot(index='date_key', columns='hour_col', values='zone_016_cooling_sp')
+    
+    # 5. Handle missing hours (fill with 0)
+    pivot_df = pivot_df.fillna(0)
+    
+    # 6. Format date column 'cst'
+    pivot_df['cst'] = pivot_df.index.strftime('%a %m/%d/%Y')
+    
+    # 7. Reset index and clean up
+    pivot_df = pivot_df.reset_index(drop=True)
+    pivot_df = pivot_df.rename_axis(None, axis=1)
+    
+    # 8. Define target columns
+    target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    
+    # 9. Select and return
+    return pivot_df[target_cols]
+```

@@ -1,0 +1,89 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Date/Time**: The source column `date` is a string in format `%m/%d/%Y %H:%M`. We need to parse this into a proper `datetime` object to extract hour and month components.
+2.  **Extract Features**:
+    *   Extract the `Hour` from the datetime (0-23).
+    *   Extract the `Month` from the datetime (1-12).
+    *   Map the numeric month to its corresponding name (e.g., 1 -> 'January', 2 -> 'February', etc.) to match the target column headers.
+3.  **Handle Missing Values**: The source data contains `NaN` values in `zone_016`. We should drop these rows before aggregation to ensure accurate calculations, as including NaNs in mean/sum operations can propagate NaNs or skew results depending on the function used (though `mean` skips NaNs by default, dropping them explicitly is safer for clarity).
+4.  **Pivot/Reshape**: The target table has `Hour` as the index (or first column) and months as columns. This suggests a pivot operation.
+    *   Index: `Hour`
+    *   Columns: Month Name
+    *   Values: `zone_016`
+5.  **Aggregation**: Since there are multiple rows for the same Hour and Month combination (e.g., multiple minutes within an hour), we need to aggregate. Looking at the sample:
+    *   Source: `1/2/2018 0:11` to `0:14` all have `67.9`. Target `Hour` 0, `January` is `67.9`.
+    *   Source: `1/2/2018 0:11` is Jan.
+    *   Let's check if it's a mean, sum, or first/last. The values in the source for a specific hour seem constant or very similar. Usually, in these benchmarks, if the values are identical, `mean`, `sum`, `first`, etc., might look similar. However, looking at `Hour` 20 in the target (`67`), let's look for source data. The sample doesn't show Hour 20 explicitly in the tiny snippet, but typically this implies an average or a representative value. Given the precision (one decimal place), `mean` is the most statistically robust aggregation for time-series data unless specified otherwise. Let's assume `mean`.
+6.  **Construct Target Columns**: The target columns are `['Hour', 'January', 'February', ..., 'December']`.
+7.  **Format Output**:
+    *   After pivoting, the `Hour` will be the index. We need to reset the index to make `Hour` a column.
+    *   Ensure all month columns exist (fill missing ones with NaN if necessary, though `pivot` usually handles this if we specify columns).
+    *   Rename the month columns to match the exact target string names.
+    *   Ensure the `Hour` column is of type `int64`.
+    *   Ensure the month columns are `float64`.
+    *   Sort by `Hour` to match the typical output order (0-23).
+
+### Python Code
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # 1. Parse the date column
+    df = source.copy()
+    df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract Hour and Month
+    df['Hour'] = df['date'].dt.hour
+    df['MonthNum'] = df['date'].dt.month
+    
+    # 3. Map Month Number to Month Name
+    month_names = {
+        1: 'January', 2: 'February', 3: 'March', 4: 'April',
+        5: 'May', 6: 'June', 7: 'July', 8: 'August',
+        9: 'September', 10: 'October', 11: 'November', 12: 'December'
+    }
+    df['MonthName'] = df['MonthNum'].map(month_names)
+    
+    # 4. Drop rows with NaN in the value column to ensure clean aggregation
+    df_clean = df.dropna(subset=['zone_016'])
+    
+    # 5. Pivot the table
+    # Index: Hour, Columns: MonthName, Values: zone_016, Aggfunc: mean
+    pivot_df = df_clean.pivot_table(
+        index='Hour', 
+        columns='MonthName', 
+        values='zone_016', 
+        aggfunc='mean'
+    )
+    
+    # 6. Reset index to make Hour a column
+    pivot_df = pivot_df.reset_index()
+    
+    # 7. Define target columns
+    target_columns = [
+        'Hour', 'January', 'February', 'March', 'April', 'May', 'June', 
+        'July', 'August', 'September', 'October', 'November', 'December'
+    ]
+    
+    # 8. Ensure all target columns exist (fill with NaN if missing months)
+    for col in target_columns[1:]: # Skip 'Hour'
+        if col not in pivot_df.columns:
+            pivot_df[col] = np.nan
+            
+    # 9. Select and order columns
+    result_df = pivot_df[target_columns]
+    
+    # 10. Ensure correct data types
+    result_df['Hour'] = result_df['Hour'].astype('int64')
+    for col in target_columns[1:]:
+        result_df[col] = result_df[col].astype('float64')
+        
+    # 11. Sort by Hour to match expected output order
+    result_df = result_df.sort_values('Hour').reset_index(drop=True)
+    
+    return result_df[target_columns]
+```

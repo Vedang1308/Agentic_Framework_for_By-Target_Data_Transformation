@@ -1,0 +1,46 @@
+### Benchmark Case: length12_4
+- Source sample rows: 258420 rows (Note: test_0.csv may have different row count)
+- Target rows: 96 rows
+- Notice: Row count changes from 258420 to 96. Check if an aggregation, grouping, or pivoting operation is required.
+
+### Exact Target Columns (Must match verbatim):
+['season', 'hour', 'hvac', 'water_heating', 'refrigerator', 'clothes_washer', 'clothes_dryer', 'dishwasher', 'cooking_range', 'pool_spa_pumps', 'interior_lighting', 'exterior_lighting', 'lighting', 'plug', 'pool_spa_heater']
+
+### Source Schema and Types:
+End Use Category (object), End Use (object), Time Period (object), Day Type (object), Hour Ending (int64), Number of Homes in Bin With This End Use Metered (object), Average Demand Per Home With This End Use [kW] (float64)
+
+### Target Schema and Types:
+season (object), hour (int64), hvac (float64), water_heating (float64), refrigerator (float64), clothes_washer (int64), clothes_dryer (int64), dishwasher (float64), cooking_range (int64), pool_spa_pumps (int64), interior_lighting (int64), exterior_lighting (int64), lighting (int64), plug (int64), pool_spa_heater (int64)
+
+### Distinct values for categorical / low-cardinality source columns:
+- End Use Category: ['Kitchen', 'Laundry', 'Miscellaneous', 'Lighting', 'Remaining Load']
+- Day Type: ['Weekend', 'All', 'Weekday']
+
+### Source Table Sample (training_0.csv):
+| End Use Category   | End Use        | Time Period   | Day Type   |   Hour Ending |   Number of Homes in Bin With This End Use Metered |   Average Demand Per Home With This End Use [kW] |
+|:-------------------|:---------------|:--------------|:-----------|--------------:|---------------------------------------------------:|-------------------------------------------------:|
+| Kitchen            | Freezer        | March         | Weekend    |            13 |                                                 11 |                                            0.031 |
+| Kitchen            | Freezer        | March         | Weekend    |            14 |                                                 11 |                                            0.03  |
+| Kitchen            | Freezer        | March         | Weekend    |            15 |                                                 11 |                                            0.032 |
+| Kitchen            | Freezer        | March         | Weekend    |            16 |                                                 11 |                                            0.031 |
+| Remaining Load     | Remaining Load | December      | Weekend    |            21 |                                                120 |                                          nan     |
+| Remaining Load     | Remaining Load | December      | Weekend    |            22 |                                                120 |                                          nan     |
+| Remaining Load     | Remaining Load | December      | Weekend    |            23 |                                                120 |                                          nan     |
+| Remaining Load     | Remaining Load | December      | Weekend    |            24 |                                                120 |                                          nan     |
+
+### Desired Target Table Sample (target.csv):
+| season   |   hour |     hvac |   water_heating |   refrigerator |   clothes_washer |   clothes_dryer |   dishwasher |   cooking_range |   pool_spa_pumps |   interior_lighting |   exterior_lighting |   lighting |   plug |   pool_spa_heater |
+|:---------|-------:|---------:|----------------:|---------------:|-----------------:|----------------:|-------------:|----------------:|-----------------:|--------------------:|--------------------:|-----------:|-------:|------------------:|
+| Spring   |      6 |  2105.76 |         490.711 |        855.961 |                0 |               0 |      21.6453 |               0 |                0 |                   0 |                   0 |          0 |      0 |                 0 |
+| Spring   |      8 |  2434.76 |        1340.86  |        928.994 |                0 |               0 |     102.81   |               0 |                0 |                   0 |                   0 |          0 |      0 |                 0 |
+| Fall     |      4 |  2366.6  |         478.76  |       1590.24  |                0 |               0 |      56.6675 |               0 |                0 |                   0 |                   0 |          0 |      0 |                 0 |
+| Spring   |     11 |  1862.11 |        1218.11  |        939.05  |                0 |               0 |     185.561  |               0 |                0 |                   0 |                   0 |          0 |      0 |                 0 |
+| Fall     |     16 |  3721.03 |        1533.68  |       1820.76  |                0 |               0 |     247.485  |               0 |                0 |                   0 |                   0 |          0 |      0 |                 0 |
+| Summer   |     15 | 11132.5  |        1360.91  |       2186.44  |                0 |               0 |     256.018  |               0 |                0 |                   0 |                   0 |          0 |      0 |                 0 |
+| Summer   |     11 |  5947.62 |        1753.93  |       2064.02  |                0 |               0 |     261.022  |               0 |                0 |                   0 |                   0 |          0 |      0 |                 0 |
+| Spring   |     12 |  1765.85 |        1228.71  |        955.143 |                0 |               0 |     168.767  |               0 |                0 |                   0 |                   0 |          0 |      0 |                 0 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

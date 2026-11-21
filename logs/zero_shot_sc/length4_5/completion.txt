@@ -1,0 +1,211 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains a `date` column (format `m/d/Y`) and 24 columns named `Hour 1` through `Hour 24`. These represent hourly data for each day.
+    *   **Target**: Contains a `date` column (format `YYYY-MM-DD HH:MM:SS`) and 24 columns representing specific times of day (e.g., `1:00 AM`, `12:00 PM`, etc.).
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target might include a date not present in the provided source sample snippet, or there is a slight mismatch in the sample vs. full data description. However, the transformation logic itself is a direct column mapping and renaming. The row count difference in the prompt description ("182 to 183") might be due to the source sample being a subset or a specific artifact of the benchmark generation (e.g., an extra row added for a specific date like Jan 1st if the source started later). But looking at the target sample, it includes `2015-01-01` through `2015-01-04` and then jumps to June/July. The source sample shows July 2015 and Dec 2015. Wait, looking closely at the target sample:
+        *   Target starts with `2015-01-01`.
+        *   Source sample starts with `7/3/2015`.
+        *   This implies the source DataFrame passed to the function will contain all necessary rows. The transformation must be row-wise.
+    *   **Column Mapping**: The core task is renaming the `Hour N` columns to the corresponding time-of-day labels.
+        *   `Hour 1` -> `1:00 AM`
+        *   `Hour 2` -> `2:00 AM`
+        *   ...
+        *   `Hour 12` -> `12:00 PM` (Noon)
+        *   `Hour 13` -> `1:00 PM`
+        *   ...
+        *   `Hour 24` -> `12:00 AM` (Midnight)
+
+2.  **Determine Column Renaming Logic**:
+    *   Hours 1-11 correspond to `1:00 AM` through `11:00 AM`.
+    *   Hour 12 corresponds to `12:00 PM`.
+    *   Hours 13-23 correspond to `1:00 PM` through `11:00 PM`.
+    *   Hour 24 corresponds to `12:00 AM`.
+    *   Let's verify the target column order provided:
+        `['date', '1:00 AM', '2:00 AM', ..., '11:00 AM', '12:00 AM', '1:00 PM', ..., '11:00 PM', '12:00 PM']`
+        Wait, look at the target column list carefully:
+        `..., '11:00 AM', '12:00 AM', '1:00 PM', ...`
+        And at the end: `..., '11:00 PM', '12:00 PM']`
+        
+        Let's map standard 24-hour clock to 12-hour clock:
+        *   Hour 1 (01:00) -> 1:00 AM
+        *   Hour 2 (02:00) -> 2:00 AM
+        *   ...
+        *   Hour 11 (11:00) -> 11:00 AM
+        *   Hour 12 (12:00) -> 12:00 PM (Noon)
+        *   Hour 13 (13:00) -> 1:00 PM
+        *   ...
+        *   Hour 23 (23:00) -> 11:00 PM
+        *   Hour 24 (24:00/00:00 next day) -> 12:00 AM (Midnight)
+
+        However, the target column list provided in the prompt is:
+        `['date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM']`
+
+        Let's check the position of `12:00 AM` and `12:00 PM` in this list.
+        Index 12 (after 11:00 AM) is `12:00 AM`.
+        Index 24 (last) is `12:00 PM`.
+
+        This is unusual. Standard mapping:
+        Hour 12 is Noon (12:00 PM).
+        Hour 24 is Midnight (12:00 AM).
+
+        If the target column at index 12 is `12:00 AM`, does it correspond to Source `Hour 12`?
+        If the target column at index 24 is `12:00 PM`, does it correspond to Source `Hour 24`?
+
+        Let's look at the data values to deduce the mapping.
+        Source `Hour 12` values are `0`.
+        Source `Hour 24` values are `0.000239866`.
+        
+        Target `12:00 AM` column values in sample:
+        Row 1 (2015-01-01): `0`
+        Row 5 (2015-06-29): `0`
+        
+        Target `12:00 PM` column values in sample:
+        Row 1 (2015-01-01): `0.000239866`
+        Row 5 (2015-06-29): `0.000239866`
+
+        Now let's look at Source `Hour 12` and `Hour 24` for the corresponding dates.
+        The source sample provided is limited. Let's look at `7/3/2015` in Source.
+        Source `Hour 12` is `0`.
+        Source `Hour 24` is `0.000239866`.
+
+        If we assume the target rows correspond to the source rows (just renamed), we need to find a target row for `7/3/2015`.
+        The target sample shows `2015-07-01` and `2015-07-02`. It doesn't show `7/3`.
+        
+        However, we can infer from general knowledge of such datasets (likely electricity or traffic) and the column names:
+        Usually, `Hour 1` is 1 AM. `Hour 12` is 12 PM (Noon). `Hour 24` is 12 AM (Midnight).
+        
+        Let's re-read the target column list order again.
+        1. 1:00 AM (Hour 1)
+        ...
+        11. 11:00 AM (Hour 11)
+        12. **12:00 AM** ??
+        13. 1:00 PM (Hour 13)
+        ...
+        24. 11:00 PM (Hour 23)
+        25. **12:00 PM** ??
+
+        This column order in the target schema description seems to have `12:00 AM` placed where `12:00 PM` usually is (after 11 AM) and `12:00 PM` placed at the very end.
+        
+        Let's check the values again.
+        In the target sample row `2015-01-01`:
+        Col `12:00 AM` (index 12) has value `0`.
+        Col `12:00 PM` (last index) has value `0.000239866`.
+        
+        In typical daily patterns, midnight (start/end of day) often has low activity, while noon might have higher activity.
+        
+        Let's look at Source `Hour 12` (Noon) and `Hour 24` (Midnight).
+        In the source sample `7/3/2015`:
+        `Hour 12` is `0`.
+        `Hour 24` is `0.000239866`.
+        
+        If the target `12:00 AM` corresponds to Source `Hour 12`, its value is 0.
+        If the target `12:00 PM` corresponds to Source `Hour 24`, its value is 0.000239866.
+        
+        This mapping (Hour 12 -> "12:00 AM", Hour 24 -> "12:00 PM") is semantically incorrect (Noon is PM, Midnight is AM), BUT it matches the **positional** data if we assume the target column list order is fixed and we just map Source Hour N to Target Column N (skipping date).
+        
+        Let's test the hypothesis: **Map Source `Hour N` to the N-th hour column in the target list.**
+        
+        Target Hour Columns List:
+        1. `1:00 AM`
+        2. `2:00 AM`
+        3. `3:00 AM`
+        4. `4:00 AM`
+        5. `5:00 AM`
+        6. `6:00 AM`
+        7. `7:00 AM`
+        8. `8:00 AM`
+        9. `9:00 AM`
+        10. `10:00 AM`
+        11. `11:00 AM`
+        12. `12:00 AM`  <-- This is the 12th hour column.
+        13. `1:00 PM`
+        14. `2:00 PM`
+        15. `3:00 PM`
+        16. `4:00 PM`
+        17. `5:00 PM`
+        18. `6:00 PM`
+        19. `7:00 PM`
+        20. `8:00 PM`
+        21. `9:00 PM`
+        22. `10:00 PM`
+        23. `11:00 PM`
+        24. `12:00 PM`  <-- This is the 24th hour column.
+
+        So, the transformation is:
+        Rename `Hour 1` -> `1:00 AM`
+        ...
+        Rename `Hour 12` -> `12:00 AM`
+        ...
+        Rename `Hour 24` -> `12:00 PM`
+
+        This seems to be the intended logic based on the specific column names provided in the target schema, even if the AM/PM labels for 12 seem swapped relative to standard clock conventions (or perhaps `Hour 12` in source is actually midnight? No, usually Hour 1 is 1am. If Hour 1 is 1am, Hour 12 is Noon. Noon is 12 PM. The target calls it 12 AM. This is a labeling quirk of the target schema).
+        
+        Regardless of semantic correctness, the task is to match the target schema. The target schema explicitly lists `12:00 AM` in the 12th position and `12:00 PM` in the 24th position. We must map `Hour 12` to `12:00 AM` and `Hour 24` to `12:00 PM` to satisfy the column name requirements.
+
+3.  **Date Formatting**:
+    *   Source `date`: `m/d/Y` (e.g., `7/3/2015`).
+    *   Target `date`: `YYYY-MM-DD HH:MM:SS` (e.g., `2015-01-01 00:00:00`).
+    *   Action: Parse source date to datetime, then format to string `'%Y-%m-%d 00:00:00'`.
+
+4.  **Implementation Steps**:
+    1.  Define the list of target column names.
+    2.  Parse the `date` column.
+    3.  Rename the `Hour N` columns to the corresponding target time labels.
+    4.  Format the `date` column.
+    5.  Select and reorder columns to match the target schema exactly.
+    6.  Return the DataFrame.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # Define the target column names exactly as specified
+    target_columns = [
+        'date', '1:00 AM', '2:00 AM', '3:00 AM', '4:00 AM', '5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', 
+        '10:00 AM', '11:00 AM', '12:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM', '7:00 PM', 
+        '8:00 PM', '9:00 PM', '10:00 PM', '11:00 PM', '12:00 PM'
+    ]
+    
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # Map source hour columns to target time labels
+    # Based on the target column list order:
+    # Hour 1 -> 1:00 AM
+    # ...
+    # Hour 11 -> 11:00 AM
+    # Hour 12 -> 12:00 AM (Note: Target schema puts 12:00 AM here)
+    # Hour 13 -> 1:00 PM
+    # ...
+    # Hour 23 -> 11:00 PM
+    # Hour 24 -> 12:00 PM (Note: Target schema puts 12:00 PM here)
+    
+    rename_map = {}
+    for h in range(1, 25):
+        src_col = f'Hour {h}'
+        if h < 12:
+            tgt_col = f'{h}:00 AM'
+        elif h == 12:
+            tgt_col = '12:00 AM'  # As per target schema position 12
+        elif h < 24:
+            tgt_col = f'{h-12}:00 PM'
+        else: # h == 24
+            tgt_col = '12:00 PM'  # As per target schema position 24
+        rename_map[src_col] = tgt_col
+        
+    df.rename(columns=rename_map, inplace=True)
+    
+    # Parse and format the date column
+    # Source format: m/d/Y (e.g., 7/3/2015)
+    # Target format: YYYY-MM-DD 00:00:00
+    df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y')
+    df['date'] = df['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Select and order columns to match target schema exactly
+    df = df[target_columns]
+    
+    return df
+```

@@ -1,0 +1,113 @@
+### Step-by-Step Reasoning Plan:
+
+1.  **Analyze Date Transformation**:
+    *   Source column `CST` contains strings like `'Sat 12/01/2012'` (format: `%a %m/%d/%Y`).
+    *   Target column `date` requires format `%m/%d/%Y` (e.g., `'12/01/2012'`).
+    *   Action: Parse `CST` to datetime using `pd.to_datetime`. Then format the resulting datetime object to string `'MM/DD/YYYY'` and assign to `date`. Note that the day-of-week prefix is ignored in the target.
+
+2.  **Analyze Hourly Column Renaming**:
+    *   Source columns are named `'1:00'`, `'2:00'`, ..., `'23:00'`, and `'24:00:00'`.
+    *   Target columns are named `'Hour 1'`, `'Hour 2'`, ..., `'Hour 23'`, `'Hour 24'`.
+    *   Action: Create a mapping dictionary to rename these columns.
+        *   For hours 1-23: `'H:00'` -> `'Hour H'`.
+        *   For hour 24: `'24:00:00'` -> `'Hour 24'`.
+
+3.  **Analyze Row Count Discrepancy (1339 vs 1340)**:
+    *   The prompt notes the source has 1339 rows and target has 1340 rows.
+    *   Looking at the sample data, the source rows correspond directly to specific dates. The target rows also correspond to specific dates.
+    *   The difference of 1 row might be due to an aggregation (e.g., adding a total row) or simply that the sample provided in the prompt description is truncated or slightly different from the full dataset logic. However, looking at the values:
+        *   Source `Sat 12/01/2012` Hour 1 is `0.9841`.
+        *   Target `04/01/2009` Hour 1 is `1.02`.
+        *   Target `11/27/2012` Hour 1 is `1.057`.
+    *   Let's check if there is a simple 1-to-1 mapping. The source sample shows `Sat 12/01/2012`. The target sample shows `04/01/2009`. These are different dates. This implies the transformation is purely structural (renaming/formatting) and the specific rows in the "Sample" sections are just illustrative of the *schema* and *format*, not necessarily the same data points.
+    *   Wait, let's look closer at the row count note. "Source sample rows: 1339... Target rows: 1340".
+    *   If the transformation is purely row-wise (mapping date and renaming columns), the row count should remain identical unless an aggregation (like a sum row) is added or a pivot/unpivot changes the shape.
+    *   However, in previous examples (like Example 2), extra columns were added, but row counts usually stayed the same unless specified.
+    *   Let's re-read the prompt's "Benchmark Case" note carefully. It says "Check if an aggregation, grouping, or pivoting operation is required."
+    *   Is it possible the target includes a "Total" or "Average" row? Or is it possible the source has duplicates that are aggregated?
+    *   Let's look at the source schema again. It has `CST` and hourly columns. It's a standard load profile table.
+    *   Let's look at the target schema. `date` and hourly columns.
+    *   If I simply rename and format, I get 1339 rows. The target has 1340.
+    *   Common pattern in energy data: Adding a "25th hour" or a "Total" column? No, the target columns are strictly Hour 1-24.
+    *   Could it be that one date is split? Or two dates are merged?
+    *   Let's look at the source sample dates: `12/01/2012` to `12/04/2012` then jump to `07/28/2016`.
+    *   Let's look at target sample dates: `04/01/2009` to `04/04/2009` then jump to `11/27/2012`.
+    *   The data is completely different between source sample and target sample. This confirms we cannot match rows by value. We must rely on schema transformation.
+    *   Why the row count increase?
+        *   Hypothesis 1: An extra row is appended (e.g., a summary row). But the target sample doesn't show a summary row (all look like daily profiles).
+        *   Hypothesis 2: The source has a missing day that is interpolated? Unlikely for a simple "synthesize" task without explicit instructions.
+        *   Hypothesis 3: The "1339 vs 1340" note might be a distractor or refers to a specific quirk in the *full* test set not visible here, OR it implies that the source `CST` might have duplicates for the same date (e.g., two entries for the same day) which need to be averaged?
+        *   Let's check the source schema for uniqueness. `CST` seems to be the identifier. If there are multiple rows for the same `CST` (same date), we might need to aggregate them.
+        *   If we group by `CST` (date) and take the mean of the hourly columns, we might reduce row count. But we need to *increase* row count.
+        *   Let's reconsider the standard operations. Usually, these TbT tasks are 1-to-1 mappings. If the row count changes, it's often due to `melt`/`pivot` or `groupby`.
+        *   However, the target structure is identical to the source structure (wide format, 24 hours).
+        *   Let's look at Example 2 again. Source 24 hours, Target 25 hours (added a zero column). Row count stayed same.
+        *   Let's look at the possibility of a "Total" row being added at the end. If I sum all rows, I get one extra row. Does the target sample contain a sum row? The last row shown is `11/30/2012`. The values are reasonable daily loads, not sums of 1300 rows.
+        *   Let's look at the possibility that the source contains a "header" or "metadata" row that is dropped? No, row count increases.
+        *   Let's assume the standard 1-to-1 transformation is correct and the row count discrepancy in the prompt description might be due to the specific test file having one extra row (e.g., a blank row or a specific boundary condition) or it's a slight error in the problem description's "notice". Given the strict instruction "The function must compute its result SOLELY from the source argument" and "Do NOT hardcode", if there is no obvious aggregation logic that produces a *single* additional row of valid data (like a sum), and the target sample doesn't show it, the safest bet is the direct mapping.
+        *   *Correction*: Look at the source column `24:00:00`. In some datasets, the 24th hour is actually the 0th hour of the next day, or vice versa. But here it's just a label.
+        *   Let's look at the row count again. 1339 -> 1340.
+        *   Is it possible that the source has a row with `NaN` date that is dropped, and the target has an extra row? No.
+        *   Let's consider that the prompt might be hinting at an **index reset** or **sorting** that reveals a missing row? No.
+        *   Let's consider that the source data might have **duplicate dates** that are **averaged**, but that would decrease rows.
+        *   What if the source has **split days**? E.g., Morning and Evening? No, columns are 1-24.
+        *   Let's look at the provided examples. Example 1, 2, 3 all preserve row count.
+        *   If I must explain the row count change, and I see no data to support an aggregation that *increases* rows (like exploding), I will proceed with the direct mapping. It is highly probable that the "1339 vs 1340" is either a typo in the prompt's metadata or refers to a specific test case quirk (e.g., one extra row of zeros added at the end in the target generation script, which we can't know).
+        *   *Wait*, look at the target sample values vs source sample values. They are completely different dates. This means the "Source Sample" and "Target Sample" are from *different* files or subsets. The task is to define the *schema* transformation.
+        *   I will implement the direct schema transformation: Parse Date, Rename Columns. This is the only deterministic operation supported by the schema definitions.
+
+4.  **Implementation Steps**:
+    *   Copy source DataFrame.
+    *   Parse `CST` to datetime.
+    *   Create `date` column formatted as `%m/%d/%Y`.
+    *   Rename columns `1:00`..`23:00` to `Hour 1`..`Hour 23`.
+    *   Rename column `24:00:00` to `Hour 24`.
+    *   Select columns `['date', 'Hour 1', ..., 'Hour 24']`.
+    *   Return the DataFrame.
+
+5.  **Refinement on Column Names**:
+    *   Source: `1:00`, `2:00`, ..., `24:00:00`.
+    *   Target: `Hour 1`, `Hour 2`, ..., `Hour 24`.
+    *   Mapping:
+        ```python
+        rename_map = {}
+        for i in range(1, 24):
+            rename_map[f'{i}:00'] = f'Hour {i}'
+        rename_map['24:00:00'] = 'Hour 24'
+        ```
+
+6.  **Final Check**:
+    *   Does the code handle the specific `24:00:00` format? Yes.
+    *   Does it format the date correctly? Yes.
+    *   Does it return the exact target columns? Yes.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the CST column to datetime
+    # Format in source: '%a %m/%d/%Y' (e.g., 'Sat 12/01/2012')
+    df['datetime'] = pd.to_datetime(df['CST'])
+    
+    # 2. Create the 'date' column with format '%m/%d/%Y'
+    df['date'] = df['datetime'].dt.strftime('%m/%d/%Y')
+    
+    # 3. Rename hourly columns
+    # Source: '1:00', ..., '23:00', '24:00:00'
+    # Target: 'Hour 1', ..., 'Hour 23', 'Hour 24'
+    rename_dict = {}
+    for i in range(1, 24):
+        rename_dict[f'{i}:00'] = f'Hour {i}'
+    rename_dict['24:00:00'] = 'Hour 24'
+    
+    df = df.rename(columns=rename_dict)
+    
+    # 4. Define target columns verbatim
+    target_columns = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    
+    # 5. Select and return
+    return df[target_columns]
+```

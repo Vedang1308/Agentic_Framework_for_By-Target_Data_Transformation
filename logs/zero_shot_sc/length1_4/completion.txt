@@ -1,0 +1,128 @@
+### Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `Date` (string, '%m/%d/%Y'), `Class` (string), and 24 numeric columns named `'1'` through `'24'`.
+    *   **Target**: Contains `cst` (string, '%a %m/%d/%Y') and 24 numeric columns named `'1:00'` through `'24:00'`.
+    *   **Row Count Change**: Source has 182 rows, Target has 183 rows. This suggests that the transformation might involve generating a row for a date not explicitly present in the source sample but implied by the date range, or simply that the source sample provided is a subset of the full training data. However, looking at the data values, the target values look like averages or specific aggregations. Let's look closer at the values.
+    *   **Value Comparison**:
+        *   Source `7/3/2013` (Wednesday): `1` -> 0.56.
+        *   Target `Wed 01/02/2013`: `1:00` -> 0.84.
+        *   Target `Tue 07/02/2013`: `1:00` -> 0.66. Source `7/3/2013` is Wednesday. The target has `Tue 07/02/2013`.
+        *   Let's check if the target is just a renaming and formatting of the source.
+        *   Source `7/3/2013` is a Wednesday. Target `Wed 01/02/2013` is a Wednesday.
+        *   Source `7/4/2013` is a Thursday. Target `Thu 01/03/2013` is a Thursday.
+        *   Source `12/28/2013` is a Saturday. Target `Sat 06/29/2013` is a Saturday.
+        *   It appears the target table is **not** a direct 1-to-1 mapping of the specific dates in the source sample. The source sample contains dates from July and December 2013. The target sample contains dates from January 2013 and June/July 2013.
+        *   However, in TbT tasks, the "Source Sample" is often just a snippet of the *entire* source file, and the "Target Sample" is a snippet of the *entire* target file. The transformation logic must be general.
+        *   Let's look at the structure. The source has daily load profiles. The target has daily load profiles. The columns `1`-`24` become `1:00`-`24:00`. The `Date` becomes `cst` with a specific format.
+        *   Is there an aggregation? The row count increases from 182 to 183. This is a very small change. It might be that the source data is missing one day in the sample but the target includes it, or vice versa. Or perhaps the "Class" column is dropped.
+        *   Let's assume the primary transformation is:
+            1.  Parse the `Date` column.
+            2.  Format the date as `%a %m/%d/%Y` and rename to `cst`.
+            3.  Rename columns `1`-`24` to `1:00`-`24:00`.
+            4.  Drop the `Class` column.
+            5.  Sort by date? The target seems sorted by date.
+
+2.  **Verify Hypothesis**:
+    *   If I simply rename and format, does the data match?
+    *   Source `7/3/2013` values: `0.56, 0.51, ...`
+    *   Target `Tue 07/02/2013` values: `0.66, 0.61, ...`
+    *   Target `Wed 01/02/2013` values: `0.84, 0.80, ...`
+    *   The values in the target sample do *not* match the values in the source sample for the corresponding days of the week or specific dates. This implies the source sample provided in the prompt is just a *subset* of the actual input data, and the target sample is a *subset* of the actual output data. The task is to define the *schema transformation* and *value mapping* logic, not to hardcode values.
+    *   The key observation is the column mapping: `1` -> `1:00`, `2` -> `2:00`, etc.
+    *   The key observation is the date formatting: `7/3/2013` -> `Wed 07/03/2013` (if it were in the target). The format is `%a %m/%d/%Y`.
+    *   The row count difference (182 vs 183) might be due to a missing date in the source sample snippet or a specific handling of a holiday/weekend, but without more info, the standard assumption is a 1-to-1 row mapping where each source row becomes one target row. If the counts differ slightly in the full dataset, it might be due to filtering (e.g., removing invalid rows) or adding a summary row. However, looking at the target columns, they are identical to the source numeric columns. There is no aggregation across rows visible (like "Average"). The values are still hourly profiles.
+    *   Let's look at the "Notice": "Row count changes from 182 to 183. Check if an aggregation, grouping, or pivoting operation is required."
+    *   If it were pivoting, we would expect fewer rows (e.g., grouped by month). If it were unpivoting, we would expect more rows.
+    *   The increase by 1 is suspicious. Could it be that a specific date is added? Or is it possible that the source has a header row counted? No, pandas handles headers.
+    *   Let's consider if `Class` is used. Source has only `RESIDENT`. Target has no `Class`.
+    *   Let's consider if the extra row is a "Total" or "Average" row? The target sample doesn't show such a row.
+    *   Let's consider if the source data has duplicate dates that are being aggregated? If multiple rows exist for the same date, they might be averaged. But the source sample has unique dates.
+    *   Let's stick to the most robust transformation: Format Date, Rename Columns, Drop Class, Sort. If the row count changes in the real test case, it's likely due to the source data having a specific structure (like a trailing empty row or a specific date insertion) that is handled by standard pandas operations or is a quirk of the specific benchmark dataset generation. However, usually, these benchmarks are 1-to-1 transformations unless explicit grouping keys are present.
+    *   Wait, look at the target dates: `01/01`, `01/02`, `01/03`, `01/04`, then jump to `06/29`, `06/30`, `07/01`, `07/02`.
+    *   The source dates are `07/03`...`12/31`.
+    *   The samples are disjoint. This confirms we cannot match values. We must rely on schema transformation.
+    *   Transformation Steps:
+        1.  Parse `Date` to datetime.
+        2.  Format `Date` to string `'%a %m/%d/%Y'` and rename to `cst`.
+        3.  Create a mapping for columns `1`-`24` to `1:00`-`24:00`.
+        4.  Rename columns.
+        5.  Drop `Class`.
+        6.  Sort by `cst` (optional but good practice if order matters).
+        7.  Return the dataframe with the exact target column order.
+
+3.  **Refining the Date Format**:
+    *   Source: `7/3/2013`
+    *   Target: `Tue 01/01/2013`
+    *   Python `strftime`: `%a` is abbreviated weekday name (e.g., Tue). `%m` is zero-padded month. `%d` is zero-padded day. `%Y` is 4-digit year.
+    *   So, `pd.to_datetime(df['Date']).dt.strftime('%a %m/%d/%Y')`
+
+4.  **Refining Column Names**:
+    *   Source cols: `1, 2, ..., 24` (strings or ints in schema, likely strings in CSV).
+    *   Target cols: `1:00, 2:00, ..., 24:00`.
+    *   Mapping: `{str(i): f'{i}:00' for i in range(1, 25)}`
+
+5.  **Handling the Row Count Anomaly**:
+    *   If the test case has 182 source rows and expects 183 target rows, and we do a 1-to-1 map, we will fail.
+    *   Is it possible that the source data contains a row that needs to be split? Unlikely for hourly data.
+    *   Is it possible that a row needs to be inserted? E.g., if a date is missing in a sequence?
+    *   Or is it possible that the `Class` column has multiple values in the full dataset, and we need to group by date and class? But target has no class. If we group by date, we might aggregate. If we aggregate, we usually get *fewer* rows.
+    *   Let's look at the "Notice" again. "Row count changes from 182 to 183."
+    *   Maybe the source has a header row that was counted? No, pandas `read_csv` handles headers.
+    *   Maybe the target includes a summary row at the end? The sample doesn't show it.
+    *   Maybe the source has a duplicate date that is *not* aggregated but kept, and the target splits them? No.
+    *   Let's consider the possibility that the "Source sample rows: 182" refers to the *sample* provided in the prompt, which is clearly truncated (only 8 rows shown). The actual training file has 182 rows. The target has 183.
+    *   If I assume a simple 1-to-1 transformation, and the benchmark expects 183, I might be missing an "insert" operation.
+    *   However, without knowing *which* date to insert, I cannot hardcode it.
+    *   Alternative theory: The source data might have a specific row that represents a "partial" day or something that gets expanded?
+    *   Let's look at the columns again. `1` to `24`.
+    *   What if the transformation involves `pivot` or `unpivot`? No, the shape is similar (N rows x 24 cols).
+    *   Let's assume the standard 1-to-1 transformation is correct and the row count difference in the benchmark description might be due to a specific edge case in the *full* dataset (e.g., one date has two entries in source that are merged? No, that reduces rows. One date is missing in source but present in target? That implies imputation).
+    *   Imputing a missing date in a sequence is a complex task.
+    *   Let's look at the target dates in the sample: `01/01` to `01/04`, then `06/29` to `07/02`. This is not a continuous sequence.
+    *   Given the constraints and typical TbT tasks, the most likely scenario is a simple schema transformation. The row count discrepancy might be a red herring or related to how the benchmark counts rows (e.g., including/excluding headers in a specific way, or a specific test file variation). I will proceed with the 1-to-1 transformation as it is the only generalizable logic supported by the schema changes.
+
+6.  **Final Code Structure**:
+    *   Import pandas.
+    *   Define `transform`.
+    *   Copy source.
+    *   Parse date.
+    *   Format date.
+    *   Rename columns.
+    *   Select/Reorder columns.
+    *   Return.
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the Date column to datetime objects
+    df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y')
+    
+    # 2. Format the date to the target format '%a %m/%d/%Y' (e.g., 'Tue 01/01/2013')
+    # and rename the column to 'cst'
+    df['cst'] = df['Date'].dt.strftime('%a %m/%d/%Y')
+    
+    # 3. Create a mapping for the numeric columns 1-24 to 1:00-24:00
+    col_mapping = {str(i): f'{i}:00' for i in range(1, 25)}
+    
+    # 4. Rename the columns
+    df = df.rename(columns=col_mapping)
+    
+    # 5. Drop the original 'Date' and 'Class' columns as they are not in the target
+    df = df.drop(columns=['Date', 'Class'])
+    
+    # 6. Define the exact target column order
+    target_columns = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    
+    # 7. Ensure the columns are in the correct order
+    df = df[target_columns]
+    
+    # 8. Optional: Sort by date if necessary, though usually row order is preserved or irrelevant for correctness checks
+    # df = df.sort_values('cst').reset_index(drop=True)
+    
+    return df[target_columns]
+```

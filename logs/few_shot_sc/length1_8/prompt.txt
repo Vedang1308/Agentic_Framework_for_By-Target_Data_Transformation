@@ -1,0 +1,131 @@
+Here are worked examples demonstrating step-by-step reasoning and valid Python code:
+
+### Example 1 (Case length1_1)
+Source Schema: Strata_ID (int64), Strata (object), DT_STRATA (object), DOW (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)
+Target Schema: cst (object), 1:00..24:00 (float64)
+Source Sample: DT_STRATA sample: ['7/2/2016', '7/3/2016']; PCT_HOURLY_0100 sample: [0.000701, 0.000761]
+Target Sample: cst sample: ['Fri 01/01/2016', 'Sat 01/02/2016']; 1:00 sample: [0.001222, 0.001313]
+Step-by-Step Reasoning Plan:
+1. Analyze schemas: Source has date column 'DT_STRATA' and hourly columns 'PCT_HOURLY_0100' through 'PCT_HOURLY_2500'.
+2. Target schema requires column 'cst' with formatted date strings like 'Fri 01/01/2016' (%a %m/%d/%Y).
+3. Parse 'DT_STRATA' to datetime and format as '%a %m/%d/%Y' in column 'cst'.
+4. Rename hourly columns: 'PCT_HOURLY_0100' -> '1:00', ..., 'PCT_HOURLY_2400' -> '24:00'.
+5. Drop extra columns ('Strata_ID', 'Strata', 'DOW', 'PCT_HOURLY_2500') and align returned columns verbatim to target.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['cst'] = dt.dt.strftime('%a %m/%d/%Y')
+    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'{i}:00' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]
+    return df[target_cols]
+```
+
+### Example 2 (Case length2_1)
+Source Schema: CST (object), 1:00..24:00:00 (float64)
+Target Schema: dt_strata (object), dow (int64), pct_hourly_0100..pct_hourly_2500 (float64)
+Source Sample: CST sample: ['Sat 12/01/2012', 'Sun 12/02/2012']; 1:00 sample: [0.9841, 0.9012]
+Target Sample: dt_strata sample: ['04/01/2009', '04/02/2009']; dow sample: [3, 4]; pct_hourly_0100 sample: [1.02, 0.93]
+Step-by-Step Reasoning Plan:
+1. Inspect date: Source 'CST' has format 'Day MM/DD/YYYY'. Split by whitespace to extract the date part.
+2. Convert to datetime, then format as '%m/%d/%Y' for 'dt_strata'.
+3. Compute 'dow' (day of week) where Monday=1 ... Sunday=7 using `dt.dt.dayofweek + 1`.
+4. Rename hourly columns: '1:00' -> 'pct_hourly_0100', ..., '24:00'/'24:00:00' -> 'pct_hourly_2400'.
+5. Target includes 'pct_hourly_2500' filled with 0. Add this column and select target columns verbatim.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    date_str = df['CST'].str.split(' ').str[-1]
+    dt = pd.to_datetime(date_str, format='%m/%d/%Y')
+    df['dt_strata'] = dt.dt.strftime('%m/%d/%Y')
+    df['dow'] = dt.dt.dayofweek + 1
+    rename_dict = {f'{i}:00': f'pct_hourly_{i:02d}00' for i in range(1, 24)}
+    if '24:00:00' in df.columns:
+        rename_dict['24:00:00'] = 'pct_hourly_2400'
+    elif '24:00' in df.columns:
+        rename_dict['24:00'] = 'pct_hourly_2400'
+    df = df.rename(columns=rename_dict)
+    df['pct_hourly_2500'] = 0
+    target_cols = ['dt_strata', 'dow'] + [f'pct_hourly_{i:02d}00' for i in range(1, 26)]
+    return df[target_cols]
+```
+
+### Example 3 (Case length3_1)
+Source Schema: Strata_ID (int64), Strata (object), DT_STRATA (object), DOW (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)
+Target Schema: date (object), Hour 1..Hour 24 (float64)
+Source Sample: DT_STRATA sample: ['7/2/2016']; PCT_HOURLY_0100 sample: [0.000701]
+Target Sample: date sample: ['01/01/2016']; Hour 1 sample: [0.001222]
+Step-by-Step Reasoning Plan:
+1. Analyze date: Source column 'DT_STRATA' has dates formatted as M/D/YYYY. Format as '%m/%d/%Y' in column 'date'.
+2. Map hour columns: 'PCT_HOURLY_{i:02d}00' maps to 'Hour {i}' for i=1..24.
+3. Select columns: 'date' followed by 'Hour 1' through 'Hour 24'. Drop unused columns.
+Generated Code:
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    dt = pd.to_datetime(df['DT_STRATA'])
+    df['date'] = dt.dt.strftime('%m/%d/%Y')
+    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'Hour {i}' for i in range(1, 25)}
+    df = df.rename(columns=rename_dict)
+    target_cols = ['date'] + [f'Hour {i}' for i in range(1, 25)]
+    return df[target_cols]
+```
+
+============================================================
+Now, synthesize the transformation function for the following case:
+
+### Benchmark Case: length1_8
+- Source sample rows: 74848 rows (Note: test_0.csv may have different row count)
+- Target rows: 521 rows
+- Notice: Row count changes from 74848 to 521. Check if an aggregation, grouping, or pivoting operation is required.
+
+### Exact Target Columns (Must match verbatim):
+['cst', '1:00', '2:00', '3:00', '4:00', '5:00', '6:00', '7:00', '8:00', '9:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00', '22:00', '23:00', '24:00']
+
+### Datetime Format Inferences:
+- Source column 'date' has date format '%m/%d/%Y %H:%M' (sample: '7/28/2019 4:50')
+- Target column 'cst' requires date format '%a %m/%d/%Y' (sample: 'Sat 07/20/2019')
+
+### Source Schema and Types:
+date (object), cerc_logger_1 (float64)
+
+### Target Schema and Types:
+cst (object), 1:00 (float64), 2:00 (float64), 3:00 (float64), 4:00 (float64), 5:00 (float64), 6:00 (float64), 7:00 (float64), 8:00 (float64), 9:00 (float64), 10:00 (float64), 11:00 (float64), 12:00 (float64), 13:00 (float64), 14:00 (float64), 15:00 (float64), 16:00 (float64), 17:00 (float64), 18:00 (float64), 19:00 (float64), 20:00 (float64), 21:00 (float64), 22:00 (float64), 23:00 (float64), 24:00 (float64)
+
+### Source Table Sample (training_0.csv):
+| date             |   cerc_logger_1 |
+|:-----------------|----------------:|
+| 7/28/2019 4:50   |          24.562 |
+| 7/28/2019 5:00   |          24.625 |
+| 7/28/2019 5:10   |          24.562 |
+| 7/28/2019 5:20   |          24.562 |
+| 12/31/2020 23:30 |          22.062 |
+| 12/31/2020 23:40 |          22.125 |
+| 12/31/2020 23:50 |          22.312 |
+| 1/1/2021 0:00    |          22.437 |
+
+### Desired Target Table Sample (target.csv):
+| cst            |    1:00 |    2:00 |    3:00 |    4:00 |    5:00 |    6:00 |    7:00 |    8:00 |    9:00 |   10:00 |   11:00 |   12:00 |   13:00 |   14:00 |   15:00 |   16:00 |   17:00 |   18:00 |   19:00 |   20:00 |   21:00 |   22:00 |   23:00 |   24:00 |
+|:---------------|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|
+| Sat 07/20/2019 | 132.249 | 131.936 | 131.748 | 130.999 | 130.06  | 129.873 | 129.498 | 129.061 | 129.248 | 128.749 | 128.748 | 128.56  | 128.498 | 128.374 | 128.436 | 128.436 | 128.498 | 128.812 | 129.186 | 129.248 | 129.124 | 128.81  | 128.81  | 131.874 |
+| Sun 05/13/2018 | 144.31  | 143.999 | 143.249 | 142.873 | 142.498 | 142.374 | 142.561 | 141.749 | 141.123 | 141.186 | 140.811 | 140.874 | 140.561 | 139.874 | 140.061 | 140.186 | 140.186 | 140.561 | 141     | 140.811 | 141.624 | 141.749 | 141.936 | 144.311 |
+| Sat 11/24/2018 | 132.062 | 132.062 | 132     | 132     | 132     | 131.748 | 131.811 | 131.685 | 131.436 | 131.56  | 131.249 | 131.061 | 131.187 | 130.998 | 130.873 | 130.872 | 131.061 | 131.187 | 131.374 | 132.186 | 133.123 | 133.561 | 133.874 | 132     |
+| Thu 05/10/2018 | 144.123 | 143.811 | 143.249 | 143.061 | 142.748 | 142.435 | 142.186 | 142.311 | 141.561 | 141.561 | 140.435 | 140.437 | 140.437 | 140.186 | 140.687 | 142.374 | 142.186 | 142.312 | 143.561 | 143.248 | 143.497 | 143.561 | 143.811 | 144.061 |
+| Sat 06/01/2019 | 133.373 | 132.123 | 131.874 | 131.874 | 131.311 | 130.748 | 130.498 | 130.436 | 130.436 | 130.499 | 130.248 | 130.686 | 130.562 | 130.81  | 130.749 | 131.123 | 130.998 | 130.686 | 131.061 | 130.748 | 130.999 | 131.498 | 131.124 | 135.123 |
+| Sat 02/16/2019 |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |   0     |
+| Tue 07/16/2019 | 133.249 | 132.811 | 131.873 | 131.561 | 131.061 | 130.811 | 130.437 | 130.374 | 130.499 | 130.311 | 129.998 | 129.936 | 129.812 | 130.123 | 130.499 | 130.873 | 131.561 | 131.874 | 132.186 | 132.999 | 133.373 | 134.061 | 134.499 | 133.248 |
+| Wed 11/21/2018 | 144.186 | 142.936 | 142.311 | 141.811 | 142.185 | 142.248 | 142.562 | 142.562 | 142.562 | 142.311 | 142.248 | 141.936 | 141.812 | 142.122 | 142.5   | 143.247 | 144.372 | 145.186 | 145.622 | 145.5   | 145.624 | 144.499 | 143.186 | 146.123 |
+
+### Instructions:
+1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed to transform the source table into the target table.
+2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.
+3. Make sure to return `df[target_columns]` with the target column names copied verbatim.

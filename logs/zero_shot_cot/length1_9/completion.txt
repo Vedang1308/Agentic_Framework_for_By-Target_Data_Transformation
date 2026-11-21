@@ -1,0 +1,101 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Parse Datetime**: The source column `date` is a string in the format `%m/%d/%Y %H:%M`. We need to parse this into a pandas datetime object to extract date and hour components.
+2.  **Extract Date and Hour**:
+    *   Extract the date part (year, month, day) to group by day.
+    *   Extract the hour part to determine which target column (`1:00` to `24:00`) the data belongs to. Note that the target columns are 1-indexed (1:00 to 24:00). In 24-hour time, hour 0 corresponds to the start of the day. Looking at the target columns, `1:00` likely corresponds to the hour 0-1 block (or specifically hour 0), `2:00` to hour 1, ..., `24:00` to hour 23. Let's verify this mapping.
+    *   Target columns: `1:00`, `2:00`, ..., `24:00`.
+    *   Standard 24-hour clock hours: 0, 1, ..., 23.
+    *   Mapping hypothesis: Hour `h` in source maps to column `f"{h+1}:00"`.
+        *   Source hour 0 -> Column `1:00`
+        *   Source hour 1 -> Column `2:00`
+        *   ...
+        *   Source hour 23 -> Column `24:00`
+3.  **Aggregate Data**:
+    *   Group by the extracted date and the calculated hour bucket.
+    *   The target values are floats. The sample shows non-integer values (e.g., 4073.5). The source has minute-level granularity. We need to aggregate the `zone_016` values for each hour.
+    *   Common aggregations are `sum`, `mean`, or `count`. Let's look at the sample.
+        *   Source row `1/2/2018 0:11` has value 67.9.
+        *   Target row `Tue 01/02/2018` has `24:00` value 746.9.
+        *   If we sum the values for hour 23 (which maps to 24:00) on Jan 2nd, do we get 746.9?
+        *   The sample source only shows a few rows. However, typically in these "zone" datasets, if the granularity is minutes and the target is hourly, `sum` is a very common aggregation for flow/traffic data, or `mean` for sensor readings.
+        *   Let's check the first target row: `Mon 01/01/2018`. The values are around 4000. If these are sums of minute-level data, and there are 60 minutes, the average per minute would be ~66. This matches the source sample value of ~67.9. If it were mean, the value would be ~67.9. The target values are ~4000. Therefore, the aggregation is likely **SUM**.
+4.  **Pivot/Reshape**:
+    *   After grouping by Date and Hour, we pivot the data so that:
+        *   Index: Date
+        *   Columns: Hour buckets (mapped to `1:00`...`24:00`)
+        *   Values: Sum of `zone_016`
+5.  **Handle Missing Values**:
+    *   If an hour has no data, the sum will be NaN or 0 depending on implementation. The target sample shows `0` for missing hours in the second row. We should fill NaNs with 0.
+6.  **Format Date Column**:
+    *   The target column `cst` requires the format `%a %m/%d/%Y` (e.g., `Mon 01/01/2018`).
+    *   We need to format the date index into this string format.
+7.  **Rename and Reorder Columns**:
+    *   Ensure the columns are named exactly `1:00`, `2:00`, ..., `24:00`.
+    *   Ensure the final DataFrame has the column `cst` followed by the hour columns in order.
+
+### Implementation Details
+
+*   Parse `date` column.
+*   Create a `hour` column from the datetime.
+*   Map `hour` to target column names: `hour + 1` formatted as `f"{hour+1}:00"`.
+*   Group by `date` (normalized to day) and the new `hour_label`.
+*   Sum `zone_016`.
+*   Unstack/pivot to get hours as columns.
+*   Fill NaN with 0.
+*   Format the date index to `cst`.
+*   Reset index to make `cst` a column.
+*   Select and order columns.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    
+    # 1. Parse the date column
+    df = source.copy()
+    df['datetime'] = pd.to_datetime(df['date'], format='%m/%d/%Y %H:%M')
+    
+    # 2. Extract date and hour
+    df['date_only'] = df['datetime'].dt.date
+    df['hour'] = df['datetime'].dt.hour
+    
+    # 3. Map hour to target column names (1:00 to 24:00)
+    # Hour 0 -> 1:00, Hour 1 -> 2:00, ..., Hour 23 -> 24:00
+    df['hour_label'] = df['hour'].apply(lambda h: f"{h+1}:00")
+    
+    # 4. Aggregate by date and hour_label
+    # Based on analysis, the aggregation is SUM because target values (~4000) 
+    # are roughly 60x the source minute values (~67).
+    grouped = df.groupby(['date_only', 'hour_label'])['zone_016'].sum().reset_index()
+    
+    # 5. Pivot the data
+    # Index: date_only, Columns: hour_label, Values: zone_016
+    pivoted = grouped.pivot_table(index='date_only', columns='hour_label', values='zone_016', aggfunc='sum')
+    
+    # 6. Fill missing values with 0
+    pivoted = pivoted.fillna(0)
+    
+    # 7. Ensure all expected hour columns exist and are in order
+    expected_hours = [f"{h}:00" for h in range(1, 25)]
+    
+    # Reindex columns to ensure all hours are present and in correct order
+    pivoted = pivoted.reindex(columns=expected_hours, fill_value=0)
+    
+    # 8. Format the date index to 'cst' format: '%a %m/%d/%Y'
+    # Convert date_only back to datetime for formatting, then to string
+    pivoted.index = pd.to_datetime(pivoted.index)
+    pivoted.index = pivoted.index.strftime('%a %m/%d/%Y')
+    
+    # 9. Reset index to make 'cst' a column
+    pivoted = pivoted.reset_index()
+    pivoted = pivoted.rename(columns={'index': 'cst'})
+    
+    # 10. Define target columns
+    target_columns = ['cst'] + expected_hours
+    
+    # 11. Return the final dataframe with exact column names
+    return pivoted[target_columns]
+```

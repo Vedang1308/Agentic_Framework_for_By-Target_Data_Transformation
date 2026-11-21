@@ -1,0 +1,200 @@
+### Step-by-Step Reasoning Plan:
+
+1.  **Analyze Date/Time Column**:
+    *   The source has a `time` column with strings like `'2012-07-02 00:15:00.000'`.
+    *   The target requires a `datetime` column with format `'%Y-%m-%d %H:%M:%S'` (e.g., `'2012-07-02 00:15:00'`).
+    *   Action: Parse the `time` column to datetime using `pd.to_datetime`, then format it back to string using `.dt.strftime('%Y-%m-%d %H:%M:%S')`.
+
+2.  **Map Target Columns to Source Columns**:
+    *   The target has aggregated categories (`hvac`, `domestic_water_heating`, `major_appliances`, `lighting`, `miscellaneous_plug_loads`) and a `total` column.
+    *   The source has granular electricity usage columns. We need to sum specific source columns to create the target columns. Let's deduce the mapping by inspecting the sample data and column names.
+
+    *   **`total`**: The target `total` seems to correspond to `net_site_electricity_kwh`. Let's verify with the first sample row.
+        *   Source `net_site_electricity_kwh` for row 17568 is `826347`.
+        *   Wait, the target sample rows provided are from a different time period (Jan 2012) than the source sample rows (July/Dec 2012). We must rely on column semantics and sums.
+        *   Usually, `total` is the sum of all components or a specific total column. `net_site_electricity_kwh` is a strong candidate for `total`.
+
+    *   **`hvac`**: Heating, Ventilation, and Air Conditioning.
+        *   Likely candidates: `electricity_heating_kwh`, `electricity_cooling_kwh`, `electricity_central_system_heating_kwh`, `electricity_central_system_cooling_kwh`, `electricity_fans_heating_kwh`, `electricity_fans_cooling_kwh`, `electricity_pumps_heating_kwh`, `electricity_central_system_pumps_heating_kwh`, `electricity_pumps_cooling_kwh`, `electricity_central_system_pumps_cooling_kwh`.
+        *   Let's check the sample row 17568 (July 2, 2012 00:15:00).
+            *   Heating: `0.130059` + `0` + `1.07838` + `0.000142605` + `0` + `0` ≈ 1.2
+            *   Cooling: `406631` + `2106.66` + `83543.4` + `0` + `398.354` ≈ 492,680
+            *   Total HVAC ≈ 492,681.
+            *   Let's look at the target sample for a similar time. We don't have the exact match, but let's look at the structure.
+            *   Common breakdown: HVAC = Heating + Cooling + Fans + Pumps associated with HVAC.
+            *   Columns:
+                *   `electricity_heating_kwh`
+                *   `electricity_central_system_heating_kwh`
+                *   `electricity_cooling_kwh`
+                *   `electricity_central_system_cooling_kwh`
+                *   `electricity_fans_heating_kwh`
+                *   `electricity_fans_cooling_kwh`
+                *   `electricity_pumps_heating_kwh`
+                *   `electricity_central_system_pumps_heating_kwh`
+                *   `electricity_pumps_cooling_kwh`
+                *   `electricity_central_system_pumps_cooling_kwh`
+
+    *   **`domestic_water_heating`**:
+        *   Likely candidate: `electricity_water_systems_kwh`. This is the standard column for water heating in CBECC-Com or similar datasets.
+
+    *   **`major_appliances`**:
+        *   Likely candidates: `electricity_refrigerator_kwh`, `electricity_clothes_washer_kwh`, `electricity_clothes_dryer_kwh`, `electricity_cooking_range_kwh`, `electricity_dishwasher_kwh`.
+
+    *   **`lighting`**:
+        *   Likely candidates: `electricity_interior_lighting_kwh`, `electricity_exterior_lighting_kwh`.
+
+    *   **`miscellaneous_plug_loads`**:
+        *   Likely candidates: `electricity_plug_loads_kwh`, `electricity_house_fan_kwh`, `electricity_range_fan_kwh`, `electricity_bath_fan_kwh`, `electricity_ceiling_fan_kwh`, `electricity_pool_heater_kwh`, `electricity_pool_pump_kwh`, `electricity_hot_tub_heater_kwh`, `electricity_hot_tub_pump_kwh`.
+        *   Note: Fans (house, range, bath, ceiling) are often grouped into miscellaneous or plug loads depending on the schema. Pool/Hot tub are also usually miscellaneous.
+
+3.  **Verify Sums with Sample Data (Row 17568)**:
+    *   `hvac`:
+        *   Heating: `0.130059` (`heating`) + `0` (`central_heating`) + `1.07838` (`fans_heating`) + `0.000142605` (`pumps_heating`) + `0` (`central_pumps_heating`) = ~1.208
+        *   Cooling: `406631` (`cooling`) + `2106.66` (`central_cooling`) + `83543.4` (`fans_cooling`) + `0` (`pumps_cooling`) + `398.354` (`central_pumps_cooling`) = 492,679.414
+        *   Sum HVAC = 492,680.622
+    *   `domestic_water_heating`: `17024.4`
+    *   `major_appliances`:
+        *   `51271.1` (fridge) + `444.159` (washer) + `12672` (dryer) + `3725.23` (range) + `289.3` (dishwasher) = 68,401.789
+    *   `lighting`:
+        *   `23523.1` (interior) + `4592.04` (exterior) = 28,115.14
+    *   `miscellaneous_plug_loads`:
+        *   `149820` (plug_loads) + `0` (house_fan) + `178.023` (range_fan) + `1347.75` (bath_fan) + `8952.72` (ceiling_fan) + `64.3796` (pool_heater) + `1180.88` (pool_pump) + `3325.63` (hot_tub_heater) + `4035.23` (hot_tub_pump)
+        *   Sum = 149820 + 178.023 + 1347.75 + 8952.72 + 64.3796 + 1180.88 + 3325.63 + 4035.23 = 168,904.6126
+    *   `total` (Sum of above):
+        *   492,680.622 + 17,024.4 + 68,401.789 + 28,115.14 + 168,904.613 = 775,126.564
+    *   Source `net_site_electricity_kwh` is `826,347`.
+    *   Difference: 826,347 - 775,126 = ~51,220.
+    *   Is there a missing component?
+    *   Let's re-read the column list.
+    *   Maybe `electricity_heating_kwh` includes something else? Or maybe `miscellaneous` includes more?
+    *   Let's look at the target sample row 1: `2012-01-01 00:15:00`.
+        *   `hvac`: 292848
+        *   `domestic_water_heating`: 1745.74
+        *   `major_appliances`: 79768.2
+        *   `lighting`: 46858.5
+        *   `miscellaneous_plug_loads`: 246207
+        *   `total`: 725806
+        *   Sum of components: 292848 + 1745.74 + 79768.2 + 46858.5 + 246207 = 667,427.44
+        *   Difference: 725,806 - 667,427.44 = 58,378.56
+    *   This discrepancy suggests that either:
+        1.  The `total` column in the target is NOT the sum of the other 5 columns, but rather the `net_site_electricity_kwh` from the source.
+        2.  Or there are other source columns being summed into the categories that I missed.
+        3.  Or the `total` is just copied from `net_site_electricity_kwh`.
+
+    *   Let's check if `net_site_electricity_kwh` matches the target `total` for the source sample row 17568.
+        *   Source `net_site_electricity_kwh`: 826347.
+        *   If I assume the mapping is correct, does the sum of my calculated components + some "other" equal 826347?
+        *   Usually, in these datasets, `total` = `net_site_electricity_kwh`. The other columns are breakdowns. The sum of breakdowns might not equal total due to rounding or unaccounted minor loads (like "electricity_other" if it existed, but it doesn't).
+        *   However, looking at the target schema, it asks for `total`. It is safest to map `total` directly to `net_site_electricity_kwh`.
+
+    *   Let's refine the category mappings.
+        *   **HVAC**: `electricity_heating_kwh`, `electricity_central_system_heating_kwh`, `electricity_cooling_kwh`, `electricity_central_system_cooling_kwh`, `electricity_fans_heating_kwh`, `electricity_fans_cooling_kwh`, `electricity_pumps_heating_kwh`, `electricity_central_system_pumps_heating_kwh`, `electricity_pumps_cooling_kwh`, `electricity_central_system_pumps_cooling_kwh`.
+        *   **Domestic Water Heating**: `electricity_water_systems_kwh`.
+        *   **Major Appliances**: `electricity_refrigerator_kwh`, `electricity_clothes_washer_kwh`, `electricity_clothes_dryer_kwh`, `electricity_cooking_range_kwh`, `electricity_dishwasher_kwh`.
+        *   **Lighting**: `electricity_interior_lighting_kwh`, `electricity_exterior_lighting_kwh`.
+        *   **Miscellaneous Plug Loads**: `electricity_plug_loads_kwh`, `electricity_house_fan_kwh`, `electricity_range_fan_kwh`, `electricity_bath_fan_kwh`, `electricity_ceiling_fan_kwh`, `electricity_pool_heater_kwh`, `electricity_pool_pump_kwh`, `electricity_hot_tub_heater_kwh`, `electricity_hot_tub_pump_kwh`.
+
+    *   Let's double check if any columns are left out.
+        *   Source columns used:
+            *   HVAC: 10 cols
+            *   Water: 1 col
+            *   Appliances: 5 cols
+            *   Lighting: 2 cols
+            *   Misc: 9 cols
+            *   Total: 1 col (`net_site...`)
+            *   Time: 1 col
+            *   Total used: 10+1+5+2+9+1+1 = 29 cols.
+        *   Source has 33 columns.
+        *   Unused: `Unnamed: 0`, `eiaid`, `raw_count`, `scaled_unit_count`. These are metadata/ID columns, so ignoring them is correct.
+
+4.  **Construct the Function**:
+    *   Create `datetime` column.
+    *   Create `hvac` by summing the HVAC columns.
+    *   Create `domestic_water_heating` by selecting `electricity_water_systems_kwh`.
+    *   Create `major_appliances` by summing appliance columns.
+    *   Create `lighting` by summing lighting columns.
+    *   Create `miscellaneous_plug_loads` by summing misc columns.
+    *   Create `total` by selecting `net_site_electricity_kwh`.
+    *   Return the dataframe with the specified columns.
+
+### Generated Code:
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # 1. Process datetime
+    # Source 'time' is like '2012-07-02 00:15:00.000'
+    # Target 'datetime' is like '2012-07-02 00:15:00'
+    dt_series = pd.to_datetime(df['time'])
+    df['datetime'] = dt_series.dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 2. Define column groups for aggregation
+    
+    hvac_cols = [
+        'electricity_heating_kwh',
+        'electricity_central_system_heating_kwh',
+        'electricity_cooling_kwh',
+        'electricity_central_system_cooling_kwh',
+        'electricity_fans_heating_kwh',
+        'electricity_fans_cooling_kwh',
+        'electricity_pumps_heating_kwh',
+        'electricity_central_system_pumps_heating_kwh',
+        'electricity_pumps_cooling_kwh',
+        'electricity_central_system_pumps_cooling_kwh'
+    ]
+    
+    water_heating_cols = [
+        'electricity_water_systems_kwh'
+    ]
+    
+    major_appliance_cols = [
+        'electricity_refrigerator_kwh',
+        'electricity_clothes_washer_kwh',
+        'electricity_clothes_dryer_kwh',
+        'electricity_cooking_range_kwh',
+        'electricity_dishwasher_kwh'
+    ]
+    
+    lighting_cols = [
+        'electricity_interior_lighting_kwh',
+        'electricity_exterior_lighting_kwh'
+    ]
+    
+    misc_plug_cols = [
+        'electricity_plug_loads_kwh',
+        'electricity_house_fan_kwh',
+        'electricity_range_fan_kwh',
+        'electricity_bath_fan_kwh',
+        'electricity_ceiling_fan_kwh',
+        'electricity_pool_heater_kwh',
+        'electricity_pool_pump_kwh',
+        'electricity_hot_tub_heater_kwh',
+        'electricity_hot_tub_pump_kwh'
+    ]
+    
+    # 3. Compute aggregated columns
+    df['hvac'] = df[hvac_cols].sum(axis=1)
+    df['domestic_water_heating'] = df[water_heating_cols].sum(axis=1)
+    df['major_appliances'] = df[major_appliance_cols].sum(axis=1)
+    df['lighting'] = df[lighting_cols].sum(axis=1)
+    df['miscellaneous_plug_loads'] = df[misc_plug_cols].sum(axis=1)
+    
+    # 4. Map total
+    df['total'] = df['net_site_electricity_kwh']
+    
+    # 5. Select and order target columns
+    target_columns = [
+        'datetime', 
+        'hvac', 
+        'domestic_water_heating', 
+        'major_appliances', 
+        'lighting', 
+        'miscellaneous_plug_loads', 
+        'total'
+    ]
+    
+    return df[target_columns]
+```

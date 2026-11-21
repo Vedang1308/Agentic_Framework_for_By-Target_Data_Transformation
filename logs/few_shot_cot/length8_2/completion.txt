@@ -1,0 +1,97 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `date` (string, format `%m/%d/%Y %H:%M`) and `zone_016` (float).
+    *   **Target**: Contains `Hour` (int) and 12 month columns (`January` through `December`).
+    *   **Transformation Type**: The row count drops significantly (1450 -> 24). The target has 24 rows, corresponding to the 24 hours of a day (0-23). The columns represent months. This indicates a **pivot** or **groupby-aggregation** operation where we group by `Hour` and `Month`, aggregate the `zone_016` values, and then reshape the data so that months become columns.
+
+2.  **Parse Datetime**:
+    *   Convert the `date` column to a pandas datetime object using `pd.to_datetime`.
+    *   Extract the `Hour` component (0-23) into a new column.
+    *   Extract the `Month` component (1-12) into a new column.
+
+3.  **Map Months to Names**:
+    *   Create a mapping from month numbers (1-12) to month names ('January', 'February', ..., 'December').
+    *   Apply this mapping to the extracted month numbers to create a `Month_Name` column.
+
+4.  **Aggregate Data**:
+    *   Group the data by `Hour` and `Month_Name`.
+    *   Aggregate the `zone_016` values. Looking at the target sample, for Hour 0 in January, the value is 67.9. In the source, there are multiple entries for Hour 0 on Jan 2nd (67.9, 67.9, 67.9, 67.9). The target shows 67.9. For Hour 20, the source shows 69, nan, nan, nan. The target shows 67.0 (wait, let's look closer at the sample).
+    *   *Correction on Aggregation Logic*: Let's look at the source sample again.
+        *   Row 1: 1/2/2018 0:11 -> 67.9
+        *   Row 2: 1/2/2018 0:12 -> 67.9
+        *   ...
+        *   Row 5: 1/3/2018 0:17 -> 69
+        *   Target Hour 0, January: 67.9.
+        *   Target Hour 20, January: 67.0.
+        *   The source sample provided is very small and might not represent the full aggregation logic perfectly, but typically in these TbT tasks, if multiple rows exist for the same Hour/Month, we need an aggregation function. Common functions are `mean`, `sum`, `first`, `last`.
+        *   Let's check Hour 0. Source has 67.9 repeated. Target is 67.9.
+        *   Let's check Hour 20. Source has 69, nan, nan, nan. Target is 67.0. This implies the source sample shown is *not* the only data for Hour 20, or the aggregation is `mean` of non-null values? If it were `first`, it would be 69. If it were `mean` of [69], it would be 69. The fact that the target is 67.0 suggests there are other rows in the full dataset for Hour 20 in January that average out to 67.0.
+        *   Standard practice for this type of "time series to hourly profile" transformation is usually `mean` (average) of the values for that hour across all days in that month. Let's assume `mean`.
+
+5.  **Pivot/Reshape**:
+    *   After grouping by `Hour` and `Month_Name` and aggregating `zone_016` (using `mean`), we have a DataFrame with columns `Hour`, `Month_Name`, `zone_016`.
+    *   Pivot this DataFrame so that `Hour` is the index, `Month_Name` becomes the columns, and `zone_016` values fill the cells.
+    *   Reset the index to make `Hour` a column.
+
+6.  **Handle Missing Values and Column Order**:
+    *   The pivot might result in NaNs for months/hours with no data. This matches the target sample (lots of NaNs).
+    *   Ensure the column order matches the target: `['Hour', 'January', 'February', ..., 'December']`.
+    *   Rename the `zone_016` column (if it persists as a header) or ensure the pivot columns are named correctly. The pivot operation will name the columns after the `Month_Name` values.
+
+7.  **Final Formatting**:
+    *   Ensure `Hour` is integer type.
+    *   Select the specific target columns in the correct order.
+
+### Generated Code
+
+```python
+import pandas as pd
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with the same schema and contents as target.csv."""
+    df = source.copy()
+    
+    # 1. Parse the date column
+    df['datetime'] = pd.to_datetime(df['date'])
+    
+    # 2. Extract Hour and Month
+    df['Hour'] = df['datetime'].dt.hour
+    df['Month_Num'] = df['datetime'].dt.month
+    
+    # 3. Map Month numbers to Month names
+    month_map = {
+        1: 'January', 2: 'February', 3: 'March', 4: 'April',
+        5: 'May', 6: 'June', 7: 'July', 8: 'August',
+        9: 'September', 10: 'October', 11: 'November', 12: 'December'
+    }
+    df['Month_Name'] = df['Month_Num'].map(month_map)
+    
+    # 4. Aggregate by Hour and Month_Name
+    # We use mean() to aggregate the zone_016 values for each Hour/Month combination.
+    # This handles the reduction from many rows to one row per Hour/Month.
+    agg_df = df.groupby(['Hour', 'Month_Name'])['zone_016'].mean().reset_index()
+    
+    # 5. Pivot the data
+    # Index: Hour, Columns: Month_Name, Values: zone_016
+    pivot_df = agg_df.pivot(index='Hour', columns='Month_Name', values='zone_016')
+    
+    # 6. Reset index to make Hour a column
+    pivot_df = pivot_df.reset_index()
+    
+    # 7. Ensure Hour is integer
+    pivot_df['Hour'] = pivot_df['Hour'].astype(int)
+    
+    # 8. Define target columns in the correct order
+    target_columns = ['Hour', 'January', 'February', 'March', 'April', 'May', 'June', 
+                      'July', 'August', 'September', 'October', 'November', 'December']
+    
+    # 9. Select and return the target columns
+    # Note: If a month is missing from the source data, it won't be in the pivot columns.
+    # We should ensure all target columns exist, filling with NaN if necessary.
+    for col in target_columns:
+        if col not in pivot_df.columns:
+            pivot_df[col] = float('nan')
+            
+    return pivot_df[target_columns]
+```

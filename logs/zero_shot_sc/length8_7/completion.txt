@@ -1,0 +1,102 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source Schema**:
+    *   The source DataFrame has a `Date` column (format `%m/%d/%Y`), a `Class` column, and 24 numeric columns labeled `1` through `24`.
+    *   These 24 numeric columns likely represent hourly data for each day (Hour 1 to Hour 24).
+
+2.  **Analyze Target Schema**:
+    *   The target DataFrame has an `hour` column (integers 1-24) and 12 columns representing months (`january` through `december`).
+    *   The row count decreases from 182 (days) to 24 (hours). This implies a pivoting or reshaping operation where the "hour" becomes the index/row identifier, and the "month" becomes the column identifier.
+    *   The values in the target cells appear to be averages (means) of the hourly values for that specific month across all available days in the source data. For example, `january` for `hour` 1 is `1.03`. Looking at the source, we don't see January data in the sample, but the logic holds: for each hour `h` (1-24) and each month `m` (1-12), we calculate the mean of the value in column `h` for all rows where the `Date` corresponds to month `m`.
+
+3.  **Transformation Steps**:
+    *   **Parse Dates**: Convert the `Date` column to datetime objects to extract the month.
+    *   **Reshape Data**: The source is in "wide" format (24 columns for hours). We need to melt/unpivot it so that each row represents a single observation of (Date, Hour, Value).
+        *   Keep `Date` and `Class` (though `Class` seems constant, we might not need it if we just group by date/month).
+        *   Melt columns `1` through `24` into two new columns: `hour` (from column names) and `value` (from cell values).
+        *   Convert `hour` to integer.
+    *   **Extract Month**: Add a `month` column derived from the parsed `Date`. Map month numbers (1-12) to their lowercase names (`january`, `february`, etc.).
+    *   **Aggregate**: Group by `hour` and `month`. Calculate the mean of the `value` for each group.
+    *   **Pivot/Reshape**: Pivot the aggregated data so that `hour` is the index, `month` names are columns, and the values are the means.
+    *   **Final Formatting**:
+        *   Reset the index to make `hour` a column.
+        *   Sort by `hour` (ascending).
+        *   Ensure column names match exactly: `['hour', 'january', 'february', ...]`.
+        *   Handle missing values (months with no data will be NaN, which matches the target sample).
+
+4.  **Refinement**:
+    *   The source columns are strings '1', '2', ..., '24'. When melting, ensure they are treated as the hour index.
+    *   The target months are lowercase. Standard pandas `dt.month_name()` returns Title Case (e.g., "January"). We need to convert to lowercase.
+    *   The target `hour` column is int64.
+
+5.  **Code Construction**:
+    *   Use `pd.melt` to unpivot.
+    *   Use `groupby` and `mean`.
+    *   Use `pivot` or `unstack` to get the wide format.
+    *   Reorder columns.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame containing daily hourly data into a target DataFrame
+    showing the average value for each hour of each month.
+    """
+    # 1. Parse the Date column to extract month information
+    source = source.copy()
+    source['Date'] = pd.to_datetime(source['Date'], format='%m/%d/%Y')
+    
+    # 2. Melt the DataFrame to convert wide format (24 hour columns) to long format
+    # We keep 'Date' and melt columns '1' through '24'
+    hour_columns = [str(i) for i in range(1, 25)]
+    melted_df = source.melt(
+        id_vars=['Date'],
+        value_vars=hour_columns,
+        var_name='hour',
+        value_name='value'
+    )
+    
+    # 3. Convert hour to integer
+    melted_df['hour'] = melted_df['hour'].astype(int)
+    
+    # 4. Extract month name from Date and convert to lowercase
+    # Month 1 -> 'january', 2 -> 'february', etc.
+    melted_df['month'] = melted_df['Date'].dt.month_name().str.lower()
+    
+    # 5. Group by hour and month, and calculate the mean value
+    aggregated_df = melted_df.groupby(['hour', 'month'])['value'].mean().reset_index()
+    
+    # 6. Pivot the table so that 'hour' is the index, 'month' are columns, and values are the means
+    pivot_df = aggregated_df.pivot(index='hour', columns='month', values='value')
+    
+    # 7. Reset index to make 'hour' a column again
+    pivot_df = pivot_df.reset_index()
+    
+    # 8. Define the target column order
+    target_columns = [
+        'hour', 'january', 'february', 'march', 'april', 'may', 'june', 
+        'july', 'august', 'september', 'october', 'november', 'december'
+    ]
+    
+    # 9. Ensure all target month columns exist (fill missing with NaN if necessary, though pivot usually handles this)
+    for col in target_columns[1:]:
+        if col not in pivot_df.columns:
+            pivot_df[col] = np.nan
+            
+    # 10. Select and reorder columns to match target schema exactly
+    df = pivot_df[target_columns]
+    
+    # 11. Sort by hour to match the logical order (though target sample isn't strictly sorted, standard practice is sorted)
+    # The target sample shows hours 1, 10, 11... 6, 7... which is not sorted. 
+    # However, usually "general" transformations imply a sorted or deterministic order. 
+    # Let's check the target sample again. It seems somewhat random or grouped. 
+    # But typically, we return sorted by the key column 'hour'.
+    df = df.sort_values(by='hour').reset_index(drop=True)
+    
+    # Ensure hour is int64
+    df['hour'] = df['hour'].astype('int64')
+    
+    return df[target_columns]
+```

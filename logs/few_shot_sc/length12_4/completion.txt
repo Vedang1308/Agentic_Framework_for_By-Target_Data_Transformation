@@ -1,0 +1,220 @@
+Step-by-Step Reasoning Plan:
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains columns `End Use Category`, `End Use`, `Time Period`, `Day Type`, `Hour Ending`, `Number of Homes...`, `Average Demand...`. The data is granular, with rows for specific end uses (e.g., Freezer, HVAC) across different time periods (months) and day types.
+    *   **Target**: Contains columns `season`, `hour`, and various end-use categories (`hvac`, `water_heating`, etc.). The target has significantly fewer rows (96 vs 258k+), implying aggregation.
+    *   **Mapping**:
+        *   `season`: Derived from `Time Period` (Month). Need a mapping from Month to Season.
+        *   `hour`: Derived from `Hour Ending`.
+        *   End-use columns (`hvac`, `water_heating`, etc.): Derived from `End Use` or `End Use Category`. The values in the target (e.g., 2105.76) are much larger than the source average demand (e.g., 0.031). This suggests an aggregation involving the `Number of Homes` column. Specifically, Total Demand = Average Demand * Number of Homes. Then, these total demands are likely summed across relevant dimensions (Day Type, potentially specific sub-uses if needed, though the target columns seem to map directly to broad categories or specific end uses).
+
+2.  **Determine Aggregation Logic**:
+    *   The target columns represent broad categories. Let's look at the source `End Use` values. Common end uses include 'HVAC', 'Water Heater', 'Refrigerator', 'Clothes Washer', 'Clothes Dryer', 'Dishwasher', 'Cooking Range', 'Pool/Spa Pumps', 'Interior Lighting', 'Exterior Lighting', 'Plug Loads', etc.
+    *   The target column names are lowercase versions of these end uses (e.g., `hvac`, `water_heating`). Note: `water_heating` might map to `Water Heater` or similar. `clothes_washer` to `Clothes Washer`.
+    *   The target values look like sums. For instance, if we have multiple rows for the same `End Use`, `Time Period`, `Hour`, but different `Day Type` (Weekday/Weekend), we likely need to sum them up.
+    *   Let's check the calculation: `Total Demand = Average Demand * Number of Homes`.
+    *   We need to group by `Season` (derived from Month) and `Hour`.
+    *   Within each group, we need to pivot the `End Use` (or `End Use Category`) to columns and sum the calculated total demand.
+
+3.  **Refining the Mapping**:
+    *   **Season Mapping**:
+        *   Winter: December, January, February
+        *   Spring: March, April, May
+        *   Summer: June, July, August
+        *   Fall: September, October, November
+    *   **End Use Mapping**:
+        *   `hvac`: Likely 'HVAC' or 'Heating/Cooling'.
+        *   `water_heating`: Likely 'Water Heater'.
+        *   `refrigerator`: Likely 'Refrigerator' or 'Freezer'? The source sample shows 'Freezer'. Usually, refrigeration includes both. Let's look at standard CBECC or similar datasets. Often 'Refrigerator' is a specific end use. 'Freezer' might be grouped or separate. Given the target column `refrigerator`, it likely aggregates 'Refrigerator' and 'Freezer' or just 'Refrigerator'. Let's assume standard mapping first. If 'Freezer' is in source, it might need to be mapped to `refrigerator` or there might be a 'Refrigerator' end use too. Let's check distinct `End Use` values if possible, but we only have samples. The sample shows 'Freezer'. It's common to combine them. Let's map 'Refrigerator' and 'Freezer' to `refrigerator`.
+        *   `clothes_washer`: 'Clothes Washer'.
+        *   `clothes_dryer`: 'Clothes Dryer'.
+        *   `dishwasher`: 'Dishwasher'.
+        *   `cooking_range`: 'Cooking Range' or 'Oven/Range'.
+        *   `pool_spa_pumps`: 'Pool/Spa Pumps'.
+        *   `interior_lighting`: 'Interior Lighting'.
+        *   `exterior_lighting`: 'Exterior Lighting'.
+        *   `lighting`: This is tricky. There is `interior_lighting` and `exterior_lighting`. Is `lighting` a sum? Or a specific category? Looking at the target sample, `lighting` is 0. `interior` and `exterior` are also 0. This might be a catch-all or specific 'Lighting' end use if it exists separately. However, often 'Lighting' is the category. Let's look at the source `End Use Category`: 'Kitchen', 'Laundry', 'Miscellaneous', 'Lighting', 'Remaining Load'.
+        *   Wait, the target has `interior_lighting`, `exterior_lighting`, AND `lighting`. This suggests `lighting` might be a residual or a specific "Other Lighting" or perhaps the sum of interior and exterior? But they are separate columns. Let's look at the source `End Use` values again. If the source has 'Interior Lighting' and 'Exterior Lighting', those map directly. What maps to `lighting`? Maybe 'Miscellaneous Lighting' or just 'Lighting' if it's an end use name. Or perhaps `lighting` in the target is the sum of interior and exterior? No, that would be redundant. Let's assume there is an end use called 'Lighting' or similar that maps to the `lighting` column, distinct from interior/exterior.
+        *   `plug`: 'Plug Loads' or 'Miscellaneous Plug Loads'.
+        *   `pool_spa_heater`: 'Pool/Spa Heater'.
+
+    *   **Aggregation Step**:
+        1.  Calculate `total_demand = Average Demand * Number of Homes`.
+        2.  Map `Time Period` (Month) to `season`.
+        3.  Group by `season` and `Hour Ending`.
+        4.  Pivot/Unstack so that `End Use` becomes columns and `total_demand` is summed.
+        5.  Rename the resulting columns to match the target schema.
+        6.  Handle missing values (fill with 0).
+        7.  Ensure all target columns exist.
+
+4.  **Detailed Column Mapping Strategy**:
+    *   Create a dictionary mapping source `End Use` strings to target column names.
+    *   If multiple source end uses map to the same target column, sum them during the pivot/groupby.
+    *   Common mappings in energy datasets (like CBECS/RESstock):
+        *   'HVAC' -> 'hvac'
+        *   'Water Heater' -> 'water_heating'
+        *   'Refrigerator' -> 'refrigerator'
+        *   'Freezer' -> 'refrigerator' (Combine with fridge)
+        *   'Clothes Washer' -> 'clothes_washer'
+        *   'Clothes Dryer' -> 'clothes_dryer'
+        *   'Dishwasher' -> 'dishwasher'
+        *   'Cooking Range' / 'Oven' -> 'cooking_range'
+        *   'Pool/Spa Pumps' -> 'pool_spa_pumps'
+        *   'Interior Lighting' -> 'interior_lighting'
+        *   'Exterior Lighting' -> 'exterior_lighting'
+        *   'Lighting' -> 'lighting' (If exists as distinct end use) OR maybe 'Miscellaneous Lighting'?
+        *   'Plug Loads' / 'Miscellaneous Plug Loads' -> 'plug'
+        *   'Pool/Spa Heater' -> 'pool_spa_heater'
+    *   What about 'Remaining Load'? The source sample shows 'Remaining Load'. This is often a residual category. Does it map to any target column? The target columns are specific end uses. 'Remaining Load' might be excluded or mapped to a 'other' column if it existed. Since it's not in the target list, we likely drop it.
+    *   What about 'Day Type'? The target doesn't have it. We sum across 'Weekday' and 'Weekend'.
+
+5.  **Implementation Steps**:
+    1.  Copy source dataframe.
+    2.  Parse `Time Period` to determine `season`.
+    3.  Calculate `total_kw = Average Demand * Number of Homes`. Handle NaNs in demand (treat as 0).
+    4.  Filter out 'Remaining Load' if it doesn't map to a target column.
+    5.  Normalize `End Use` names (lowercase, replace spaces with underscores) to match target columns where possible.
+    6.  Group by `season`, `Hour Ending`, and normalized `End Use`.
+    7.  Sum `total_kw`.
+    8.  Pivot the dataframe: Index=`season`, Columns=`End Use`, Values=`total_kw`.
+    9.  Reset index to get `season` and `hour` (from `Hour Ending`).
+    10. Rename columns to exact target names.
+    11. Fill NaNs with 0.
+    12. Cast integer columns to int64 as per target schema.
+    13. Sort by season and hour if necessary (though order isn't strictly enforced by schema, it's good practice).
+    14. Select only target columns.
+
+6.  **Refining End Use Mapping**:
+    Let's create a robust mapping dictionary.
+    Source `End Use` -> Target Column
+    - 'HVAC' -> 'hvac'
+    - 'Water Heater' -> 'water_heating'
+    - 'Refrigerator' -> 'refrigerator'
+    - 'Freezer' -> 'refrigerator'
+    - 'Clothes Washer' -> 'clothes_washer'
+    - 'Clothes Dryer' -> 'clothes_dryer'
+    - 'Dishwasher' -> 'dishwasher'
+    - 'Cooking Range' -> 'cooking_range'
+    - 'Oven' -> 'cooking_range' (Potential alias)
+    - 'Pool/Spa Pumps' -> 'pool_spa_pumps'
+    - 'Interior Lighting' -> 'interior_lighting'
+    - 'Exterior Lighting' -> 'exterior_lighting'
+    - 'Lighting' -> 'lighting' (Potential alias for general lighting)
+    - 'Plug Loads' -> 'plug'
+    - 'Miscellaneous Plug Loads' -> 'plug'
+    - 'Pool/Spa Heater' -> 'pool_spa_heater'
+
+    If an `End Use` doesn't map, it gets dropped.
+
+7.  **Code Structure**:
+    - Define season map.
+    - Define end use map.
+    - Compute total demand.
+    - Map season.
+    - Map end use to target col name.
+    - Groupby and Sum.
+    - Pivot.
+    - Clean up and format.
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    df = source.copy()
+    
+    # 1. Map Time Period (Month) to Season
+    month_to_season = {
+        'January': 'Winter', 'February': 'Winter', 'December': 'Winter',
+        'March': 'Spring', 'April': 'Spring', 'May': 'Spring',
+        'June': 'Summer', 'July': 'Summer', 'August': 'Summer',
+        'September': 'Fall', 'October': 'Fall', 'November': 'Fall'
+    }
+    df['season'] = df['Time Period'].map(month_to_season)
+    
+    # 2. Calculate Total Demand
+    # Fill NaN in Average Demand with 0 before multiplication
+    df['avg_demand'] = df['Average Demand Per Home With This End Use [kW]'].fillna(0)
+    df['num_homes'] = df['Number of Homes in Bin With This End Use Metered'].astype(float)
+    df['total_demand'] = df['avg_demand'] * df['num_homes']
+    
+    # 3. Map End Use to Target Column Names
+    end_use_map = {
+        'HVAC': 'hvac',
+        'Water Heater': 'water_heating',
+        'Refrigerator': 'refrigerator',
+        'Freezer': 'refrigerator',
+        'Clothes Washer': 'clothes_washer',
+        'Clothes Dryer': 'clothes_dryer',
+        'Dishwasher': 'dishwasher',
+        'Cooking Range': 'cooking_range',
+        'Oven': 'cooking_range',
+        'Pool/Spa Pumps': 'pool_spa_pumps',
+        'Interior Lighting': 'interior_lighting',
+        'Exterior Lighting': 'exterior_lighting',
+        'Lighting': 'lighting',
+        'Plug Loads': 'plug',
+        'Miscellaneous Plug Loads': 'plug',
+        'Pool/Spa Heater': 'pool_spa_heater'
+    }
+    
+    # Map the End Use column to the target column name
+    df['target_col'] = df['End Use'].map(end_use_map)
+    
+    # Drop rows where End Use doesn't map to a target column (e.g., 'Remaining Load')
+    df = df.dropna(subset=['target_col'])
+    
+    # 4. Aggregate
+    # Group by season, hour, and target column name, summing the total demand
+    agg_df = df.groupby(['season', 'Hour Ending', 'target_col'])['total_demand'].sum().reset_index()
+    
+    # 5. Pivot to wide format
+    pivot_df = agg_df.pivot(index='season', columns='target_col', values='total_demand').reset_index()
+    
+    # Rename 'Hour Ending' if it's in the index, but here we grouped by it, so it's a column in agg_df?
+    # Wait, pivot uses 'season' as index. 'Hour Ending' is a column in agg_df. 
+    # We need to include 'Hour Ending' in the pivot index or handle it separately.
+    # Let's pivot on both season and hour.
+    
+    # Re-grouping to ensure hour is part of the index for pivoting
+    agg_df = df.groupby(['season', 'Hour Ending', 'target_col'])['total_demand'].sum().reset_index()
+    
+    # Pivot with multi-index
+    pivot_df = agg_df.pivot(index=['season', 'Hour Ending'], columns='target_col', values='total_demand').reset_index()
+    
+    # Rename 'Hour Ending' to 'hour'
+    pivot_df = pivot_df.rename(columns={'Hour Ending': 'hour'})
+    
+    # 6. Ensure all target columns exist and fill NaN with 0
+    target_columns = ['season', 'hour', 'hvac', 'water_heating', 'refrigerator', 'clothes_washer', 'clothes_dryer', 'dishwasher', 'cooking_range', 'pool_spa_pumps', 'interior_lighting', 'exterior_lighting', 'lighting', 'plug', 'pool_spa_heater']
+    
+    for col in target_columns:
+        if col not in pivot_df.columns:
+            pivot_df[col] = 0
+            
+    # Fill any remaining NaNs (from missing combinations) with 0
+    pivot_df = pivot_df.fillna(0)
+    
+    # 7. Format Types
+    # 'season' is object, 'hour' is int64
+    pivot_df['season'] = pivot_df['season'].astype(str)
+    pivot_df['hour'] = pivot_df['hour'].astype(int)
+    
+    # Specific columns are int64 in target schema
+    int_cols = ['clothes_washer', 'clothes_dryer', 'cooking_range', 'pool_spa_pumps', 'interior_lighting', 'exterior_lighting', 'lighting', 'plug', 'pool_spa_heater']
+    for col in int_cols:
+        if col in pivot_df.columns:
+            pivot_df[col] = pivot_df[col].astype(int)
+            
+    # Float columns
+    float_cols = ['hvac', 'water_heating', 'refrigerator', 'dishwasher']
+    for col in float_cols:
+        if col in pivot_df.columns:
+            pivot_df[col] = pivot_df[col].astype(float)
+            
+    # 8. Select and Return
+    # Sort by season and hour for consistency (optional but good)
+    # Define season order if needed, but simple sort is likely fine
+    pivot_df = pivot_df.sort_values(by=['season', 'hour']).reset_index(drop=True)
+    
+    return pivot_df[target_columns]
+```

@@ -1,0 +1,134 @@
+### Step-by-Step Reasoning Plan
+
+1.  **Analyze Source and Target Schemas**:
+    *   **Source**: Contains `Date` (string), `Class` (string), and 24 numeric columns named `1` through `24`. These numeric columns represent hourly data points.
+    *   **Target**: Contains `dt_strata` (date string), `dow` (day of week integer), and 25 numeric columns named `pct_hourly_0100` through `pct_hourly_2500`.
+    *   **Row Count Change**: The source has 182 rows, and the target has 183 rows. This suggests that the target might include a date that is not present in the source sample provided, or more likely, the transformation involves generating a complete date range or handling missing dates. However, looking at the sample data, the source dates are sparse (July and December 2013), while the target dates are contiguous (Jan 2013, June-July 2013). This implies the source table provided in the prompt is just a *sample* and the actual transformation logic should apply to *all* rows in the source DataFrame. The row count difference in the benchmark description (182 vs 183) might be due to a specific test case having an extra row or a generated row. Let's look closer. The target has a column `pct_hourly_2500` which is `nan` in the sample. The source has columns 1-24. This maps directly to `pct_hourly_0100` to `pct_hourly_2400`. The 25th column is likely a placeholder or derived value that is currently NaN.
+
+2.  **Date Parsing and Formatting**:
+    *   The source `Date` column is in format `%m/%d/%Y`.
+    *   The target `dt_strata` column is also in format `%m/%d/%Y`.
+    *   We need to parse the source `Date` into a datetime object to extract the Day of Week (`dow`).
+    *   Then, we format it back to the string format required for `dt_strata`.
+
+3.  **Day of Week Calculation**:
+    *   The target `dow` column contains integers. Looking at the sample:
+        *   `1/1/2013` is a Tuesday. In Python's `datetime`, Monday=0, Tuesday=1, ..., Sunday=6. However, the target shows `2` for `1/1/2013`.
+        *   `1/2/2013` is a Wednesday. Target shows `3`.
+        *   `6/30/2013` is a Sunday. Target shows `0`.
+        *   `7/1/2013` is a Monday. Target shows `1`.
+    *   This mapping corresponds to: Sunday=0, Monday=1, ..., Saturday=6. This is the standard `strftime('%w')` or `dt.dayofweek` where Monday=0? No, `dt.dayofweek` is Mon=0. `dt.weekday()` is Mon=0.
+    *   Let's check `dt.strftime('%w')`: Sunday=0, Monday=1, ..., Saturday=6.
+        *   1/1/2013 (Tue) -> 2. Matches.
+        *   6/30/2013 (Sun) -> 0. Matches.
+        *   7/1/2013 (Mon) -> 1. Matches.
+    *   So, `dow` is calculated using `dt.strftime('%w')` or equivalent logic.
+
+4.  **Column Renaming and Mapping**:
+    *   Source columns `1` to `24` need to be renamed to `pct_hourly_0100` to `pct_hourly_2400`.
+    *   The format is `pct_hourly_` followed by the hour number zero-padded to 4 digits (e.g., `0100`, `0200`, ..., `2400`).
+    *   Source column `1` -> `pct_hourly_0100`
+    *   Source column `2` -> `pct_hourly_0200`
+    *   ...
+    *   Source column `24` -> `pct_hourly_2400`
+
+5.  **Handling the Extra Column (`pct_hourly_2500`)**:
+    *   The target has a column `pct_hourly_2500` which is `nan` in the sample.
+    *   Since there is no source column `25`, we should create this column and fill it with `NaN` (or `None`).
+
+6.  **Constructing the Target DataFrame**:
+    *   Parse `Date` to datetime.
+    *   Create `dt_strata` by formatting the datetime back to `%m/%d/%Y`.
+    *   Create `dow` using the day-of-week logic (Sun=0, Mon=1, ...).
+    *   Rename the numeric columns 1-24 to the target names.
+    *   Add the `pct_hourly_2500` column with NaN values.
+    *   Select and order the columns to match the target schema exactly.
+
+7.  **Refining the Date Format**:
+    *   The source sample shows `7/3/2013`. The target sample shows `1/1/2013`.
+    *   Pandas `to_datetime` handles `%m/%d/%Y` well.
+    *   Formatting back: `dt.strftime('%m/%d/%Y')` will produce `01/01/2013` if we use zero-padding. The target sample shows `1/1/2013` (no leading zeros).
+    *   We need to ensure the output format matches `1/1/2013`. We can use `dt.strftime('%-m/%-d/%Y')` on Linux or handle it manually. A safer cross-platform way is to parse, then format using `dt.month`, `dt.day`, `dt.year` and join with `/`. Or use `dt.strftime('%m/%d/%Y').replace('/0', '/').replace('0/', '/')`? No, that's messy.
+    *   Better: `dt.apply(lambda x: f"{x.month}/{x.day}/{x.year}")`.
+
+8.  **Final Column Order**:
+    *   `['dt_strata', 'dow', 'pct_hourly_0100', ..., 'pct_hourly_2500']`
+
+### Python Code Implementation
+
+```python
+import pandas as pd
+import numpy as np
+
+def transform(source: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforms the source DataFrame into the target DataFrame format.
+    
+    Steps:
+    1. Parse the 'Date' column into datetime objects.
+    2. Create 'dt_strata' by formatting the date as 'm/d/Y'.
+    3. Create 'dow' (Day of Week) where Sunday=0, Monday=1, ..., Saturday=6.
+    4. Rename columns 1-24 to pct_hourly_0100 - pct_hourly_2400.
+    5. Add a new column pct_hourly_2500 filled with NaN.
+    6. Return the DataFrame with the specified target columns.
+    """
+    
+    # Create a copy to avoid modifying the original
+    df = source.copy()
+    
+    # 1. Parse Date
+    df['parsed_date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y')
+    
+    # 2. Create dt_strata in format m/d/Y (no leading zeros)
+    df['dt_strata'] = df['parsed_date'].apply(lambda x: f"{x.month}/{x.day}/{x.year}")
+    
+    # 3. Create dow (Sunday=0, Monday=1, ..., Saturday=6)
+    # pandas dt.dayofweek is Monday=0, Sunday=6.
+    # We want Sunday=0.
+    # Mapping: 
+    # Mon(0)->1, Tue(1)->2, Wed(2)->3, Thu(3)->4, Fri(4)->5, Sat(5)->6, Sun(6)->0
+    # Formula: (dayofweek + 1) % 7
+    df['dow'] = (df['parsed_date'].dt.dayofweek + 1) % 7
+    
+    # 4. Rename numeric columns 1-24 to pct_hourly_0100 - pctct_hourly_2400
+    rename_map = {}
+    for i in range(1, 25):
+        old_col = str(i)
+        new_col = f"pct_hourly_{i:04d}00" # e.g., 1 -> 0100, 24 -> 2400
+        # Wait, the target columns are pct_hourly_0100, pct_hourly_0200...
+        # The pattern is pct_hourly_ + 4-digit hour + 00?
+        # Let's check the target columns again:
+        # 'pct_hourly_0100', 'pct_hourly_0200', ... 'pct_hourly_2400'
+        # It seems the hour is represented as HH00.
+        # So hour 1 is 0100, hour 2 is 0200, ..., hour 24 is 2400.
+        # My previous logic: f"pct_hourly_{i:04d}00" would give pct_hourly_000100 for i=1. That's wrong.
+        # It should be f"pct_hourly_{i:02d}00"
+        new_col = f"pct_hourly_{i:02d}00"
+        rename_map[old_col] = new_col
+        
+    df.rename(columns=rename_map, inplace=True)
+    
+    # 5. Add pct_hourly_2500 column with NaN
+    df['pct_hourly_2500'] = np.nan
+    
+    # 6. Define target columns
+    target_columns = [
+        'dt_strata', 'dow', 
+        'pct_hourly_0100', 'pct_hourly_0200', 'pct_hourly_0300', 'pct_hourly_0400', 
+        'pct_hourly_0500', 'pct_hourly_0600', 'pct_hourly_0700', 'pct_hourly_0800', 
+        'pct_hourly_0900', 'pct_hourly_1000', 'pct_hourly_1100', 'pct_hourly_1200', 
+        'pct_hourly_1300', 'pct_hourly_1400', 'pct_hourly_1500', 'pct_hourly_1600', 
+        'pct_hourly_1700', 'pct_hourly_1800', 'pct_hourly_1900', 'pct_hourly_2000', 
+        'pct_hourly_2100', 'pct_hourly_2200', 'pct_hourly_2300', 'pct_hourly_2400', 
+        'pct_hourly_2500'
+    ]
+    
+    # Select and return the target columns
+    # Ensure dtypes are correct if necessary, but pandas usually handles float64 automatically
+    result_df = df[target_columns]
+    
+    # Ensure dow is int64
+    result_df['dow'] = result_df['dow'].astype('int64')
+    
+    return result_df
+```

@@ -14,7 +14,6 @@ Adheres strictly to Instructions.pdf Page 9 & 10 specifications:
 
 import os
 import sys
-import pandas as pd
 
 try:
     from reportlab.lib.pagesizes import letter
@@ -175,6 +174,21 @@ def create_report(output_filename="A4_vavaghad.pdf"):
         spaceAfter=5,
     )
 
+    app_code_style = ParagraphStyle(
+        "AppCodeBlock",
+        parent=styles["Normal"],
+        fontName="Courier",
+        fontSize=6.2,
+        leading=7.8,
+        textColor=colors.HexColor("#0F172A"),
+        backColor=colors.HexColor("#F8FAFC"),
+        borderColor=colors.HexColor("#E2E8F0"),
+        borderWidth=0.5,
+        borderPadding=3,
+        spaceBefore=2,
+        spaceAfter=3,
+    )
+
     table_cell = ParagraphStyle(
         "TableCell",
         parent=styles["Normal"],
@@ -188,10 +202,10 @@ def create_report(output_filename="A4_vavaghad.pdf"):
         "TableHeader",
         parent=styles["Normal"],
         fontName="Helvetica-Bold",
-        fontSize=7.5,
-        leading=9.5,
+        fontSize=7,
+        leading=8.5,
         textColor=colors.white,
-        alignment=0,
+        alignment=1, # Center
     )
 
     story = []
@@ -219,7 +233,7 @@ def create_report(output_filename="A4_vavaghad.pdf"):
     # SECTION 2: Prompts & Prompt Justification
     story.append(Paragraph("2. Prompt Design & Engineering Justification", h1_style))
     story.append(Paragraph(
-        "To ensure a rigorous comparison, all four strategies share an identical prompt core and system prompt, varying only the demonstration context and sampling parameters:",
+        "To ensure a rigorous comparison, all four strategies share an identical prompt core and system prompt, varying only the demonstration context and sampling parameters (the full verbatim prompt templates and worked demonstrations are provided in Appendix A–C):",
         body_style,
     ))
     story.append(Paragraph("• <b>Sample Data Substitution:</b> Large raw energy files (up to 290 MB) cannot fit inside model context. We extract the schema, data types, distinct values for low-cardinality columns, first/last timestamps, and 8 boundary rows (head + tail). This exposes group boundaries and aggregation shifts without context window bloat.", bullet_style))
@@ -300,7 +314,7 @@ def create_report(output_filename="A4_vavaghad.pdf"):
         ],
     ]
 
-    t1 = Table(t1_data, colWidths=[85, 28, 52, 48, 48, 42, 45, 45, 50, 45])
+    t1 = Table(t1_data, colWidths=[82, 26, 56, 50, 50, 42, 45, 45, 52, 44])
     t1.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
@@ -457,6 +471,83 @@ def create_report(output_filename="A4_vavaghad.pdf"):
     story.append(Paragraph("• <b>Iterative Code Self-Correction:</b> Integrating a local execution feedback loop where execution errors on <code>training_0.csv</code> are reflected back to the LLM for automated patch synthesis.", bullet_style))
     story.append(Paragraph("• <b>Dynamic Adaptive Sampling:</b> Allocating $k=1$ for simple single-step renames (length 1) and expanding to $k=10$ for complex multi-operator pipelines (length ≥ 6) to optimize token expenditure.", bullet_style))
     story.append(Paragraph("• <b>Static AST Validation:</b> Pre-parsing generated code with Python's <code>ast</code> module to catch unassigned DataFrame transformations and common pandas deprecation warnings before subprocess execution.", bullet_style))
+
+    # Page break for Appendix
+    story.append(PageBreak())
+    story.append(Paragraph("Appendix: Standardized Prompt Templates & Demonstrations", h1_style))
+    story.append(Paragraph(
+        "Per Instructions Page 9, the complete prompt templates and worked demonstration format are provided below. "
+        "All four strategies share this exact foundation to guarantee an isolated, rigorous comparison.",
+        body_style,
+    ))
+    story.append(Spacer(1, 4))
+
+    # Appendix A
+    story.append(Paragraph("<b>Appendix A: System Prompt (Shared Across All Strategies)</b>", h2_style))
+    sys_prompt_text = (
+        "You are an expert Python and pandas data engineer specializing in Table-to-Table (TbT) transformation synthesis.\n"
+        "Given a source table schema with sample rows and a desired target table schema with sample rows, your task is to synthesize a general Python function that transforms the source DataFrame into the target DataFrame.\n\n"
+        "Strict Requirements:\n"
+        "1. Provide a clear, visible step-by-step reasoning plan (Chain of Thought) explaining the sequence of operators required (e.g., column selection, date/timestamp parsing and formatting, renaming, reshaping, aggregations, unit conversions, missing value handling).\n"
+        "2. Follow the reasoning plan with a single ```python ... ``` code block defining:\n"
+        "   import pandas as pd\n\n"
+        "   def transform(source: pd.DataFrame) -> pd.DataFrame:\n"
+        "       \"\"\"Return a DataFrame with the same schema and contents as target.csv.\"\"\"\n"
+        "       ...\n"
+        "3. The function must compute its result SOLELY from the `source` argument. It must NOT open or read target.csv, test_0.csv, training_0.csv, or any file from disk.\n"
+        "4. Do NOT hardcode target rows or literal values from the sample. The transformation must generalize to unseen test rows with the same source schema.\n"
+        "5. The returned DataFrame must have column names matching the target schema EXACTLY (case-sensitive and whitespace-sensitive).\n"
+        "6. Use only pandas, numpy, and the Python standard library. Code must be deterministic and self-contained."
+    )
+    story.append(Paragraph(sys_prompt_text.replace("\n", "<br/>").replace(" ", "&nbsp;"), app_code_style))
+
+    # Appendix B
+    story.append(Paragraph("<b>Appendix B: Standardized User Prompt Skeleton (Sample Data Substitution)</b>", h2_style))
+    user_prompt_text = (
+        "### Benchmark Case: length{L}_{k}\n"
+        "- Source sample rows: {source_row_count} rows (Note: test_0.csv may have different row count)\n"
+        "- Target rows: {target_row_count} rows\n"
+        "[If row counts differ: Notice: Row count changes from {source} to {target}. Check if aggregation/grouping/pivot is required.]\n\n"
+        "### Exact Target Columns (Must match verbatim):\n"
+        "['target_col_1', 'target_col_2', ...]\n\n"
+        "### Datetime Format Inferences:\n"
+        "- Source column '{col}' has date format '{src_fmt}' (sample: '{src_val}')\n"
+        "- Target column '{col}' requires date format '{tgt_fmt}' (sample: '{tgt_val}')\n\n"
+        "### Source Schema and Types: col1 (dtype), col2 (dtype), ...\n"
+        "### Target Schema and Types: col1 (dtype), col2 (dtype), ...\n"
+        "### Distinct values for categorical / low-cardinality source columns: {col}: {distinct_values}\n\n"
+        "### Source Table Sample (training_0.csv):\n"
+        "| CST | Strata_ID | ... (8 boundary rows: 4 head + 4 tail) |\n\n"
+        "### Desired Target Table Sample (target.csv):\n"
+        "| cst | 1:00 | 2:00 | ... (8 boundary rows: 4 head + 4 tail) |\n\n"
+        "### Instructions:\n"
+        "1. Write a step-by-step reasoning plan (Chain of Thought) analyzing the transformation steps needed.\n"
+        "2. Conclude with a single ```python ``` code block implementing `def transform(source: pd.DataFrame) -> pd.DataFrame:`.\n"
+        "3. Make sure to return `df[target_columns]` with the target column names copied verbatim."
+    )
+    story.append(Paragraph(user_prompt_text.replace("\n", "<br/>").replace(" ", "&nbsp;"), app_code_style))
+
+    # Appendix C
+    story.append(Paragraph("<b>Appendix C: Worked In-Context Demonstration (from Held-Out Split length1_1)</b>", h2_style))
+    demo_text = (
+        "### Worked Example: length1_1\n"
+        "Source Schema: Strata_ID (int64), DT_STRATA (object), PCT_HOURLY_0100..PCT_HOURLY_2500 (float64)\n"
+        "Target Schema: cst (object), 1:00..24:00 (float64)\n"
+        "Reasoning:\n"
+        "1. Source date 'DT_STRATA' has format 'M/D/YYYY'; target 'cst' requires '%a %m/%d/%Y'. Parse and format via pd.to_datetime.\n"
+        "2. Rename hourly columns 'PCT_HOURLY_0100'..'PCT_HOURLY_2400' to '1:00'..'24:00'.\n"
+        "3. Drop metadata columns ('Strata_ID', 'DOW', 'PCT_HOURLY_2500') and project exact target columns.\n"
+        "Code:\n"
+        "import pandas as pd\n\n"
+        "def transform(source: pd.DataFrame) -> pd.DataFrame:\n"
+        "    df = source.copy()\n"
+        "    df['cst'] = pd.to_datetime(df['DT_STRATA']).dt.strftime('%a %m/%d/%Y')\n"
+        "    rename_dict = {f'PCT_HOURLY_{i:02d}00': f'{i}:00' for i in range(1, 25)}\n"
+        "    df = df.rename(columns=rename_dict)\n"
+        "    target_cols = ['cst'] + [f'{i}:00' for i in range(1, 25)]\n"
+        "    return df[target_cols]"
+    )
+    story.append(Paragraph(demo_text.replace("\n", "<br/>").replace(" ", "&nbsp;"), app_code_style))
 
     # Build document
     doc.build(story, canvasmaker=NumberedCanvas)

@@ -342,6 +342,22 @@ def run_single_case(
     length_part = case_name.replace("length", "").split("_")[0]
     pipeline_length = int(length_part) if length_part.isdigit() else 1
 
+    safe_hm_scores = []
+    if isinstance(hm_scores, list):
+        for s in hm_scores:
+            try:
+                safe_hm_scores.append(float(s))
+            except (ValueError, TypeError):
+                safe_hm_scores.append(0.0)
+
+    safe_ap_scores = []
+    if isinstance(ap_scores, list):
+        for s in ap_scores:
+            try:
+                safe_ap_scores.append(float(s))
+            except (ValueError, TypeError):
+                safe_ap_scores.append(0.0)
+
     record = {
         "case": case_name,
         "pipeline_length": pipeline_length,
@@ -355,7 +371,7 @@ def run_single_case(
         "hard_match": {
             "accuracy": float(hm_acc),
             "is_correct": bool(hm_corr),
-            "similarity_scores": [float(s) for s in hm_scores] if isinstance(hm_scores, list) else [],
+            "similarity_scores": safe_hm_scores,
             "matched_cols": hm_matches if isinstance(hm_matches, list) else [],
         },
         "execution": {

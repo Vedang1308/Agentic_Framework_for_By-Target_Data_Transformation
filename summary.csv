@@ -1,0 +1,5 @@
+Strategy,Cases,Autopipeline Exact Match (%),Hard Match Exact Match (%),Hard Match Mean Partial (%),Execution Rate (%),Prompt Tokens,Completion Tokens,Total Tokens,Total Time (s)
+few_shot_cot,100,36.0,31.0,48.13,62.0,415305,160008,575313,5033.22
+zero_shot_cot,100,29.0,22.0,35.0,53.0,272606,145283,417889,4591.28
+few_shot_sc,100,47.0,37.0,60.84,82.0,664281,1442898,2107179,14548.67
+zero_shot_sc,100,45.0,33.0,51.06,77.0,492181,1508509,2000690,14803.75

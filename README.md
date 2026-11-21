@@ -81,7 +81,7 @@ python setup_data.py
 
 Export your ASU Research Computing Voyager API credentials:
 ```bash
-export OPENAI_API_KEY="obl_7181d56ba11f11d4805ca23ee99465973d95b9acbbcb1d21275f615f"
+export OPENAI_API_KEY="<your-voyager-api-key-here>"
 export OPENAI_BASE_URL="https://openai.rc.asu.edu/v1"
 ```
 

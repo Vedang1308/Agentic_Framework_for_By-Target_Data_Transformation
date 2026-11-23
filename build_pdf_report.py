@@ -208,12 +208,34 @@ def create_report(output_filename="A4_vavaghad.pdf"):
         alignment=1, # Center
     )
 
+    callout_style = ParagraphStyle(
+        "Callout",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.8,
+        leading=10.5,
+        textColor=colors.HexColor("#0F172A"),
+        backColor=colors.HexColor("#EFF6FF"),
+        borderColor=colors.HexColor("#2563EB"),
+        borderWidth=0.75,
+        borderPadding=5,
+        spaceBefore=1,
+        spaceAfter=7,
+    )
+
     story = []
 
     # Title & Metadata
     story.append(Paragraph("Coding Assignment 4: Agentic Framework for By-Target Data Transformation", title_style))
     story.append(Paragraph("<b>Author:</b> Vedang Avaghade &nbsp;|&nbsp; <b>ASURITE ID:</b> vavaghad &nbsp;|&nbsp; <b>Course:</b> CSE 598: DISML &nbsp;|&nbsp; <b>Model:</b> qwen36-27b", subtitle_style))
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#1E3A8A"), spaceBefore=0, spaceAfter=8))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#1E3A8A"), spaceBefore=0, spaceAfter=6))
+
+    drive_link = "https://drive.google.com/file/d/1HAi_VNF-OSupRAzMxHxeJombxGW8wUri/view?usp=sharing"
+    story.append(Paragraph(
+        f"<b>Submission Notice (Code & Artifacts Archive):</b> Per instructor instructions regarding Gradescope upload limits, the complete assignment submission package (<code>A4_vavaghad.zip</code>, 2.94 MB, containing all implementation strategies, benchmark runner, logs, generated code, candidates, and results) is hosted on Google Drive at:<br/>"
+        f"<b>Direct Download Link:</b> <a href=\"{drive_link}\"><font color=\"#1D4ED8\"><u><b>{drive_link}</b></u></font></a>",
+        callout_style,
+    ))
 
     # SECTION 1: Experimental Setup
     story.append(Paragraph("1. Experimental Setup", h1_style))

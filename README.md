@@ -6,6 +6,13 @@
 
 ---
 
+> **Note on Submission & Code Archive:**  
+> The complete submission archive (`A4_vavaghad.zip`, 2.94 MB) containing all code, candidate scripts, execution logs, and benchmark evaluation outputs is available at:  
+> [Google Drive Code Archive (A4_vavaghad.zip)](https://drive.google.com/file/d/1HAi_VNF-OSupRAzMxHxeJombxGW8wUri/view?usp=sharing)  
+> `https://drive.google.com/file/d/1HAi_VNF-OSupRAzMxHxeJombxGW8wUri/view?usp=sharing`
+
+---
+
 ## 1. Overview
 
 This repository implements an LLM-based agentic framework that, given a **source table** (`training_0.csv`) and a **target table** (`target.csv`), synthesizes executable Python/Pandas code (`transform.py`) that transforms the source into the target. The generated code is evaluated on unseen evaluation data (`test_0.csv`) across the 105-case Smart Building benchmark.
